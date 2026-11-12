@@ -100,7 +100,16 @@ const DELAYS: &[u64] = &[
     1000, // 52 check minimized; restore window
     1000, // 53 check restored; minimum window size
     1500, // 54 chrome at minimum size; window back to 1200x800
-    900,  // 55 last tab close quits
+    700,  // 55 window title of a blank tab; fresh tab plays audio without a gesture
+    1200, // 56 check autoplay refused; window.open (script, gesture)
+    3000, // 57 check popup; window title follows tab switch; page renames itself
+    700,  // 58 check title; popup calls window.close()
+    1000, // 59 check tab closed cleanly; address bar to http://xb.ui/
+    1500, // 60 check refused; page frames / navigates to xb.ui itself
+    1500, // 61 check refused; crash a content renderer
+    1500, // 62 check tab survives; crash the UI renderer
+    3000, // 63 check UI reloaded and re-rendered; close extras
+    900,  // 64 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -1047,6 +1056,128 @@ pub fn step(app: &mut App, n: u32) {
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
         55 => {
+            press(app, vk::T, CTRL);
+            app.flush();
+            check("window-title-blank-tab", app.window.title() == "X-Browser", app.window.title());
+            let sets = app.title_sets;
+            app.mark_dirty();
+            app.flush();
+            check("window-title-not-reset-when-unchanged", app.title_sets == sets, format!("{} -> {}", sets, app.title_sets));
+            // A fresh tab (no input ever) whose own script starts unmuted audio:
+            // Chromium's default policy refuses it without a user gesture.
+            if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+                let _ = v.load_html(AUTOPLAY_HTML);
+            }
+        }
+        56 => {
+            page_eval(app, "String(window.__ap)", |r| {
+                check("autoplay-without-gesture-refused", r == "NotAllowedError", format!("play() -> {r}"));
+            });
+            remember("len", app.tabs.len() as i64);
+            remember("ap", app.tabs.active().unwrap() as i64);
+            // ExecuteScript counts as a user gesture, so this opens a tab.
+            page_js(app, "window.open('https://example.com/?from=close')");
+        }
+        57 => {
+            let (ap, popup) = (recall("ap") as TabId, app.tabs.active().unwrap());
+            remember("popup", popup as i64);
+            check(
+                "close-test-popup-opened",
+                app.tabs.len() as i64 == recall("len") + 1 && popup != ap && active_url(app).contains("from=close"),
+                app.tabs.to_json(),
+            );
+            let want = format!("{} - X-Browser", active_title(app));
+            check("window-title-follows-active-tab", app.window.title() == want && active_title(app) == "Example Domain", app.window.title());
+            let sets = app.title_sets;
+            app.activate(ap);
+            app.flush();
+            let on_blank = app.window.title();
+            app.activate(popup);
+            app.flush();
+            let back = app.window.title();
+            app.mark_dirty();
+            app.flush();
+            check("window-title-follows-tab-switch", on_blank == "X-Browser" && back == want, format!("{on_blank:?} then {back:?}"));
+            check("window-title-set-only-on-change", app.title_sets == sets + 2, format!("{} sets for 2 changes", app.title_sets - sets));
+            page_js(app, "document.title = 'Renamed page'");
+        }
+        58 => {
+            check("window-title-follows-page-title", app.window.title() == "Renamed page - X-Browser", app.window.title());
+            remember("len", app.tabs.len() as i64);
+            page_js(app, "window.close()");
+        }
+        59 => {
+            let popup = recall("popup") as TabId;
+            check(
+                "window-close-removes-tab",
+                app.tabs.get(popup).is_none() && app.view(popup).is_none() && app.tabs.len() as i64 == recall("len") - 1,
+                app.tabs.to_json(),
+            );
+            check(
+                "window-close-app-healthy",
+                !app.quit && app.tabs.active() == Some(recall("ap") as TabId) && only_active_visible(app),
+                format!("quit {} active {:?}", app.quit, app.tabs.active()),
+            );
+            let hosts = host_windows(app);
+            check("window-close-leaves-no-stray-host-window", hosts == app.views.len() + 1, format!("{hosts} child windows, {} views + UI", app.views.len()));
+            app.handle(UserEvent::Ui(UiCommand::Navigate("http://xb.ui/index.html".into())));
+        }
+        60 => {
+            // Refused before it starts: the old page stays (no network error page).
+            page_eval(app, "`href=${location.href};xb=${typeof window.xb};title=${document.title}`", |r| {
+                check(
+                    "content-cannot-load-ui-origin",
+                    !crate::ui::is_ui_url(field(&r, "href")) && field(&r, "xb") == "undefined" && field(&r, "title") == "Autoplay",
+                    &r,
+                );
+            });
+            check("address-bar-drops-refused-ui-url", !crate::ui::is_ui_url(&active_url(app)), active_url(app));
+            if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+                let _ = v.load_html(
+                    "<!doctype html><title>Frames</title><iframe id=f src=\"http://xb.ui/index.html\"></iframe><script>\
+                     window.__alive = 1; setTimeout(() => { location.href = 'https://xb.ui/app.js'; }, 300);</script>",
+                );
+            }
+        }
+        61 => {
+            page_eval(
+                app,
+                "`alive=${window.__alive};href=${location.href};frame=${(() => { \
+                 try { return document.getElementById('f').contentWindow.location.href; } catch (e) { return 'cross-origin'; } })()}`",
+                |r| {
+                    check("content-script-cannot-navigate-to-ui-host", field(&r, "alive") == "1" && !crate::ui::is_ui_url(field(&r, "href")), &r);
+                    check("content-frame-cannot-load-ui-host", field(&r, "frame") == "about:blank", &r);
+                },
+            );
+            // A renderer dies mid-load: the tab stays and stops spinning.
+            let id = app.tabs.active().unwrap();
+            remember("crashed", id as i64);
+            if let Some(t) = app.tabs.get_mut(id) {
+                t.loading = true;
+            }
+            if let Some(v) = app.view(id) {
+                cdp(v, "Page.crash", "{}");
+            }
+        }
+        62 => {
+            let id = recall("crashed") as TabId;
+            check(
+                "content-crash-keeps-tab-not-loading",
+                app.tabs.get(id).is_some_and(|t| !t.loading) && app.view(id).is_some(),
+                app.tabs.to_json(),
+            );
+            check("content-crash-app-healthy", !app.quit && app.fatal.is_none() && app.ui_ready, format!("quit {} ui_ready {}", app.quit, app.ui_ready));
+            cdp(&app.ui, "Page.crash", "{}");
+        }
+        63 => {
+            check("ui-crash-reloads-ui", app.ui_ready && !app.quit && app.fatal.is_none(), format!("ui_ready {} quit {}", app.ui_ready, app.quit));
+            let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
+            ui_eval(app, TAB_STRIP_JS, move |r| {
+                check("ui-crash-rerenders-tabs", num(&r, "n") == n as f64 && field(&r, "sel_id") == active.to_string(), &r);
+            });
+            close_extra_tabs(app);
+        }
+        64 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             log(&format!("DONE failures={}", FAILS.load(Ordering::Relaxed)));
@@ -1055,18 +1186,52 @@ pub fn step(app: &mut App, n: u32) {
     }
 }
 
-fn cdp_click(v: &wry::WebView, x: f64, y: f64) {
+fn cdp(v: &wry::WebView, method: &str, params: &str) {
     use webview2_com::CallDevToolsProtocolMethodCompletedHandler;
     use windows::core::HSTRING;
-    let wv = v.webview();
-    for kind in ["mousePressed", "mouseReleased"] {
-        let params = format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"left","clickCount":1}}"#);
-        unsafe {
-            let _ = wv.CallDevToolsProtocolMethod(
-                &HSTRING::from("Input.dispatchMouseEvent"),
-                &HSTRING::from(params),
-                &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(()))),
-            );
-        }
+    unsafe {
+        let _ = v.webview().CallDevToolsProtocolMethod(
+            &HSTRING::from(method),
+            &HSTRING::from(params),
+            &CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(()))),
+        );
     }
 }
+
+fn cdp_click(v: &wry::WebView, x: f64, y: f64) {
+    for kind in ["mousePressed", "mouseReleased"] {
+        let params = format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"left","clickCount":1}}"#);
+        cdp(v, "Input.dispatchMouseEvent", &params);
+    }
+}
+
+/// Direct child windows of the main window (wry's host per webview).
+fn host_windows(app: &App) -> usize {
+    use tao::platform::windows::WindowExtWindows;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{GW_CHILD, GW_HWNDNEXT, GetWindow};
+    let mut n = 0;
+    let mut next = unsafe { GetWindow(HWND(app.window.hwnd() as _), GW_CHILD) };
+    while let Ok(child) = next {
+        if child.is_invalid() {
+            break;
+        }
+        n += 1;
+        next = unsafe { GetWindow(child, GW_HWNDNEXT) };
+    }
+    n
+}
+
+/// Unmuted (silent) audio started by the page's own load-time script.
+const AUTOPLAY_HTML: &str = r#"<!doctype html><title>Autoplay</title><script>
+window.__ap = 'pending';
+const n = 800, b = new ArrayBuffer(44 + n), d = new DataView(b);
+const s = (o, t) => { for (let i = 0; i < t.length; i++) d.setUint8(o + i, t.charCodeAt(i)); };
+s(0, 'RIFF'); d.setUint32(4, 36 + n, true); s(8, 'WAVE'); s(12, 'fmt ');
+d.setUint32(16, 16, true); d.setUint16(20, 1, true); d.setUint16(22, 1, true);
+d.setUint32(24, 8000, true); d.setUint32(28, 8000, true); d.setUint16(32, 1, true); d.setUint16(34, 8, true);
+s(36, 'data'); d.setUint32(40, n, true);
+for (let i = 0; i < n; i++) d.setUint8(44 + i, 128);
+const a = new Audio(URL.createObjectURL(new Blob([b], { type: 'audio/wav' })));
+a.play().then(() => { window.__ap = 'played'; }, (e) => { window.__ap = e.name; });
+</script>"#;

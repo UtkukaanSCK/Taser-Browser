@@ -11,7 +11,9 @@ pub type Proxy = EventLoopProxy<UserEvent>;
 #[cfg(windows)]
 mod imp {
     use super::*;
+    use crate::app::Failure;
     use crate::commands::{Mods, Shortcut};
+    use crate::ui::is_ui_url;
     use crate::url::is_web_url;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use webview2_com::*;
@@ -25,10 +27,28 @@ mod imp {
         Some(take_pwstr(uri))
     }
 
-    /// URL, history, loading and popup events of one content tab.
+    /// Content pages get no host bridge at all: no `chrome.webview.postMessage`
+    /// and no host objects. Call before the first navigation.
+    pub fn harden_content(view: &WebView) -> windows::core::Result<()> {
+        unsafe {
+            let settings = view.webview().Settings()?;
+            settings.SetIsWebMessageEnabled(false)?;
+            settings.SetAreHostObjectsAllowed(false)?;
+        }
+        Ok(())
+    }
+
+    fn nav_uri(args: &ICoreWebView2NavigationStartingEventArgs) -> windows::core::Result<String> {
+        let mut uri = PWSTR::null();
+        unsafe { args.Uri(&mut uri)? };
+        Ok(take_pwstr(uri))
+    }
+
+    /// URL, history, loading, popup, close and crash events of one content tab.
     pub fn attach_content_events(view: &WebView, tab: TabId, proxy: &Proxy) -> windows::core::Result<()> {
         let wv = view.webview();
         let mut token = 0i64;
+        attach_process_failed(view, Some(tab), proxy)?;
         unsafe {
             // Fires for new documents *and* same-document changes (pushState,
             // #fragment), which NavigationStarting/Completed do not report.
@@ -58,10 +78,46 @@ mod imp {
                 &mut token,
             )?;
 
+            // Host xb.ui is the UI's origin; in a content tab it would be a
+            // real network request in the profile the UI shares. Never load it,
+            // neither as the page nor in a frame.
             let p = proxy.clone();
             wv.add_NavigationStarting(
-                &NavigationStartingEventHandler::create(Box::new(move |_, _| {
+                &NavigationStartingEventHandler::create(Box::new(move |wv, args| {
+                    if let Some(args) = args
+                        && is_ui_url(&nav_uri(&args)?)
+                    {
+                        args.SetCancel(true)?;
+                        // The address bar may already show the refused URL.
+                        if let Some(url) = wv.as_ref().and_then(source) {
+                            let _ = p.send_event(UserEvent::Page(tab, PageEvent::Url(url)));
+                        }
+                        return Ok(());
+                    }
                     let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(true)));
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+            wv.add_FrameNavigationStarting(
+                &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                    if let Some(args) = args
+                        && is_ui_url(&nav_uri(&args)?)
+                    {
+                        args.SetCancel(true)?;
+                    }
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+
+            // `window.close()` closes the tab through the app. wry's own
+            // handler (registered first) would DestroyWindow the tab's host
+            // and leave a dead tab; `guard_host` vetoes that.
+            let p = proxy.clone();
+            wv.add_WindowCloseRequested(
+                &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+                    let _ = p.send_event(UserEvent::Page(tab, PageEvent::CloseRequested));
                     Ok(())
                 })),
                 &mut token,
@@ -142,6 +198,102 @@ mod imp {
         Ok(())
     }
 
+    /// Reports WebView2 process failures. `tab` is `None` for the UI webview.
+    pub fn attach_process_failed(view: &WebView, tab: Option<TabId>, proxy: &Proxy) -> windows::core::Result<()> {
+        let mut token = 0i64;
+        let p = proxy.clone();
+        unsafe {
+            view.webview().add_ProcessFailed(
+                &ProcessFailedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else { return Ok(()) };
+                    let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+                    args.ProcessFailedKind(&mut kind)?;
+                    let failure = match kind {
+                        COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => Failure::Browser,
+                        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => Failure::RendererExited,
+                        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => Failure::RendererUnresponsive,
+                        // GPU/utility/frame processes: WebView2 recovers or
+                        // only a subframe is affected.
+                        _ => return Ok(()),
+                    };
+                    let _ = p.send_event(UserEvent::ProcessFailed { tab, failure });
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+        }
+        Ok(())
+    }
+
+    // --- Content host guard -------------------------------------------------
+    //
+    // wry registers a WindowCloseRequested handler on every webview that calls
+    // DestroyWindow on the webview's host window, and its Drop calls
+    // DestroyWindow on that same handle again. A page calling window.close()
+    // would leave a tab without a window, and closing it later would destroy a
+    // stale handle. A thread-local CBT hook vetoes destroying a guarded host;
+    // the app releases the guard right before it drops the WebView itself.
+
+    use std::cell::RefCell;
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, HCBT_DESTROYWND, HHOOK, SetWindowsHookExW, UnhookWindowsHookEx, WH_CBT,
+    };
+
+    thread_local! {
+        static GUARD: RefCell<(Option<HHOOK>, Vec<isize>)> = const { RefCell::new((None, Vec::new())) };
+    }
+
+    unsafe extern "system" fn cbt_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code == HCBT_DESTROYWND as i32 {
+            let guarded = GUARD
+                .try_with(|g| g.try_borrow().is_ok_and(|g| g.1.contains(&(wparam.0 as isize))))
+                .unwrap_or(false);
+            if guarded {
+                return LRESULT(1); // prevent the destruction
+            }
+        }
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+
+    fn host(view: &WebView) -> Option<isize> {
+        let mut h = HWND::default();
+        unsafe { view.controller().ParentWindow(&mut h).ok()? };
+        (!h.is_invalid()).then_some(h.0 as isize)
+    }
+
+    /// Only the app may destroy this view's host window (by dropping the view).
+    pub fn guard_host(view: &WebView) -> windows::core::Result<()> {
+        let Some(h) = host(view) else { return Ok(()) };
+        GUARD.with(|g| {
+            let mut g = g.borrow_mut();
+            if g.0.is_none() {
+                let thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+                g.0 = Some(unsafe { SetWindowsHookExW(WH_CBT, Some(cbt_proc), None, thread)? });
+            }
+            g.1.push(h);
+            Ok(())
+        })
+    }
+
+    /// Call right before dropping a guarded view.
+    pub fn release_host(view: &WebView) {
+        if let Some(h) = host(view) {
+            GUARD.with(|g| g.borrow_mut().1.retain(|x| *x != h));
+        }
+    }
+
+    /// Releases every guard and removes the hook (app shutdown).
+    pub fn release_all_hosts() {
+        GUARD.with(|g| {
+            let mut g = g.borrow_mut();
+            g.1.clear();
+            if let Some(hook) = g.0.take() {
+                let _ = unsafe { UnhookWindowsHookEx(hook) };
+            }
+        });
+    }
+
     pub fn stop(view: &WebView) {
         unsafe {
             let _ = view.webview().Stop();
@@ -163,11 +315,14 @@ mod imp {
         }
     }
 
-    /// The user-data folder is still locked by a WebView2 browser process
-    /// that is shutting down (HRESULT_FROM_WIN32(ERROR_BUSY)).
+    /// The user-data folder is still held by a WebView2 browser process
+    /// that is shutting down: locked (HRESULT_FROM_WIN32(ERROR_BUSY)), or
+    /// running with other browser arguments, e.g. those of an older build
+    /// (HRESULT_FROM_WIN32(ERROR_INVALID_STATE)).
     pub fn is_profile_busy(e: &wry::Error) -> bool {
         const BUSY: windows::core::HRESULT = windows::core::HRESULT(0x8007_00AA_u32 as i32);
-        matches!(e, wry::Error::WebView2Error(webview2_com::Error::WindowsError(w)) if w.code() == BUSY)
+        const INVALID_STATE: windows::core::HRESULT = windows::core::HRESULT(0x8007_139F_u32 as i32);
+        matches!(e, wry::Error::WebView2Error(webview2_com::Error::WindowsError(w)) if w.code() == BUSY || w.code() == INVALID_STATE)
     }
 
     /// Destroys every child window of `window`. Used only before the first
@@ -245,6 +400,17 @@ mod imp {
     pub fn attach_accelerators(_: &WebView, _: &Proxy) -> Result<(), ()> {
         Ok(())
     }
+    pub fn harden_content(_: &WebView) -> Result<(), ()> {
+        Ok(())
+    }
+    pub fn attach_process_failed(_: &WebView, _: Option<TabId>, _: &Proxy) -> Result<(), ()> {
+        Ok(())
+    }
+    pub fn guard_host(_: &WebView) -> Result<(), ()> {
+        Ok(())
+    }
+    pub fn release_host(_: &WebView) {}
+    pub fn release_all_hosts() {}
     pub fn stop(view: &WebView) {
         let _ = view.evaluate_script("window.stop()");
     }

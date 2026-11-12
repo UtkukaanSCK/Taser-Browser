@@ -91,6 +91,14 @@ fn run() -> wry::Result<()> {
                 _ => {}
             },
             Event::MainEventsCleared => app.flush(),
+            Event::LoopDestroyed => {
+                if let Some(message) = app.fatal.take() {
+                    app.window.set_visible(false);
+                    if !timing::quit_when_ready() {
+                        native::fatal(message);
+                    }
+                }
+            }
             _ => {}
         }
         if app.quit {

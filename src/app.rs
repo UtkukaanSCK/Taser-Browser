@@ -23,6 +23,8 @@ pub enum UserEvent {
     Page(TabId, PageEvent),
     /// A page asked for a new window (user-initiated, http/https only).
     OpenTab { opener: TabId, url: String },
+    /// A WebView2 process died or hung. `tab` is `None` for the UI webview.
+    ProcessFailed { tab: Option<TabId>, failure: Failure },
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -33,18 +35,41 @@ pub enum PageEvent {
     Url(String),
     Loading(bool),
     History { back: bool, forward: bool },
+    /// The page called `window.close()` (and WebView2 allowed it).
+    CloseRequested,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// The shared WebView2 browser process exited; every webview is dead.
+    Browser,
+    RendererExited,
+    RendererUnresponsive,
+}
+
+/// Shown when the WebView2 browser process dies under us.
+const BROWSER_DIED: &str = "X-Browser beklenmedik bir hatayla karşılaştı: Microsoft Edge WebView2 \
+                            tarayıcı işlemi kapandı.\n\nUygulama kapanacak. Yeniden başlatmanız yeterlidir.";
+
+// Field order is drop order: every webview goes before the WebView2
+// environment and context, and all of them before the window that hosts them
+// (dropping the window first would destroy the webviews' host windows under wry).
 pub struct App {
-    pub window: Window,
-    pub ui: WebView,
     /// Content webviews, same order as nothing in particular; looked up by id.
     pub views: Vec<(TabId, WebView)>,
-    pub tabs: Tabs,
-    proxy: Proxy,
-    context: WebContext,
+    pub ui: WebView,
     #[cfg(windows)]
     environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
+    context: WebContext,
+    pub window: Window,
+    pub tabs: Tabs,
+    proxy: Proxy,
+    /// Last caption given to the window, so it is only set when it changes.
+    title: String,
+    #[cfg(feature = "selftest")]
+    pub title_sets: u32,
+    /// Set when the app must quit with an error dialog (after the loop ends).
+    pub fatal: Option<&'static str>,
     dirty: bool,
     pub ui_ready: bool,
     /// Tab shown right now (may lag `tabs.active()` until `sync_visibility`).
@@ -94,10 +119,17 @@ impl App {
         }
         let ui = ui?;
         #[cfg(windows)]
-        native::attach_accelerators(&ui, &proxy)?;
+        {
+            native::attach_accelerators(&ui, &proxy)?;
+            native::attach_process_failed(&ui, None, &proxy)?;
+        }
         Ok(Self {
             #[cfg(windows)]
             environment: wry::WebViewExtWindows::environment(&ui),
+            title: window.title(),
+            #[cfg(feature = "selftest")]
+            title_sets: 0,
+            fatal: None,
             window,
             ui,
             views: Vec::new(),
@@ -130,10 +162,11 @@ impl App {
         let id = self.tabs.add(url, placement);
         let p = self.proxy.clone();
         let bounds = content_rect(self.size());
+        // No `with_url`: the content settings below must be in place before
+        // the first navigation starts, so `load_url` comes last.
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_bounds(bounds)
             .with_visible(false)
-            .with_url(url)
             .with_document_title_changed_handler(move |title| {
                 let _ = p.send_event(UserEvent::Page(id, PageEvent::Title(title)));
             });
@@ -159,10 +192,22 @@ impl App {
                 return Err(e);
             }
         };
-        #[cfg(windows)]
-        {
-            native::attach_content_events(&view, id, &self.proxy)?;
-            native::attach_accelerators(&view, &self.proxy)?;
+        let setup = |view: &WebView| -> wry::Result<()> {
+            #[cfg(windows)]
+            {
+                native::harden_content(view)?;
+                native::attach_content_events(view, id, &self.proxy)?;
+                native::attach_accelerators(view, &self.proxy)?;
+                native::guard_host(view)?;
+            }
+            view.load_url(url)
+        };
+        if let Err(e) = setup(&view) {
+            // No half-wired tab: without its events it would never update.
+            native::release_host(&view);
+            drop(view);
+            self.tabs.close(id);
+            return Err(e);
         }
         self.views.push((id, view));
         if activate {
@@ -174,6 +219,7 @@ impl App {
     }
 
     pub fn close_tab(&mut self, id: TabId) {
+        let was_active = self.tabs.active();
         if !self.tabs.close(id) {
             return;
         }
@@ -181,6 +227,7 @@ impl App {
             // Hide first so the removal never flashes; drop destroys the webview.
             let (_, view) = self.views.remove(i);
             let _ = view.set_visible(false);
+            native::release_host(&view);
             drop(view);
         }
         if self.shown == Some(id) {
@@ -191,7 +238,10 @@ impl App {
             return;
         }
         self.sync_visibility();
-        self.focus_pending = true;
+        // Closing a background tab must not pull focus out of the page.
+        if self.tabs.active() != was_active {
+            self.focus_pending = true;
+        }
         self.dirty = true;
     }
 
@@ -272,6 +322,9 @@ impl App {
     /// visibility: push state to the UI, move keyboard focus, then hide the
     /// previously shown view(s).
     pub fn flush(&mut self) {
+        if self.dirty {
+            self.update_title();
+        }
         if self.dirty && self.ui_ready {
             self.dirty = false;
             let js = format!("xb.render({},{})", self.tabs.to_json(), self.window.is_maximized());
@@ -281,6 +334,46 @@ impl App {
             self.focus_after_switch();
         }
         self.hide_stale();
+    }
+
+    /// Window caption (taskbar, Alt+Tab) follows the active tab.
+    fn update_title(&mut self) {
+        let title = crate::tabs::window_title(self.tabs.active().and_then(|id| self.tabs.get(id)));
+        if title != self.title {
+            self.window.set_title(&title);
+            self.title = title;
+            #[cfg(feature = "selftest")]
+            {
+                self.title_sets += 1;
+            }
+        }
+    }
+
+    fn on_process_failed(&mut self, tab: Option<TabId>, failure: Failure) {
+        match (failure, tab) {
+            // Every webview reports it; the first report decides.
+            (Failure::Browser, _) => {
+                if self.fatal.is_none() && !self.quit {
+                    self.fatal = Some(BROWSER_DIED);
+                }
+                self.quit = true;
+            }
+            // The UI has no state of its own: reload it; it sends `ready`
+            // again and gets the current state re-rendered.
+            (_, None) => {
+                self.ui_ready = false;
+                self.dirty = true;
+                let _ = self.ui.reload();
+            }
+            // A dead page shows WebView2's error page; the tab stays, but
+            // must not keep spinning.
+            (_, Some(id)) => {
+                if let Some(t) = self.tabs.get_mut(id) {
+                    t.loading = false;
+                    self.dirty = true;
+                }
+            }
+        }
     }
 
     pub fn handle(&mut self, event: UserEvent) {
@@ -296,6 +389,7 @@ impl App {
                     }
                 }
             }
+            UserEvent::ProcessFailed { tab, failure } => self.on_process_failed(tab, failure),
             #[cfg(feature = "selftest")]
             UserEvent::Test(step) => crate::selftest::step(self, step),
         }
@@ -375,8 +469,13 @@ impl App {
     }
 
     fn on_page(&mut self, id: TabId, ev: PageEvent) {
+        if let PageEvent::CloseRequested = ev {
+            self.close_tab(id);
+            return;
+        }
         let Some(tab) = self.tabs.get_mut(id) else { return };
         match ev {
+            PageEvent::CloseRequested => {}
             PageEvent::Title(t) => tab.title = t.chars().take(512).collect(),
             PageEvent::Url(u) => tab.url = u.chars().take(8192).collect(),
             PageEvent::Loading(l) => tab.loading = l,
@@ -402,10 +501,14 @@ impl App {
             }
             Resolved::Url(u) => {
                 let Some(id) = self.tabs.active() else { return };
-                if let Some(v) = self.view(id) {
-                    let _ = v.load_url(&u);
-                    let _ = v.focus();
+                let Some(v) = self.view(id) else { return };
+                // WebView2 rejects some URLs outright (E_INVALIDARG); then the
+                // tab keeps what it shows and the UI says so.
+                if v.load_url(&u).is_err() {
+                    let _ = self.ui.evaluate_script("xb.blocked()");
+                    return;
                 }
+                let _ = v.focus();
                 if let Some(t) = self.tabs.get_mut(id) {
                     t.url = u;
                     t.loading = true;
@@ -424,6 +527,13 @@ impl App {
     pub fn on_theme(&self, theme: Theme) {
         self.window.set_background_color(Some(background(theme)));
         let _ = self.ui.set_background_color(background(theme));
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Let the fields' drops (webviews first) destroy their host windows.
+        native::release_all_hosts();
     }
 }
 

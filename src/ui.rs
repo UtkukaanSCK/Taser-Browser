@@ -22,11 +22,33 @@ pub const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; 
                        frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'; \
                        frame-ancestors 'none'";
 
-/// Origins the UI page may have. wry maps `xb://ui/` to `http://xb.ui/` on
-/// Windows and Android; elsewhere it stays as is.
+/// The UI page's real origin. wry maps `xb://ui/` to `http://xb.ui/` on
+/// Windows and Android (`https` only with `with_https_scheme(true)`, which we
+/// do not use); elsewhere it stays as is.
+#[cfg(any(windows, target_os = "android"))]
+const UI_ORIGIN: &str = "http://xb.ui/";
+#[cfg(not(any(windows, target_os = "android")))]
+const UI_ORIGIN: &str = "xb://ui/";
+
+/// Whether `url` is on the UI page's origin (exactly; no other scheme).
 pub fn is_ui_origin(url: &str) -> bool {
-    ["xb://ui/", "http://xb.ui/", "https://xb.ui/"].iter().any(|o| url.starts_with(o))
+    url.starts_with(UI_ORIGIN)
 }
+
+/// URLs a content tab must never load: the UI origin, and host `xb.ui` under
+/// any scheme (in a content webview that is a real network request, in the
+/// profile the UI shares).
+pub fn is_ui_url(url: &str) -> bool {
+    is_ui_origin(url) || crate::url::host_of(url).as_deref() == Some("xb.ui")
+}
+
+/// WebView2 browser arguments for the one environment every webview shares.
+/// wry's default is `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection`
+/// plus `--autoplay-policy=no-user-gesture-required`; we keep the two UI
+/// tweaks (no "mini menu" on text selection) but leave SmartScreen on and
+/// Chromium's default autoplay policy in place.
+#[cfg(windows)]
+pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
 
 fn asset(path: &str) -> Option<(&'static str, &'static str)> {
     Some(match path {
@@ -78,8 +100,7 @@ pub fn build(
         // The UI never leaves its own origin; links can't open windows.
         .with_navigation_handler(|url| is_ui_origin(&url))
         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-        .with_hotkeys_zoom(false)
-        .with_clipboard(true);
+        .with_hotkeys_zoom(false);
     #[cfg(windows)]
     let builder = {
         use wry::WebViewBuilderExtWindows;
@@ -88,6 +109,9 @@ pub fn build(
         builder
             .with_browser_accelerator_keys(false)
             .with_default_context_menus(cfg!(debug_assertions))
+            // This builder creates the environment (content tabs reuse it), so
+            // its arguments are the ones every webview runs with.
+            .with_additional_browser_args(BROWSER_ARGS)
     };
     builder.build_as_child(window)
 }
@@ -98,12 +122,42 @@ mod tests {
 
     #[test]
     fn ui_origin_check() {
-        assert!(is_ui_origin("http://xb.ui/index.html"));
-        assert!(is_ui_origin("xb://ui/index.html"));
+        #[cfg(windows)]
+        {
+            assert!(is_ui_origin("http://xb.ui/index.html"));
+            assert!(!is_ui_origin("xb://ui/index.html"), "not the origin on Windows");
+        }
+        #[cfg(not(any(windows, target_os = "android")))]
+        {
+            assert!(is_ui_origin("xb://ui/index.html"));
+            assert!(!is_ui_origin("http://xb.ui/index.html"));
+        }
+        assert!(!is_ui_origin("https://xb.ui/index.html"), "https is never the UI origin");
         assert!(!is_ui_origin("http://xb.ui.evil.com/"));
         assert!(!is_ui_origin("https://example.com/?http://xb.ui/"));
         assert!(!is_ui_origin("http://xb.uix/"));
         assert!(!is_ui_origin(""));
+    }
+
+    #[test]
+    fn content_may_not_load_ui_host() {
+        assert!(is_ui_url("http://xb.ui/index.html"));
+        assert!(is_ui_url("https://xb.ui/"));
+        assert!(is_ui_url("http://XB.UI./app.js"));
+        assert!(is_ui_url("http://user@xb.ui:8080/"));
+        assert!(is_ui_url("ws://xb.ui/"));
+        assert!(!is_ui_url("http://xb.ui.evil.com/"));
+        assert!(!is_ui_url("https://example.com/?http://xb.ui/"));
+        assert!(!is_ui_url("about:blank"));
+        assert!(!is_ui_url("https://example.com/"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn browser_args_keep_smartscreen_and_default_autoplay() {
+        assert!(BROWSER_ARGS.contains("msWebOOUI") && BROWSER_ARGS.contains("msPdfOOUI"));
+        assert!(!BROWSER_ARGS.contains("SmartScreen"));
+        assert!(!BROWSER_ARGS.contains("autoplay"));
     }
 
     #[test]

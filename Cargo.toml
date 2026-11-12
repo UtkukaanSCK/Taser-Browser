@@ -2,6 +2,8 @@
 name = "x-browser"
 version = "0.1.0"
 edition = "2024"
+# Let chains (src/) and the newest dependencies (icu_*, time) need 1.88.
+rust-version = "1.88"
 description = "A light, fast, minimalist desktop web browser on the system WebView"
 license = "MIT"
 

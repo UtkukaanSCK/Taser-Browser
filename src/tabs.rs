@@ -12,6 +12,8 @@ pub struct Tab {
     pub loading: bool,
     pub can_back: bool,
     pub can_forward: bool,
+    /// The tab whose page opened this one (for placing later popups).
+    pub opener: Option<TabId>,
 }
 
 #[derive(Debug, Default)]
@@ -26,9 +28,19 @@ pub struct Tabs {
 pub enum Placement {
     /// Ctrl+T / "+" button: at the end.
     End,
-    /// Opened from a page: right after its opener (after earlier siblings is
-    /// not tracked; keeping it simple).
+    /// Opened from a page: after its opener and the tabs it already opened,
+    /// so popups A then B line up as opener, A, B (as in Chrome).
     After(TabId),
+}
+
+/// Window caption for the active tab: `<title> - X-Browser`, or just the app
+/// name for a blank tab or one without a title yet.
+pub fn window_title(tab: Option<&Tab>) -> String {
+    const APP: &str = "X-Browser";
+    match tab {
+        Some(t) if t.url != crate::url::BLANK && !t.title.trim().is_empty() => format!("{} - {APP}", t.title.trim()),
+        _ => APP.to_string(),
+    }
 }
 
 impl Tabs {
@@ -77,10 +89,21 @@ impl Tabs {
             loading: false,
             can_back: false,
             can_forward: false,
+            opener: match placement {
+                Placement::After(opener) => Some(opener),
+                Placement::End => None,
+            },
         };
         let at = match placement {
             Placement::End => self.tabs.len(),
-            Placement::After(opener) => self.index_of(opener).map_or(self.tabs.len(), |i| i + 1),
+            Placement::After(opener) => match self.index_of(opener) {
+                // After the last tab this opener already opened, else right after it.
+                Some(i) => {
+                    let last_sibling = self.tabs[i + 1..].iter().rposition(|t| t.opener == Some(opener));
+                    i + 1 + last_sibling.map_or(0, |j| j + 1)
+                }
+                None => self.tabs.len(),
+            },
         };
         self.tabs.insert(at, tab);
         if self.active.is_none() {
@@ -210,6 +233,47 @@ mod tests {
         assert_eq!(order(&t), vec![a, c, b]);
         let d = t.add("d", Placement::After(999));
         assert_eq!(order(&t), vec![a, c, b, d], "unknown opener appends");
+    }
+
+    #[test]
+    fn popups_from_one_opener_keep_their_order() {
+        let mut t = Tabs::new();
+        let o = t.add("o", Placement::End);
+        let x = t.add("x", Placement::End);
+        let a = t.add("a", Placement::After(o));
+        let b = t.add("b", Placement::After(o));
+        assert_eq!(order(&t), vec![o, a, b, x], "A then B, not B then A");
+        let c = t.add("c", Placement::After(o));
+        assert_eq!(order(&t), vec![o, a, b, c, x]);
+        // A popup of a popup goes right after its own opener.
+        let a1 = t.add("a1", Placement::After(a));
+        assert_eq!(order(&t), vec![o, a, a1, b, c, x]);
+        // The opener's next popup still goes after its last one.
+        let d = t.add("d", Placement::After(o));
+        assert_eq!(order(&t), vec![o, a, a1, b, c, d, x]);
+        // Closing the opener's popups: placement falls back to right after it.
+        for id in [a, a1, b, c, d] {
+            t.close(id);
+        }
+        let e = t.add("e", Placement::After(o));
+        assert_eq!(order(&t), vec![o, e, x]);
+        assert_eq!(t.get(e).unwrap().opener, Some(o));
+        assert_eq!(t.get(x).unwrap().opener, None);
+    }
+
+    #[test]
+    fn window_title_follows_active_tab() {
+        let mut t = Tabs::new();
+        let a = t.add(crate::url::BLANK, Placement::End);
+        assert_eq!(window_title(None), "X-Browser");
+        assert_eq!(window_title(t.get(a)), "X-Browser", "blank tab");
+        t.get_mut(a).unwrap().title = "about:blank".into();
+        assert_eq!(window_title(t.get(a)), "X-Browser", "blank tab with WebView2's URL title");
+        t.get_mut(a).unwrap().url = "https://example.com/".into();
+        t.get_mut(a).unwrap().title = "  ".into();
+        assert_eq!(window_title(t.get(a)), "X-Browser", "no title yet");
+        t.get_mut(a).unwrap().title = " Example Domain ".into();
+        assert_eq!(window_title(t.get(a)), "Example Domain - X-Browser");
     }
 
     #[test]
