@@ -200,6 +200,46 @@ mod tests {
     }
 
     #[test]
+    fn altgr_never_matches_any_key() {
+        // AltGr arrives as Ctrl+Alt; no virtual key may turn into a shortcut
+        // with it, with or without Shift, or typing @ / € / \ would break.
+        for key in 0..=0xFF_u32 {
+            for shift in [false, true] {
+                let m = Mods { shift, ..ALTGR };
+                assert_eq!(Shortcut::from_key(key, m), None, "vk {key:#x} shift={shift}");
+            }
+        }
+    }
+
+    #[test]
+    fn maps_alternative_keys() {
+        use vk::*;
+        assert_eq!(Shortcut::from_key(F5, NONE), Some(Shortcut::Reload));
+        assert_eq!(Shortcut::from_key(F5, CTRL), Some(Shortcut::Reload));
+        assert_eq!(Shortcut::from_key(F5, ALT), None, "Alt+F5 is not reload");
+        assert_eq!(Shortcut::from_key(NEXT, CTRL), Some(Shortcut::NextTab), "Ctrl+PageDown");
+        assert_eq!(Shortcut::from_key(PRIOR, CTRL), Some(Shortcut::PrevTab), "Ctrl+PageUp");
+        assert_eq!(Shortcut::from_key(NEXT, NONE), None, "plain PageDown scrolls");
+        assert_eq!(Shortcut::from_key(BROWSER_BACK, NONE), Some(Shortcut::Back));
+        assert_eq!(Shortcut::from_key(BROWSER_FORWARD, NONE), Some(Shortcut::Forward));
+    }
+
+    #[test]
+    fn extra_modifiers_do_not_trigger_other_shortcuts() {
+        use vk::*;
+        let alt_shift = Mods { alt: true, shift: true, ctrl: false };
+        let shift = Mods { shift: true, ..NONE };
+        assert_eq!(Shortcut::from_key(LEFT, alt_shift), None, "Alt+Shift+Left");
+        assert_eq!(Shortcut::from_key(RIGHT, alt_shift), None, "Alt+Shift+Right");
+        assert_eq!(Shortcut::from_key(T, ALT), None, "Alt+T");
+        assert_eq!(Shortcut::from_key(T, shift), None, "Shift+T types a capital");
+        assert_eq!(Shortcut::from_key(W, CTRL_SHIFT), None, "Ctrl+Shift+W");
+        assert_eq!(Shortcut::from_key(L, CTRL_SHIFT), None, "Ctrl+Shift+L");
+        assert_eq!(Shortcut::from_key(TAB, ALT), None, "Alt+Tab belongs to the OS");
+        assert_eq!(Shortcut::from_key(TAB, shift), None, "Shift+Tab moves focus back");
+    }
+
+    #[test]
     fn only_tab_cycling_repeats() {
         assert!(Shortcut::NextTab.repeats());
         assert!(!Shortcut::CloseTab.repeats());
