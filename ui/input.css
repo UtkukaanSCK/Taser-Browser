@@ -1,0 +1,65 @@
+@import "tailwindcss" source(none);
+@source "./index.html";
+@source "./app.js";
+
+@theme {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* The one accent color. */
+  --color-accent: oklch(0.62 0.16 252);
+  /* Neutral surfaces (light). Dark values are swapped in below. */
+  --color-strip: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-hover: #e4e4e7;
+  --color-line: #d4d4d8;
+  --color-ink: #27272a;
+  --color-muted: #71717a;
+  --color-danger: #c42b1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-strip: #1c1c1e;
+    --color-surface: #2c2c2e;
+    --color-hover: #38383b;
+    --color-line: #3f3f43;
+    --color-ink: #e4e4e7;
+    --color-muted: #a1a1aa;
+  }
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+    overflow: hidden;
+    color-scheme: light dark;
+  }
+  body {
+    user-select: none;
+    cursor: default;
+  }
+  svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+  button {
+    cursor: default;
+  }
+}
+
+@layer components {
+  /* Toolbar icon button. */
+  .nav {
+    @apply flex size-7 shrink-0 items-center justify-center rounded-md transition-colors duration-100 hover:bg-hover disabled:opacity-35 disabled:hover:bg-transparent;
+  }
+  /* Window caption button (full strip height, Windows-like width). */
+  .win {
+    @apply flex h-full w-11 items-center justify-center transition-colors duration-100 hover:bg-hover;
+  }
+}

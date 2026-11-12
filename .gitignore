@@ -1,0 +1,3 @@
+/target
+# Tailwind standalone CLI (~100 MB); download it, do not commit it.
+/tools/

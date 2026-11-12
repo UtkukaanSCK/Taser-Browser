@@ -1,0 +1,208 @@
+//! The two command vocabularies, both closed sets:
+//! - `UiCommand`: what the trusted UI webview may ask for over IPC.
+//! - `Shortcut`: what a key press may trigger. It is computed in Rust from a
+//!   native key event, so content pages cannot inject one and none carries
+//!   data (no URL, path or text).
+
+use crate::tabs::TabId;
+
+/// Longest address bar input accepted over IPC.
+pub const MAX_NAV_INPUT: usize = 8 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiCommand {
+    Ready,
+    NewTab,
+    CloseTab(TabId),
+    Activate(TabId),
+    Navigate(String),
+    Back,
+    Forward,
+    Reload,
+    Stop,
+    Minimize,
+    ToggleMaximize,
+    CloseWindow,
+    DragWindow,
+    ResizeTop(TopEdge),
+    /// The address bar lost focus; return focus to the page (Esc).
+    FocusContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopEdge {
+    Left,
+    Middle,
+    Right,
+}
+
+impl UiCommand {
+    /// Parses `name` or `name:arg`. Anything unknown or malformed is rejected.
+    pub fn parse(msg: &str) -> Option<Self> {
+        let (name, arg) = match msg.split_once(':') {
+            Some((n, a)) => (n, Some(a)),
+            None => (msg, None),
+        };
+        let id = || arg?.parse::<TabId>().ok();
+        let cmd = match (name, arg) {
+            ("ready", None) => Self::Ready,
+            ("new", None) => Self::NewTab,
+            ("close", Some(_)) => Self::CloseTab(id()?),
+            ("activate", Some(_)) => Self::Activate(id()?),
+            ("navigate", Some(text)) if text.len() <= MAX_NAV_INPUT => Self::Navigate(text.to_string()),
+            ("back", None) => Self::Back,
+            ("forward", None) => Self::Forward,
+            ("reload", None) => Self::Reload,
+            ("stop", None) => Self::Stop,
+            ("min", None) => Self::Minimize,
+            ("max", None) => Self::ToggleMaximize,
+            ("quit", None) => Self::CloseWindow,
+            ("drag", None) => Self::DragWindow,
+            ("resize", Some("n")) => Self::ResizeTop(TopEdge::Middle),
+            ("resize", Some("nw")) => Self::ResizeTop(TopEdge::Left),
+            ("resize", Some("ne")) => Self::ResizeTop(TopEdge::Right),
+            ("focus-content", None) => Self::FocusContent,
+            _ => return None,
+        };
+        Some(cmd)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shortcut {
+    NewTab,
+    CloseTab,
+    FocusAddress,
+    Reload,
+    NextTab,
+    PrevTab,
+    Back,
+    Forward,
+}
+
+/// Windows virtual-key codes used below (identical values on every keyboard layout).
+pub mod vk {
+    pub const TAB: u32 = 0x09;
+    pub const PRIOR: u32 = 0x21; // Page Up
+    pub const NEXT: u32 = 0x22; // Page Down
+    pub const LEFT: u32 = 0x25;
+    pub const RIGHT: u32 = 0x27;
+    pub const L: u32 = 0x4C;
+    pub const R: u32 = 0x52;
+    pub const T: u32 = 0x54;
+    pub const W: u32 = 0x57;
+    pub const F5: u32 = 0x74;
+    pub const BROWSER_BACK: u32 = 0xA6;
+    pub const BROWSER_FORWARD: u32 = 0xA7;
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+}
+
+impl Shortcut {
+    /// Maps a key-down to a shortcut. Ctrl+Alt (AltGr on e.g. Turkish layouts)
+    /// never matches, so typing characters like `@` or `€` is unaffected.
+    pub fn from_key(vk: u32, m: Mods) -> Option<Self> {
+        use vk::*;
+        let ctrl_only = m.ctrl && !m.alt;
+        let alt_only = m.alt && !m.ctrl;
+        let none = !m.ctrl && !m.alt;
+        Some(match vk {
+            T if ctrl_only && !m.shift => Self::NewTab,
+            W if ctrl_only && !m.shift => Self::CloseTab,
+            L if ctrl_only && !m.shift => Self::FocusAddress,
+            R if ctrl_only => Self::Reload,
+            F5 if none || ctrl_only => Self::Reload,
+            TAB if ctrl_only && m.shift => Self::PrevTab,
+            TAB if ctrl_only => Self::NextTab,
+            NEXT if ctrl_only && !m.shift => Self::NextTab,
+            PRIOR if ctrl_only && !m.shift => Self::PrevTab,
+            LEFT if alt_only && !m.shift => Self::Back,
+            RIGHT if alt_only && !m.shift => Self::Forward,
+            BROWSER_BACK if none => Self::Back,
+            BROWSER_FORWARD if none => Self::Forward,
+            _ => return None,
+        })
+    }
+
+    /// Whether holding the key down should repeat the action.
+    pub fn repeats(self) -> bool {
+        matches!(self, Self::NextTab | Self::PrevTab)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_known_commands() {
+        assert_eq!(UiCommand::parse("ready"), Some(UiCommand::Ready));
+        assert_eq!(UiCommand::parse("new"), Some(UiCommand::NewTab));
+        assert_eq!(UiCommand::parse("close:7"), Some(UiCommand::CloseTab(7)));
+        assert_eq!(UiCommand::parse("activate:2"), Some(UiCommand::Activate(2)));
+        assert_eq!(
+            UiCommand::parse("navigate:a:b c"),
+            Some(UiCommand::Navigate("a:b c".into())),
+            "only the first colon splits"
+        );
+        assert_eq!(UiCommand::parse("navigate:"), Some(UiCommand::Navigate(String::new())));
+        assert_eq!(UiCommand::parse("resize:nw"), Some(UiCommand::ResizeTop(TopEdge::Left)));
+        assert_eq!(UiCommand::parse("quit"), Some(UiCommand::CloseWindow));
+    }
+
+    #[test]
+    fn rejects_malformed_or_unknown() {
+        for bad in [
+            "", "nope", "close", "close:", "close:x", "close:-1", "activate:1.5", "new:1", "ready:x",
+            "resize:s", "resize", "navigate", "Back", " back",
+        ] {
+            assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
+        }
+        let huge = format!("navigate:{}", "a".repeat(MAX_NAV_INPUT + 1));
+        assert_eq!(UiCommand::parse(&huge), None);
+    }
+
+    const CTRL: Mods = Mods { ctrl: true, shift: false, alt: false };
+    const CTRL_SHIFT: Mods = Mods { ctrl: true, shift: true, alt: false };
+    const ALT: Mods = Mods { ctrl: false, shift: false, alt: true };
+    const ALTGR: Mods = Mods { ctrl: true, shift: false, alt: true };
+    const NONE: Mods = Mods { ctrl: false, shift: false, alt: false };
+
+    #[test]
+    fn maps_required_shortcuts() {
+        use vk::*;
+        assert_eq!(Shortcut::from_key(T, CTRL), Some(Shortcut::NewTab));
+        assert_eq!(Shortcut::from_key(W, CTRL), Some(Shortcut::CloseTab));
+        assert_eq!(Shortcut::from_key(L, CTRL), Some(Shortcut::FocusAddress));
+        assert_eq!(Shortcut::from_key(R, CTRL), Some(Shortcut::Reload));
+        assert_eq!(Shortcut::from_key(TAB, CTRL), Some(Shortcut::NextTab));
+        assert_eq!(Shortcut::from_key(TAB, CTRL_SHIFT), Some(Shortcut::PrevTab));
+        assert_eq!(Shortcut::from_key(LEFT, ALT), Some(Shortcut::Back));
+        assert_eq!(Shortcut::from_key(RIGHT, ALT), Some(Shortcut::Forward));
+    }
+
+    #[test]
+    fn ignores_unrelated_and_altgr() {
+        use vk::*;
+        assert_eq!(Shortcut::from_key(T, NONE), None, "plain T types a letter");
+        assert_eq!(Shortcut::from_key(T, ALTGR), None, "AltGr+T is a character");
+        assert_eq!(Shortcut::from_key(L, ALTGR), None);
+        assert_eq!(Shortcut::from_key(LEFT, NONE), None, "plain arrows move the caret");
+        assert_eq!(Shortcut::from_key(LEFT, CTRL), None, "Ctrl+Left jumps words");
+        assert_eq!(Shortcut::from_key(TAB, NONE), None, "plain Tab moves focus");
+        assert_eq!(Shortcut::from_key(T, CTRL_SHIFT), None, "Ctrl+Shift+T is not implemented");
+        assert_eq!(Shortcut::from_key(0x43, CTRL), None, "Ctrl+C stays copy");
+    }
+
+    #[test]
+    fn only_tab_cycling_repeats() {
+        assert!(Shortcut::NextTab.repeats());
+        assert!(!Shortcut::CloseTab.repeats());
+        assert!(!Shortcut::NewTab.repeats());
+    }
+}
