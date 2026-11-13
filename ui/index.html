@@ -59,13 +59,16 @@
 
 <!-- A tab is a bare box that can shrink to nothing; the visible part (.tab-body)
      is inset inside it and sheds its padding, close button and title as the tab
-     narrows (container queries on the tab's own width). -->
+     narrows (container queries on the tab's own width). Thresholds:
+     28px = the active tab's minimum width; below it a tab is a bare sliver,
+     44px = sheds its padding, loading dot and close button,
+     76px = an inactive tab already hides its close button. -->
 <template id="tab-tpl">
   <div role="tab" tabindex="-1" aria-selected="false" class="tab group @container relative h-7 w-[200px] min-w-0 flex-[0_1_200px] overflow-hidden outline-none aria-selected:min-w-7">
     <div class="tab-body absolute inset-x-px inset-y-0 flex items-center gap-1.5 overflow-hidden rounded-md border border-transparent ps-2 pe-1 text-muted transition-colors duration-100 group-hover:bg-hover group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-accent group-aria-selected:border-line group-aria-selected:bg-surface group-aria-selected:text-ink @max-[44px]:px-1 @max-[44px]:group-aria-selected:border-accent @max-[28px]:gap-0 @max-[28px]:border-0 @max-[28px]:bg-line @max-[28px]:px-0 @max-[28px]:group-hover:bg-muted @max-[28px]:group-focus-visible:bg-accent">
       <span class="dot hidden size-1.5 shrink-0 rounded-full bg-accent group-data-[loading]:block @max-[44px]:group-data-[loading]:hidden"></span>
       <span class="title min-w-0 flex-1 truncate leading-normal @max-[28px]:hidden"></span>
-      <button class="close flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink @max-[76px]:group-aria-[selected=false]:hidden @max-[44px]:hidden" tabindex="-1" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
+      <button class="close flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink @max-[76px]:group-aria-[selected=false]:hidden @max-[44px]:hidden" tabindex="-1" aria-hidden="true" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
         <svg class="size-3" viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
       </button>
     </div>

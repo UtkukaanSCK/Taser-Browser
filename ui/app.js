@@ -71,12 +71,16 @@
       case "Enter":
       case " ":
         e.preventDefault();
-        send("activate:" + id);
+        if (!e.repeat) send("activate:" + id);
         return;
       case "Delete":
         e.preventDefault();
-        // Keep keyboard focus in the strip when this tab goes away.
-        (tabs[i + 1] || tabs[i - 1] || newTab).focus();
+        // A held key auto-repeats on the neighbour focused below: one press, one close.
+        if (e.repeat) return;
+        // Closing an inactive tab leaves focus on its neighbour. Closing the active
+        // tab makes Rust move focus on to the new page (or the address field of a
+        // blank tab) once the state arrives. Closing the last tab quits the app.
+        (tabs[i + 1] || tabs[i - 1])?.focus();
         send("close:" + id);
         return;
       default:
@@ -121,6 +125,8 @@
   // The page's URL never replaces what the user is editing; only leaving the
   // field (blur, Escape) or switching tabs does.
   function syncAddress(force) {
+    // Both checks: Escape clears `editing` while the field keeps focus, and a
+    // stale `editing` must never freeze a field that has lost focus.
     if (!force && editing && document.activeElement === addr) return;
     const t = activeTab();
     const url = t ? t.url : "";
