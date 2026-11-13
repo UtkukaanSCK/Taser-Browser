@@ -41,7 +41,7 @@ fn run() -> wry::Result<()> {
     let mut builder = WindowBuilder::new()
         .with_title("X-Browser")
         .with_inner_size(LogicalSize::new(1200.0, 800.0))
-        .with_min_inner_size(LogicalSize::new(420.0, 240.0))
+        .with_min_inner_size(LogicalSize::new(480.0, 240.0))
         .with_decorations(false)
         .with_theme(None);
     #[cfg(windows)]

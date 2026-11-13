@@ -26,13 +26,16 @@
     <svg class="hidden group-data-[loading]:block" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg>
   </button>
 
-  <div id="address-box" class="ml-1 flex h-7 w-[clamp(140px,34vw,520px)] shrink-0 items-center rounded-md border border-line bg-surface px-2 transition-colors duration-100 focus-within:border-accent data-[blocked]:border-danger">
+  <!-- Narrow windows: the address box gives up width first (down to min-w-28). -->
+  <div id="address-box" class="ml-1 flex h-7 w-[clamp(140px,34vw,520px)] min-w-28 shrink items-center rounded-md border border-line bg-surface px-2 transition-colors duration-100 focus-within:border-accent data-[blocked]:border-danger">
     <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Adres"
            placeholder="Ara ya da adres gir"
            class="h-full w-full min-w-0 bg-transparent text-ink outline-none select-text placeholder:text-muted">
   </div>
 
-  <div id="tabs" data-drag role="tablist" class="ml-1 flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+  <!-- Tab zone: never narrower than active tab + "+" + pr-8 of empty drag area. -->
+  <div id="tabs" data-drag class="ml-1 flex h-full min-w-[92px] flex-1 items-center overflow-hidden pr-8">
+    <div id="tablist" role="tablist" aria-label="Sekmeler" class="flex h-full min-w-0 flex-[0_1_auto] items-center"></div>
     <button id="new-tab" class="nav shrink-0" title="Yeni sekme (Ctrl+T)" aria-label="Yeni sekme">
       <svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>
     </button>
@@ -54,13 +57,18 @@
   <div id="loadbar" class="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-accent opacity-0 transition-opacity duration-100 data-[on]:opacity-100"></div>
 </div>
 
+<!-- A tab is a bare box that can shrink to nothing; the visible part (.tab-body)
+     is inset inside it and sheds its padding, close button and title as the tab
+     narrows (container queries on the tab's own width). -->
 <template id="tab-tpl">
-  <div role="tab" class="tab group flex h-7 min-w-0 flex-[0_1_200px] items-center gap-1.5 rounded-md border border-transparent pr-1 pl-2 text-muted transition-colors duration-100 hover:bg-hover aria-selected:border-line aria-selected:bg-surface aria-selected:text-ink">
-    <span class="dot hidden size-1.5 shrink-0 rounded-full bg-accent group-data-[loading]:block"></span>
-    <span class="title min-w-0 flex-1 truncate leading-normal"></span>
-    <button class="close flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
-      <svg class="size-3" viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
-    </button>
+  <div role="tab" tabindex="-1" aria-selected="false" class="tab group @container relative h-7 w-[200px] min-w-0 flex-[0_1_200px] overflow-hidden outline-none aria-selected:min-w-7">
+    <div class="tab-body absolute inset-x-px inset-y-0 flex items-center gap-1.5 overflow-hidden rounded-md border border-transparent ps-2 pe-1 text-muted transition-colors duration-100 group-hover:bg-hover group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-accent group-aria-selected:border-line group-aria-selected:bg-surface group-aria-selected:text-ink @max-[44px]:px-1 @max-[44px]:group-aria-selected:border-accent @max-[28px]:gap-0 @max-[28px]:border-0 @max-[28px]:bg-line @max-[28px]:px-0 @max-[28px]:group-hover:bg-muted @max-[28px]:group-focus-visible:bg-accent">
+      <span class="dot hidden size-1.5 shrink-0 rounded-full bg-accent group-data-[loading]:block @max-[44px]:group-data-[loading]:hidden"></span>
+      <span class="title min-w-0 flex-1 truncate leading-normal @max-[28px]:hidden"></span>
+      <button class="close flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink @max-[76px]:group-aria-[selected=false]:hidden @max-[44px]:hidden" tabindex="-1" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
+        <svg class="size-3" viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
+      </button>
+    </div>
   </div>
 </template>
 </body>

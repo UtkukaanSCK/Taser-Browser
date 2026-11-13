@@ -7,7 +7,7 @@
   const $ = (id) => document.getElementById(id);
   const send = (msg) => window.ipc.postMessage(msg);
 
-  const tabsEl = $("tabs");
+  const tabsEl = $("tablist");
   const newTab = $("new-tab");
   const addr = $("address");
   const addrBox = $("address-box");
@@ -22,8 +22,8 @@
   let state = { active: null, tabs: [] };
   /** id -> { el, title, close } */
   const nodes = new Map();
-  /** True while the user has typed into the address bar since it was last synced. */
-  let typed = false;
+  /** The user is working in the address bar (focused it, or typed into it). */
+  let editing = false;
   let blockedTimer = 0;
 
   const activeTab = () => state.tabs.find((t) => t.id === state.active);
@@ -36,6 +36,7 @@
     el.addEventListener("mousedown", (e) => {
       if (e.button === 0 && !node.close.contains(e.target)) send("activate:" + id);
     });
+    el.addEventListener("keydown", (e) => tabKey(e, el, id));
     el.addEventListener("auxclick", (e) => {
       if (e.button === 1) send("close:" + id);
     });
@@ -47,8 +48,48 @@
     return node;
   }
 
+  // Tab keyboard model: roving tabindex (the selected tab is the tab stop),
+  // arrows/Home/End move focus, Enter/Space activate, Delete closes.
+  function tabKey(e, el, id) {
+    if (e.target !== el || e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
+    const tabs = [...tabsEl.children];
+    const i = tabs.indexOf(el);
+    let to = null;
+    switch (e.key) {
+      case "ArrowRight":
+        to = tabs[(i + 1) % tabs.length];
+        break;
+      case "ArrowLeft":
+        to = tabs[(i - 1 + tabs.length) % tabs.length];
+        break;
+      case "Home":
+        to = tabs[0];
+        break;
+      case "End":
+        to = tabs[tabs.length - 1];
+        break;
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        send("activate:" + id);
+        return;
+      case "Delete":
+        e.preventDefault();
+        // Keep keyboard focus in the strip when this tab goes away.
+        (tabs[i + 1] || tabs[i - 1] || newTab).focus();
+        send("close:" + id);
+        return;
+      default:
+        return;
+    }
+    e.preventDefault();
+    to.focus();
+  }
+
   function renderTabs() {
     const seen = new Set();
+    // The one tab stop: the active tab (or the first tab while none is active).
+    const stop = state.tabs.some((t) => t.id === state.active) ? state.active : state.tabs[0]?.id;
     let prev = null;
     for (const t of state.tabs) {
       seen.add(t.id);
@@ -56,7 +97,10 @@
       const text = label(t);
       if (n.title.textContent !== text) n.title.textContent = text;
       n.el.title = text;
+      // The title is the accessible name; the close button's own label stays out of it.
+      n.el.setAttribute("aria-label", text);
       n.el.setAttribute("aria-selected", t.id === state.active ? "true" : "false");
+      n.el.tabIndex = t.id === stop ? 0 : -1;
       n.el.toggleAttribute("data-loading", t.loading);
       // Keep DOM order equal to state order without touching nodes already in place.
       const want = prev ? prev.nextSibling : tabsEl.firstChild;
@@ -69,56 +113,48 @@
         nodes.delete(id);
       }
     }
-    if (prev ? prev.nextSibling !== newTab : tabsEl.firstChild !== newTab) {
-      tabsEl.insertBefore(newTab, prev ? prev.nextSibling : tabsEl.firstChild);
-    }
-    fitTabs();
   }
 
-  // Tabs shrink with flexbox; once they get narrow, only the active one keeps
-  // its close button so the title stays readable.
-  function fitTabs() {
-    const n = state.tabs.length || 1;
-    const per = (tabsEl.clientWidth - newTab.offsetWidth - 32) / n;
-    const narrow = per < 76;
-    for (const t of state.tabs) {
-      const node = nodes.get(t.id);
-      if (node) node.close.hidden = narrow && t.id !== state.active;
-    }
-  }
+  // Tabs shrink with flexbox and shed their contents by their own width
+  // (container queries in the tab template), so nothing is measured here.
 
+  // The page's URL never replaces what the user is editing; only leaving the
+  // field (blur, Escape) or switching tabs does.
   function syncAddress(force) {
+    if (!force && editing && document.activeElement === addr) return;
     const t = activeTab();
     const url = t ? t.url : "";
-    if ((force || !typed) && addr.value !== url) addr.value = url;
+    if (addr.value !== url) addr.value = url;
   }
 
   function render(next, maximized) {
     const switched = next.active !== state.active;
     state = next;
-    if (switched) typed = false;
     renderTabs();
     const t = activeTab();
     back.disabled = !(t && t.back);
     fwd.disabled = !(t && t.fwd);
     const loading = !!(t && t.loading);
     reload.toggleAttribute("data-loading", loading);
-    reload.title = loading ? "Durdur (Esc)" : "Yenile (Ctrl+R)";
+    reload.title = loading ? "Durdur" : "Yenile (Ctrl+R)";
     reload.setAttribute("aria-label", loading ? "Durdur" : "Yenile");
     loadbar.toggleAttribute("data-on", loading);
     maxBtn.toggleAttribute("data-max", maximized);
     maxBtn.title = maximized ? "Önceki boyutuna getir" : "Ekranı kapla";
     resizer.hidden = maximized;
-    syncAddress(false);
+    syncAddress(switched);
   }
 
   // Address bar.
-  addr.addEventListener("focus", () => addr.select());
+  addr.addEventListener("focus", () => {
+    editing = true;
+    addr.select();
+  });
   addr.addEventListener("input", () => {
-    typed = true;
+    editing = true;
   });
   addr.addEventListener("blur", () => {
-    typed = false;
+    editing = false;
     syncAddress(true);
   });
   addr.addEventListener("keydown", (e) => {
@@ -127,11 +163,13 @@
       e.preventDefault();
       const text = addr.value.trim();
       if (!text) return;
-      typed = false;
+      // The text stays while the field has focus: if Rust refuses it (xb.blocked())
+      // the user can fix it. A started navigation moves focus to the page, and
+      // the resulting blur shows the page's URL.
       send("navigate:" + text);
     } else if (e.key === "Escape") {
       e.preventDefault();
-      typed = false;
+      editing = false;
       syncAddress(true);
       send("focus-content");
     }
@@ -144,7 +182,7 @@
   newTab.addEventListener("click", () => send("new"));
 
   // Window chrome. Empty strip space drags the window; double-click maximizes.
-  for (const el of [tabsEl, $("strip")]) {
+  for (const el of [$("tabs"), $("strip")]) {
     el.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || e.target !== el) return;
       e.preventDefault();
@@ -162,7 +200,6 @@
   maxBtn.addEventListener("click", () => send("max"));
   $("close").addEventListener("click", () => send("quit"));
 
-  window.addEventListener("resize", fitTabs);
   // Middle-click autoscroll and text-selection drags have no place in the strip.
   document.addEventListener("mousedown", (e) => {
     if (e.button === 1) e.preventDefault();
@@ -171,6 +208,7 @@
   window.xb = Object.freeze({
     render,
     focusAddress() {
+      editing = true;
       addr.focus();
       addr.select();
     },

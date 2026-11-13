@@ -77,11 +77,11 @@ const DELAYS: &[u64] = &[
     2500, // 29 check back; Alt+Right
     2500, // 30 check forward; type in address bar + pushState
     800,  // 31 typed text survives; Escape
-    500,  // 32 Escape restores URL; unfocus address
-    500,  // 33 Ctrl+T twice
+    500,  // 32 Escape restores URL; refused navigation with a page update right after
+    500,  // 33 refused text kept; unfocus address; Ctrl+T twice
     600,  // 34 address focused; Ctrl+Shift+Tab / Ctrl+Tab cycle
-    600,  // 35 Ctrl+L
-    500,  // 36 AltGr ignored; close extras; load window.open page
+    600,  // 35 Ctrl+L, then the page changes its URL
+    500,  // 36 selection survives the URL change; AltGr ignored; close extras; load window.open page
     1200, // 37 click: window.open(file:)
     1500, // 38 check blocked; click: window.open(https:)
     3000, // 39 check new tab
@@ -90,8 +90,8 @@ const DELAYS: &[u64] = &[
     1500, // 42 check; open 29 more tabs
     1500, // 43 tab strip at 1200px; shrink window
     2000, // 44 tab strip at 820px (UI needs a moment to see the new width); UI tab click
-    600,  // 45 check switch; middle-click close
-    600,  // 46 check close; close extras; window back to 1200x800
+    1500, // 45 check switch; tab keys, tab strip at the minimum width; keyboard + middle-click close
+    600,  // 46 check closes; close extras; window back to 1200x800
     1200, // 47 check closed down; click UI maximize
     1000, // 48 check maximized; click UI restore
     1000, // 49 check restored; double-click strip
@@ -294,6 +294,19 @@ fn logical_size(app: &App) -> (f64, f64) {
     (s.width, s.height)
 }
 
+/// Narrowest width (logical px) the OS lets the user drag the window to, i.e.
+/// what `with_min_inner_size` set up, read by asking the window procedure.
+fn min_track_width(app: &App) -> f64 {
+    use tao::platform::windows::WindowExtWindows;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{MINMAXINFO, SendMessageW, WM_GETMINMAXINFO};
+    let mut mmi = MINMAXINFO::default();
+    unsafe {
+        SendMessageW(HWND(app.window.hwnd() as _), WM_GETMINMAXINFO, Some(WPARAM(0)), Some(LPARAM(&mut mmi as *mut MINMAXINFO as isize)));
+    }
+    f64::from(mmi.ptMinTrackSize.x) / app.window.scale_factor()
+}
+
 /// Closes every tab but the first.
 fn close_extra_tabs(app: &mut App) {
     let extra: Vec<TabId> = app.tabs.ids().skip(1).collect();
@@ -302,42 +315,86 @@ fn close_extra_tabs(app: &mut App) {
     }
 }
 
-/// Static facts about the UI strip (layout, chrome, theme).
-const UI_STATIC_JS: &str = "(() => { \
-  const q = (id) => document.getElementById(id); \
-  const rc = (id) => q(id).getBoundingClientRect(); \
-  const vis = (id) => { const el = q(id), b = el.getBoundingClientRect(); \
-    if (b.width <= 0 || b.height <= 0 || b.left < 0 || b.right > innerWidth || b.top < 0 || b.bottom > innerHeight) return false; \
-    const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); \
-    return hit === el || el.contains(hit); }; \
-  const nt = rc('new-tab'), res = rc('resizer'); \
-  const drag = document.elementFromPoint(nt.right + 20, 20); \
-  return [`strip_h=${rc('strip').height}`, `doc_h=${document.documentElement.clientHeight}`, \
-    `res_h=${res.height}`, `res_top=${res.top}`, `res_w=${res.width}`, `iw=${innerWidth}`, \
-    `res_hidden=${q('resizer').hidden}`, `res_n=${q('resizer').children.length}`, \
-    `drag_el=${drag && drag.id}`, \
-    `chrome=${['back','forward','reload','address','new-tab','min','max','close'].filter((i) => !vis(i)).join(',') || 'ok'}`, \
-    `dark=${matchMedia('(prefers-color-scheme: dark)').matches}`, \
-    `bg=${getComputedStyle(document.body).backgroundColor}`].join(';'); })()";
+/// Narrowest width the window may have (`with_min_inner_size` in main.rs).
+const MIN_W: f64 = 480.0;
 
-/// Tab strip geometry: overflow, per-tab boxes, new-tab and window buttons.
-const TAB_STRIP_JS: &str = "(() => { \
-  const q = (id) => document.getElementById(id); \
-  const strip = q('tabs'), sr = strip.getBoundingClientRect(); \
+/// Shared JS helpers: `visEl` is true when an element has a box fully inside
+/// the viewport and is the topmost thing at its centre (not clipped, not covered).
+const VIS_JS: &str = "const q = (id) => document.getElementById(id); \
+  const rc = (id) => q(id).getBoundingClientRect(); \
+  const visEl = (el) => { if (!el) return false; const b = el.getBoundingClientRect(); \
+  if (b.width <= 0 || b.height <= 0 || b.left < 0 || b.right > innerWidth || b.top < 0 || b.bottom > innerHeight) return false; \
+  const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); \
+  return hit === el || el.contains(hit); }; \
+  const vis = (id) => visEl(q(id)); \
+  const chromeIds = ['back','forward','reload','address','new-tab','min','max','close']; \
+  const selTab = document.querySelector('[role=tab][aria-selected=true]'); \
+  const nt = rc('new-tab'); \
+  const drag = document.elementFromPoint(nt.right + 20, 20);";
+
+/// Static facts about the UI strip (layout, chrome, theme).
+fn ui_static_js() -> String {
+    format!(
+        "(() => {{ {VIS_JS} const res = rc('resizer'); \
+  return [`strip_h=${{rc('strip').height}}`, `doc_h=${{document.documentElement.clientHeight}}`, \
+  `res_h=${{res.height}}`, `res_top=${{res.top}}`, `res_w=${{res.width}}`, `iw=${{innerWidth}}`, \
+  `res_hidden=${{q('resizer').hidden}}`, `res_n=${{q('resizer').children.length}}`, \
+  `drag_el=${{drag && drag.id}}`, \
+  `chrome=${{chromeIds.filter((i) => !vis(i)).join(',') || 'ok'}}`, \
+  `sel_vis=${{visEl(selTab)}}`, `sel_w=${{selTab ? selTab.getBoundingClientRect().width : 0}}`, \
+  `addr_w=${{rc('address-box').width}}`, \
+  `dark=${{matchMedia('(prefers-color-scheme: dark)').matches}}`, \
+  `bg=${{getComputedStyle(document.body).backgroundColor}}`].join(';'); }})()"
+    )
+}
+
+/// Tab strip geometry: overflow of the tab list, the tab zone and the whole
+/// strip, per-tab boxes, the "+" button, the active tab and the window chrome.
+fn tab_strip_js() -> String {
+    format!(
+        "(() => {{ {VIS_JS} \
+  const strip = q('tablist'), zone = q('tabs'), sr = strip.getBoundingClientRect(), zr = zone.getBoundingClientRect(); \
   const tabs = [...strip.querySelectorAll('[role=tab]')]; \
   const rects = tabs.map((e) => e.getBoundingClientRect()); \
   const inside = (a, b) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5; \
-  const vis = (id) => { const el = q(id), b = el.getBoundingClientRect(); \
-    if (b.width <= 0 || b.height <= 0 || b.left < 0 || b.right > innerWidth) return false; \
-    const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); \
-    return hit === el || el.contains(hit); }; \
   const sel = tabs.filter((e) => e.getAttribute('aria-selected') === 'true'); \
-  return [`n=${tabs.length}`, `cw=${strip.clientWidth}`, `over=${strip.scrollWidth - strip.clientWidth}`, \
-    `minw=${Math.min(...rects.map((r) => r.width)).toFixed(1)}`, \
-    `outside=${rects.filter((r) => !inside(r, sr)).length}`, \
-    `newtab=${vis('new-tab') && inside(q('new-tab').getBoundingClientRect(), sr)}`, \
-    `win=${['min', 'max', 'close'].every(vis)}`, `selected=${sel.length}`, \
-    `sel_id=${sel[0] ? sel[0].dataset.id : 'none'}`, `iw=${innerWidth}`].join(';'); })()";
+  return [`n=${{tabs.length}}`, `cw=${{strip.clientWidth}}`, `over=${{strip.scrollWidth - strip.clientWidth}}`, \
+  `zover=${{zone.scrollWidth - zone.clientWidth}}`, `sover=${{q('strip').scrollWidth - q('strip').clientWidth}}`, \
+  `minw=${{Math.min(...rects.map((r) => r.width)).toFixed(1)}}`, \
+  `outside=${{rects.filter((r) => !inside(r, sr)).length}}`, \
+  `newtab=${{vis('new-tab') && inside(nt, zr)}}`, \
+  `win=${{['min', 'max', 'close'].every(vis)}}`, `selected=${{sel.length}}`, \
+  `sel_id=${{sel[0] ? sel[0].dataset.id : 'none'}}`, `sel_vis=${{visEl(selTab)}}`, \
+  `sel_w=${{selTab ? selTab.getBoundingClientRect().width.toFixed(1) : 0}}`, \
+  `drag_el=${{drag && drag.id}}`, `addr_w=${{rc('address-box').width.toFixed(1)}}`, \
+  `chrome=${{chromeIds.filter((i) => !vis(i)).join(',') || 'ok'}}`, `iw=${{innerWidth}}`].join(';'); }})()"
+    )
+}
+
+/// Roving-tabindex, ARIA structure and key handling of the tab list. Keys are
+/// dispatched on the tab elements themselves, as a keyboard would.
+const TAB_KEYS_JS: &str = "(() => { \
+  const list = document.getElementById('tablist'), nt = document.getElementById('new-tab'); \
+  const tabs = [...list.querySelectorAll('[role=tab]')]; \
+  const sel = tabs.filter((t) => t.getAttribute('aria-selected') === 'true'); \
+  const key = (el, k) => { el.focus(); el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true })); }; \
+  const last = tabs.length - 1; \
+  const o = [`n=${tabs.length}`, `list_role=${list.getAttribute('role')}`, \
+  `tab0=${tabs.filter((t) => t.tabIndex === 0).length}`, \
+  `sel_is_tab0=${sel.length === 1 && sel[0].tabIndex === 0}`, \
+  `others_m1=${tabs.filter((t) => !sel.includes(t)).every((t) => t.tabIndex === -1)}`, \
+  `only_tabs=${[...list.children].every((c) => c.getAttribute('role') === 'tab')}`, \
+  `plus_outside=${!list.contains(nt) && !nt.closest('[role=tablist]')}`, \
+  `close_btns=${[...list.querySelectorAll('button')].every((b) => b.tabIndex === -1 && b.getAttribute('aria-label'))}`, \
+  `named=${tabs.every((t) => t.getAttribute('aria-label'))}`]; \
+  key(tabs[3], 'ArrowRight'); o.push(`right=${document.activeElement === tabs[4]}`); \
+  key(tabs[3], 'ArrowLeft'); o.push(`left=${document.activeElement === tabs[2]}`); \
+  key(tabs[5], 'Home'); o.push(`home=${document.activeElement === tabs[0]}`); \
+  key(tabs[5], 'End'); o.push(`end=${document.activeElement === tabs[last]}`); \
+  key(tabs[last], 'ArrowRight'); o.push(`wrap=${document.activeElement === tabs[0]}`); \
+  const sel2 = tabs.filter((t) => t.getAttribute('aria-selected') === 'true'); \
+  o.push(`sel_kept=${sel2.length === 1 && sel2[0] === sel[0]}`); \
+  return o.join(';'); })()";
 
 /// Tries every inline-code route the CSP must refuse, in whatever document it
 /// runs in. Results are read back by `CSP_READ_JS`.
@@ -552,6 +609,9 @@ pub fn step(app: &mut App, n: u32) {
                  return `tab=${t.hasAttribute('data-loading')};dot=${getComputedStyle(t.querySelector('.dot')).display}`; })()",
                 |r| check("ui-tab-shows-loading-dot", field(&r, "tab") == "true" && field(&r, "dot") == "block", &r),
             );
+            ui_eval(app, "document.getElementById('reload').title", |r| {
+                check("ui-stop-tooltip-promises-no-missing-shortcut", !r.contains("Esc"), &r);
+            });
             ui_js(app, "document.getElementById('reload').click()"); // reload button acts as stop while loading
         }
         18 => {
@@ -585,7 +645,7 @@ pub fn step(app: &mut App, n: u32) {
                 ),
                 None => log("INFO system theme registry value unreadable; using tao's theme"),
             }
-            ui_eval(app, UI_STATIC_JS, move |r| {
+            ui_eval(app, &ui_static_js(), move |r| {
                 log(&format!("INFO ui-static {r}"));
                 let h = crate::app::UI_HEIGHT;
                 check("ui-strip-height-matches-native", num(&r, "strip_h") == h && num(&r, "doc_h") == h, &r);
@@ -723,9 +783,22 @@ pub fn step(app: &mut App, n: u32) {
             ui_eval(app, "document.getElementById('address').value", move |r| {
                 check("escape-restores-address-url", r == url, format!("address={r} want {url}"));
             });
-            ui_js(app, "document.activeElement && document.activeElement.blur()");
+            // A refused navigation (Rust answers with xb.blocked()) must leave the
+            // text for the user to fix, even when the page updates right after.
+            ui_js(
+                app,
+                "(() => { const a = document.getElementById('address'); a.focus(); a.value = 'javascript:refused'; \
+                 a.dispatchEvent(new Event('input', { bubbles: true })); \
+                 a.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()",
+            );
+            page_js(app, "history.pushState({}, '', '/p2b');");
         }
         33 => {
+            check("pushstate-after-refusal-reached-app", active_url(app) == "https://example.org/p2b", active_url(app));
+            ui_eval(app, "`v=${document.getElementById('address').value};f=${document.activeElement.id}`", |r| {
+                check("refused-navigation-keeps-typed-text", field(&r, "v") == "javascript:refused" && field(&r, "f") == "address", &r);
+            });
+            ui_js(app, "document.activeElement && document.activeElement.blur()");
             ui_eval(app, "document.activeElement ? document.activeElement.id : 'none'", |r| {
                 check("ctrl-t-setup-address-unfocused", r != "address", r);
             });
@@ -785,8 +858,28 @@ pub fn step(app: &mut App, n: u32) {
                     );
                 },
             );
+            page_js(app, "history.pushState({}, '', '/p3');");
         }
         36 => {
+            // The page changed its URL (pushState) after Ctrl+L selected the
+            // address: the selection must still be intact and typing replaces it.
+            let url = active_url(app);
+            check("selection-setup-pushstate-reached-app", url.ends_with("/p3"), &url);
+            ui_eval(
+                app,
+                "(() => { const a = document.getElementById('address'); \
+                 const o = `v=${a.value};len=${a.value.length};s=${a.selectionStart};e=${a.selectionEnd};f=${document.activeElement.id}`; \
+                 document.execCommand('insertText', false, 'z'); return `${o};after=${a.value}`; })()",
+                |r| {
+                    let len = num(&r, "len");
+                    check(
+                        "focused-address-not-overwritten-by-url-update",
+                        field(&r, "f") == "address" && len > 0.0 && num(&r, "s") == 0.0 && num(&r, "e") == len && !field(&r, "v").ends_with("/p3"),
+                        &r,
+                    );
+                    check("typing-replaces-selected-address", field(&r, "after") == "z", &r);
+                },
+            );
             // AltGr (= Ctrl+Alt) must never trigger a shortcut. First prove the
             // keys are live: each does map with its proper modifier.
             let live: &[(u32, Mods)] = &[
@@ -917,7 +1010,8 @@ pub fn step(app: &mut App, n: u32) {
         }
         43 => {
             let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
-            ui_eval(app, TAB_STRIP_JS, move |r| {
+            capture(app, "06-30-tabs-1200");
+            ui_eval(app, &tab_strip_js(), move |r| {
                 log(&format!("INFO tab-strip-1200 {r}"));
                 check("many-tabs-ui-lists-every-tab", num(&r, "n") == n as f64 && num(&r, "selected") == 1.0 && field(&r, "sel_id") == active.to_string(), &r);
                 check("many-tabs-no-overflow", num(&r, "over") <= 0.0, &r);
@@ -928,15 +1022,19 @@ pub fn step(app: &mut App, n: u32) {
             app.window.set_inner_size(LogicalSize::new(820.0, 520.0));
         }
         44 => {
-            // Measured, not gated: below the default width 30 tabs do not fit
-            // (a tab cannot shrink under its padding + border, ~14 px), so the
-            // strip overflows and the "+" button is clipped. Reported as a
-            // product limitation; the gated check is at the default width above.
-            ui_eval(app, TAB_STRIP_JS, |r| {
-                let fits = num(&r, "over") <= 0.0 && num(&r, "outside") == 0.0 && field(&r, "newtab") == "true";
-                log(&format!("INFO tab-strip-820 fits={fits} {r}"));
-                // iw proves the resize reached the UI; otherwise the line above measured 1200 px.
+            capture(app, "06-30-tabs-820");
+            ui_eval(app, &tab_strip_js(), |r| {
+                log(&format!("INFO tab-strip-820 {r}"));
+                // iw proves the resize reached the UI; otherwise this measured 1200 px.
                 check("many-tabs-820px-window-buttons-visible", num(&r, "iw") == 820.0 && field(&r, "win") == "true", &r);
+                check(
+                    "many-tabs-820px-no-overflow",
+                    num(&r, "over") <= 0.0 && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "outside") == 0.0,
+                    &r,
+                );
+                check("many-tabs-820px-new-tab-visible", field(&r, "newtab") == "true", &r);
+                check("many-tabs-820px-active-tab-identifiable", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
+                check("many-tabs-820px-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
             });
             let target = app.tabs.ids().nth(4).unwrap();
             remember("click", target as i64);
@@ -946,23 +1044,85 @@ pub fn step(app: &mut App, n: u32) {
                     "document.querySelector('[data-id=\"{target}\"]').dispatchEvent(new MouseEvent('mousedown', {{ button: 0, bubbles: true }}))"
                 ),
             );
+            // The narrowest window.
+            app.window.set_inner_size(LogicalSize::new(MIN_W, 240.0));
         }
         45 => {
             let target = recall("click") as TabId;
             check("ui-tab-click-activates", app.tabs.active() == Some(target), format!("{:?} want {target}", app.tabs.active()));
             check("ui-tab-click-shows-only-that-view", only_active_visible(app), "visibility mismatch");
+            // 30 tabs at the narrowest window.
+            capture(app, "07-30-tabs-min-width");
+            ui_eval(app, &tab_strip_js(), |r| {
+                log(&format!("INFO tab-strip-min {r}"));
+                check("many-tabs-min-width-window-is-minimum", num(&r, "iw") == MIN_W, &r);
+                check(
+                    "many-tabs-min-width-no-overflow",
+                    num(&r, "over") <= 0.0 && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "outside") == 0.0,
+                    &r,
+                );
+                check("many-tabs-min-width-chrome-visible", field(&r, "chrome") == "ok", &r);
+                check("many-tabs-min-width-new-tab-visible", field(&r, "newtab") == "true", &r);
+                check("many-tabs-min-width-active-tab-identifiable", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
+                check("many-tabs-min-width-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+            });
+            ui_eval(app, TAB_KEYS_JS, |r| {
+                log(&format!("INFO tab-keys {r}"));
+                check(
+                    "tabs-aria-structure",
+                    field(&r, "list_role") == "tablist"
+                        && field(&r, "only_tabs") == "true"
+                        && field(&r, "plus_outside") == "true"
+                        && field(&r, "close_btns") == "true"
+                        && field(&r, "named") == "true",
+                    &r,
+                );
+                check(
+                    "tabs-roving-tabindex",
+                    field(&r, "tab0") == "1" && field(&r, "sel_is_tab0") == "true" && field(&r, "others_m1") == "true",
+                    &r,
+                );
+                check(
+                    "tab-arrow-home-end-move-focus-only",
+                    ["right", "left", "home", "end", "wrap", "sel_kept"].iter().all(|k| field(&r, k) == "true"),
+                    &r,
+                );
+            });
+            // Keyboard: Enter on a focused tab activates it, Delete closes one.
+            let (enter, del) = (app.tabs.ids().nth(6).unwrap(), app.tabs.ids().nth(8).unwrap());
+            remember("enter", enter as i64);
+            remember("del", del as i64);
+            let key = |id: TabId, k: &str| {
+                format!(
+                    "(() => {{ const t = document.querySelector('[data-id=\"{id}\"]'); t.focus(); \
+                     t.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{k}', bubbles: true, cancelable: true }})); }})()"
+                )
+            };
             ui_js(
                 app,
                 &format!(
                     "document.querySelector('[data-id=\"{target}\"]').dispatchEvent(new MouseEvent('auxclick', {{ button: 1, bubbles: true }}))"
                 ),
             );
+            ui_js(app, &key(enter, "Enter"));
+            ui_js(app, &key(del, "Delete"));
         }
         46 => {
             let target = recall("click") as TabId;
             check(
                 "middle-click-closes-tab",
-                app.tabs.get(target).is_none() && app.tabs.len() == 29 && app.views.len() == 29,
+                app.tabs.get(target).is_none(),
+                format!("{} tabs {} views", app.tabs.len(), app.views.len()),
+            );
+            check(
+                "keyboard-enter-activates-tab",
+                app.tabs.active() == Some(recall("enter") as TabId),
+                format!("{:?} want {}", app.tabs.active(), recall("enter")),
+            );
+            check("keyboard-delete-closes-tab", app.tabs.get(recall("del") as TabId).is_none(), app.tabs.to_json());
+            check(
+                "tab-closes-settled",
+                app.tabs.len() == 28 && app.views.len() == 28,
                 format!("{} tabs {} views", app.tabs.len(), app.views.len()),
             );
             close_extra_tabs(app);
@@ -974,7 +1134,7 @@ pub fn step(app: &mut App, n: u32) {
                 app.tabs.len() == 1 && app.views.len() == 1 && only_active_visible(app),
                 format!("{} tabs {} views", app.tabs.len(), app.views.len()),
             );
-            ui_eval(app, TAB_STRIP_JS, |r| {
+            ui_eval(app, &tab_strip_js(), |r| {
                 check("ui-tab-strip-follows-closes", num(&r, "n") == 1.0 && num(&r, "selected") == 1.0 && num(&r, "over") <= 0.0, &r);
             });
             let size = app.window.inner_size();
@@ -1039,19 +1199,23 @@ pub fn step(app: &mut App, n: u32) {
         }
         53 => {
             check("window-restores-from-minimize", !app.window.is_minimized(), "still minimized");
-            app.window.set_inner_size(LogicalSize::new(420.0, 240.0));
+            app.window.set_inner_size(LogicalSize::new(MIN_W, 240.0));
         }
         54 => {
             let (w, h) = logical_size(app);
             log(&format!("INFO minimum window {w}x{h}"));
-            check("min-window-size-enforced", w >= 419.0 && h >= 239.0, format!("{w}x{h}"));
-            ui_eval(app, UI_STATIC_JS, |r| {
+            check("min-window-size-enforced", (w - MIN_W).abs() <= 1.0 && h >= 239.0, format!("{w}x{h}"));
+            // set_inner_size is not clamped, so ask the OS what `with_min_inner_size`
+            // configured: the narrowest width a user can drag the window to.
+            let track = min_track_width(app);
+            check("window-min-width-is-configured", (MIN_W..=MIN_W + 40.0).contains(&track), format!("OS minimum track width {track}, want {MIN_W}"));
+            ui_eval(app, &ui_static_js(), |r| {
                 log(&format!("INFO ui-static-min {r}"));
-                // The rest of the chrome (e.g. the "+" button) is measured, not
-                // gated: at the 420 px minimum width it does not fit.
-                let hidden: Vec<&str> = field(&r, "chrome").split(',').collect();
-                let any = ["min", "max", "close"].iter().any(|id| hidden.contains(id));
-                check("min-size-window-buttons-visible", num(&r, "iw") == 420.0 && !any, &r);
+                check("min-size-iw-is-minimum", num(&r, "iw") == MIN_W, &r);
+                check("min-size-chrome-complete", field(&r, "chrome") == "ok", format!("not visible: {}", field(&r, "chrome")));
+                check("min-size-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+                check("min-size-active-tab-visible", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
+                check("min-size-address-box-usable", num(&r, "addr_w") >= 100.0, &r);
             });
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
@@ -1172,7 +1336,7 @@ pub fn step(app: &mut App, n: u32) {
         63 => {
             check("ui-crash-reloads-ui", app.ui_ready && !app.quit && app.fatal.is_none(), format!("ui_ready {} quit {}", app.ui_ready, app.quit));
             let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
-            ui_eval(app, TAB_STRIP_JS, move |r| {
+            ui_eval(app, &tab_strip_js(), move |r| {
                 check("ui-crash-rerenders-tabs", num(&r, "n") == n as f64 && field(&r, "sel_id") == active.to_string(), &r);
             });
             close_extra_tabs(app);
