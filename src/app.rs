@@ -51,6 +51,23 @@ pub enum Failure {
 const BROWSER_DIED: &str = "X-Browser beklenmedik bir hatayla karşılaştı: Microsoft Edge WebView2 \
                             tarayıcı işlemi kapandı.\n\nUygulama kapanacak. Yeniden başlatmanız yeterlidir.";
 
+/// Shown when the UI renderer keeps dying or hanging, so reloading it is futile.
+const UI_FAILED: &str = "X-Browser beklenmedik bir hatayla karşılaştı: arayüz işlemi kısa sürede \
+                         defalarca çöktü veya yanıt vermedi.\n\nUygulama kapanacak. Yeniden başlatmanız yeterlidir.";
+
+/// The UI is reloaded after a renderer failure, but not after this many
+/// failures within `UI_FAILURE_WINDOW`.
+const UI_FAILURE_LIMIT: usize = 3;
+const UI_FAILURE_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Records a UI renderer failure at `now` in `recent` (forgetting ones older
+/// than `UI_FAILURE_WINDOW`). True when this one reaches `UI_FAILURE_LIMIT`.
+fn ui_failed_too_often(recent: &mut Vec<std::time::Instant>, now: std::time::Instant) -> bool {
+    recent.retain(|t| now.saturating_duration_since(*t) < UI_FAILURE_WINDOW);
+    recent.push(now);
+    recent.len() >= UI_FAILURE_LIMIT
+}
+
 // Field order is drop order: every webview goes before the WebView2
 // environment and context, and all of them before the window that hosts them
 // (dropping the window first would destroy the webviews' host windows under wry).
@@ -70,6 +87,8 @@ pub struct App {
     pub title_sets: u32,
     /// Set when the app must quit with an error dialog (after the loop ends).
     pub fatal: Option<&'static str>,
+    /// Recent UI renderer failures (see `ui_failed_too_often`).
+    ui_failures: Vec<std::time::Instant>,
     dirty: bool,
     pub ui_ready: bool,
     /// Tab shown right now (may lag `tabs.active()` until `sync_visibility`).
@@ -108,7 +127,7 @@ impl App {
         let mut tries = 0;
         // (After a crash / hard kill the lock lasts ~30 s; then main() shows
         // an explanatory dialog rather than a blank window.)
-        while tries < 25 && ui.as_ref().is_err_and(native::is_profile_busy) {
+        while tries < 25 && ui.as_ref().is_err_and(|e| native::profile_busy(e).is_some()) {
             tries += 1;
             native::destroy_children(&window);
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -130,6 +149,7 @@ impl App {
             #[cfg(feature = "selftest")]
             title_sets: 0,
             fatal: None,
+            ui_failures: Vec::new(),
             window,
             ui,
             views: Vec::new(),
@@ -198,13 +218,11 @@ impl App {
                 native::harden_content(view)?;
                 native::attach_content_events(view, id, &self.proxy)?;
                 native::attach_accelerators(view, &self.proxy)?;
-                native::guard_host(view)?;
             }
             view.load_url(url)
         };
         if let Err(e) = setup(&view) {
             // No half-wired tab: without its events it would never update.
-            native::release_host(&view);
             drop(view);
             self.tabs.close(id);
             return Err(e);
@@ -227,7 +245,6 @@ impl App {
             // Hide first so the removal never flashes; drop destroys the webview.
             let (_, view) = self.views.remove(i);
             let _ = view.set_visible(false);
-            native::release_host(&view);
             drop(view);
         }
         if self.shown == Some(id) {
@@ -359,8 +376,16 @@ impl App {
                 self.quit = true;
             }
             // The UI has no state of its own: reload it; it sends `ready`
-            // again and gets the current state re-rendered.
+            // again and gets the current state re-rendered. Unless it keeps
+            // failing: then the app gives up instead of reloading forever.
             (_, None) => {
+                if ui_failed_too_often(&mut self.ui_failures, std::time::Instant::now()) {
+                    if self.fatal.is_none() && !self.quit {
+                        self.fatal = Some(UI_FAILED);
+                    }
+                    self.quit = true;
+                    return;
+                }
                 self.ui_ready = false;
                 self.dirty = true;
                 let _ = self.ui.reload();
@@ -530,13 +555,6 @@ impl App {
     }
 }
 
-impl Drop for App {
-    fn drop(&mut self) {
-        // Let the fields' drops (webviews first) destroy their host windows.
-        native::release_all_hosts();
-    }
-}
-
 pub fn ui_rect(size: LogicalSize<f64>) -> Rect {
     Rect {
         position: LogicalPosition::new(0.0, 0.0).into(),
@@ -548,5 +566,38 @@ pub fn content_rect(size: LogicalSize<f64>) -> Rect {
     Rect {
         position: LogicalPosition::new(0.0, UI_HEIGHT).into(),
         size: LogicalSize::new(size.width, (size.height - UI_HEIGHT).max(0.0)).into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn ui_reload_gives_up_on_third_failure_within_ten_seconds() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let mut recent = Vec::new();
+        assert!(!ui_failed_too_often(&mut recent, t0));
+        assert!(!ui_failed_too_often(&mut recent, t0 + s(4)));
+        assert!(ui_failed_too_often(&mut recent, t0 + s(9)));
+    }
+
+    #[test]
+    fn ui_failures_spread_out_keep_reloading() {
+        let t0 = Instant::now();
+        let s = Duration::from_secs;
+        let mut recent = Vec::new();
+        // One failure every 6 s: never three inside a 10 s window.
+        for i in 0..10 {
+            assert!(!ui_failed_too_often(&mut recent, t0 + s(6 * i)), "failure {i}");
+        }
+        // Exactly 10 s apart counts as outside the window.
+        let mut recent = Vec::new();
+        assert!(!ui_failed_too_often(&mut recent, t0));
+        assert!(!ui_failed_too_often(&mut recent, t0 + s(5)));
+        assert!(!ui_failed_too_often(&mut recent, t0 + s(10)));
+        assert!(ui_failed_too_often(&mut recent, t0 + s(11)));
     }
 }

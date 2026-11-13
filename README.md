@@ -47,8 +47,13 @@ Needs network access (example.com, duckduckgo.com).
 
 ```sh
 XB_SELFTEST_DIR=selftest-out cargo run --release --features selftest
-# last line of selftest.log: DONE failures=0
+# last line of selftest.log: DONE failures=0 checks=<n>
 ```
+
+A run passes only with `failures=0`. `n` is the number of PASS lines; if it
+differs from `EXPECTED_CHECKS` in `src/selftest.rs` (a check was skipped, e.g.
+a script callback never came back), an `all-expected-checks-ran` FAIL is
+logged first. Update the constant when adding or removing checks.
 
 ### Startup timing
 

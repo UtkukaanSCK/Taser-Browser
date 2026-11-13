@@ -21,18 +21,28 @@ use tao::window::WindowBuilder;
 fn main() {
     if let Err(e) = run() {
         eprintln!("x-browser: {e}");
-        let message = if native::is_profile_busy(&e) {
+        if !timing::quit_when_ready() {
+            native::fatal(&startup_error_message(&e));
+        }
+        std::process::exit(1);
+    }
+}
+
+/// Startup failure dialog text.
+fn startup_error_message(e: &wry::Error) -> String {
+    match native::profile_busy(e) {
+        Some(native::ProfileBusy::ShuttingDown) => {
             "Önceki X-Browser oturumu henüz tam kapanmadı; profil klasörü hâlâ kullanımda.\n\
              Bu genellikle uygulama zorla kapatıldıktan sonra olur ve yarım dakika içinde geçer.\n\
              Biraz sonra yeniden deneyin."
                 .to_string()
-        } else {
-            format!("X-Browser başlatılamadı.\n\nMicrosoft Edge WebView2 Runtime kurulu olmalıdır.\n\n{e}")
-        };
-        if !timing::quit_when_ready() {
-            native::fatal(&message);
         }
-        std::process::exit(1);
+        Some(native::ProfileBusy::OtherOptions) => {
+            "Başka bir X-Browser sürümü çalışıyor ve aynı profil klasörünü farklı ayarlarla kullanıyor.\n\
+             Onu kapatıp yeniden deneyin."
+                .to_string()
+        }
+        None => format!("X-Browser başlatılamadı.\n\nMicrosoft Edge WebView2 Runtime kurulu olmalıdır.\n\n{e}"),
     }
 }
 
@@ -105,4 +115,27 @@ fn run() -> wry::Result<()> {
             *flow = ControlFlow::Exit;
         }
     });
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::startup_error_message;
+    use windows::core::HRESULT;
+
+    fn webview2_error(code: u32) -> wry::Error {
+        wry::Error::WebView2Error(webview2_com::Error::WindowsError(HRESULT(code as i32).into()))
+    }
+
+    #[test]
+    fn profile_errors_get_their_own_message() {
+        let busy = startup_error_message(&webview2_error(0x8007_00AA));
+        assert!(busy.starts_with("Önceki X-Browser oturumu henüz tam kapanmadı"), "{busy}");
+        let other = startup_error_message(&webview2_error(0x8007_139F));
+        assert!(other.starts_with("Başka bir X-Browser sürümü çalışıyor"), "{other}");
+        assert!(!other.contains("henüz tam kapanmadı") && !other.contains("Runtime"), "{other}");
+        let missing = startup_error_message(&webview2_error(0x8007_0002));
+        assert!(missing.contains("WebView2 Runtime kurulu olmalıdır"), "{missing}");
+        let io = startup_error_message(&wry::Error::Io(std::io::Error::other("x")));
+        assert!(io.contains("WebView2 Runtime kurulu olmalıdır"), "{io}");
+    }
 }

@@ -8,6 +8,15 @@ use wry::WebView;
 
 pub type Proxy = EventLoopProxy<UserEvent>;
 
+/// Why the WebView2 profile folder cannot be opened right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProfileBusy {
+    /// A previous browser process still holds it while shutting down.
+    ShuttingDown,
+    /// A browser process started with other options (another build) runs on it.
+    OtherOptions,
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;
@@ -88,10 +97,13 @@ mod imp {
                         && is_ui_url(&nav_uri(&args)?)
                     {
                         args.SetCancel(true)?;
-                        // The address bar may already show the refused URL.
+                        // The address bar may already show the refused URL,
+                        // and the tab a spinner (NavigationCompleted may never
+                        // come for a navigation cancelled here).
                         if let Some(url) = wv.as_ref().and_then(source) {
                             let _ = p.send_event(UserEvent::Page(tab, PageEvent::Url(url)));
                         }
+                        let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(false)));
                         return Ok(());
                     }
                     let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(true)));
@@ -112,8 +124,8 @@ mod imp {
             )?;
 
             // `window.close()` closes the tab through the app. wry's own
-            // handler (registered first) would DestroyWindow the tab's host
-            // and leave a dead tab; `guard_host` vetoes that.
+            // handler (registered first) has already destroyed the tab's host
+            // window; dropping the view then only fails to destroy it again.
             let p = proxy.clone();
             wv.add_WindowCloseRequested(
                 &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
@@ -225,75 +237,6 @@ mod imp {
         Ok(())
     }
 
-    // --- Content host guard -------------------------------------------------
-    //
-    // wry registers a WindowCloseRequested handler on every webview that calls
-    // DestroyWindow on the webview's host window, and its Drop calls
-    // DestroyWindow on that same handle again. A page calling window.close()
-    // would leave a tab without a window, and closing it later would destroy a
-    // stale handle. A thread-local CBT hook vetoes destroying a guarded host;
-    // the app releases the guard right before it drops the WebView itself.
-
-    use std::cell::RefCell;
-    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, HCBT_DESTROYWND, HHOOK, SetWindowsHookExW, UnhookWindowsHookEx, WH_CBT,
-    };
-
-    thread_local! {
-        static GUARD: RefCell<(Option<HHOOK>, Vec<isize>)> = const { RefCell::new((None, Vec::new())) };
-    }
-
-    unsafe extern "system" fn cbt_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code == HCBT_DESTROYWND as i32 {
-            let guarded = GUARD
-                .try_with(|g| g.try_borrow().is_ok_and(|g| g.1.contains(&(wparam.0 as isize))))
-                .unwrap_or(false);
-            if guarded {
-                return LRESULT(1); // prevent the destruction
-            }
-        }
-        unsafe { CallNextHookEx(None, code, wparam, lparam) }
-    }
-
-    fn host(view: &WebView) -> Option<isize> {
-        let mut h = HWND::default();
-        unsafe { view.controller().ParentWindow(&mut h).ok()? };
-        (!h.is_invalid()).then_some(h.0 as isize)
-    }
-
-    /// Only the app may destroy this view's host window (by dropping the view).
-    pub fn guard_host(view: &WebView) -> windows::core::Result<()> {
-        let Some(h) = host(view) else { return Ok(()) };
-        GUARD.with(|g| {
-            let mut g = g.borrow_mut();
-            if g.0.is_none() {
-                let thread = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
-                g.0 = Some(unsafe { SetWindowsHookExW(WH_CBT, Some(cbt_proc), None, thread)? });
-            }
-            g.1.push(h);
-            Ok(())
-        })
-    }
-
-    /// Call right before dropping a guarded view.
-    pub fn release_host(view: &WebView) {
-        if let Some(h) = host(view) {
-            GUARD.with(|g| g.borrow_mut().1.retain(|x| *x != h));
-        }
-    }
-
-    /// Releases every guard and removes the hook (app shutdown).
-    pub fn release_all_hosts() {
-        GUARD.with(|g| {
-            let mut g = g.borrow_mut();
-            g.1.clear();
-            if let Some(hook) = g.0.take() {
-                let _ = unsafe { UnhookWindowsHookEx(hook) };
-            }
-        });
-    }
-
     pub fn stop(view: &WebView) {
         unsafe {
             let _ = view.webview().Stop();
@@ -315,14 +258,20 @@ mod imp {
         }
     }
 
-    /// The user-data folder is still held by a WebView2 browser process
-    /// that is shutting down: locked (HRESULT_FROM_WIN32(ERROR_BUSY)), or
-    /// running with other browser arguments, e.g. those of an older build
+    /// Whether, and why, another WebView2 browser process holds the
+    /// user-data folder: locked while it shuts down
+    /// (HRESULT_FROM_WIN32(ERROR_BUSY)), or running with other environment
+    /// options, e.g. those of another build
     /// (HRESULT_FROM_WIN32(ERROR_INVALID_STATE)).
-    pub fn is_profile_busy(e: &wry::Error) -> bool {
+    pub fn profile_busy(e: &wry::Error) -> Option<ProfileBusy> {
         const BUSY: windows::core::HRESULT = windows::core::HRESULT(0x8007_00AA_u32 as i32);
         const INVALID_STATE: windows::core::HRESULT = windows::core::HRESULT(0x8007_139F_u32 as i32);
-        matches!(e, wry::Error::WebView2Error(webview2_com::Error::WindowsError(w)) if w.code() == BUSY || w.code() == INVALID_STATE)
+        let wry::Error::WebView2Error(webview2_com::Error::WindowsError(w)) = e else { return None };
+        match w.code() {
+            BUSY => Some(ProfileBusy::ShuttingDown),
+            INVALID_STATE => Some(ProfileBusy::OtherOptions),
+            _ => None,
+        }
     }
 
     /// Destroys every child window of `window`. Used only before the first
@@ -406,17 +355,12 @@ mod imp {
     pub fn attach_process_failed(_: &WebView, _: Option<TabId>, _: &Proxy) -> Result<(), ()> {
         Ok(())
     }
-    pub fn guard_host(_: &WebView) -> Result<(), ()> {
-        Ok(())
-    }
-    pub fn release_host(_: &WebView) {}
-    pub fn release_all_hosts() {}
     pub fn stop(view: &WebView) {
         let _ = view.evaluate_script("window.stop()");
     }
     pub fn raise(_: &WebView) {}
-    pub fn is_profile_busy(_: &wry::Error) -> bool {
-        false
+    pub fn profile_busy(_: &wry::Error) -> Option<ProfileBusy> {
+        None
     }
     pub fn destroy_children(_: &tao::window::Window) {}
     pub fn fatal(_: &str) {}

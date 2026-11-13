@@ -160,9 +160,11 @@ fn split_host_port(authority: &str) -> Option<(&str, Option<u16>)> {
 }
 
 /// Authority of a URL typed with an explicit http(s) scheme: optional
-/// `userinfo@`, then a non-empty host and a valid port.
+/// `userinfo@`, then a non-empty host and a valid port. An empty port
+/// (`http://example.com:`) means the default one, as in WHATWG URLs.
 fn valid_authority(authority: &str) -> bool {
     let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host_port = host_port.strip_suffix(':').unwrap_or(host_port);
     split_host_port(host_port).is_some()
 }
 
@@ -383,6 +385,23 @@ mod tests {
         assert_eq!(resolve_input("http://[::1]:abc"), url("https://duckduckgo.com/?q=http%3A%2F%2F%5B%3A%3A1%5D%3Aabc"));
         assert_eq!(resolve_input("http://[1]/"), url("https://duckduckgo.com/?q=http%3A%2F%2F%5B1%5D%2F"));
         assert_eq!(resolve_input("http://[::1]:8080/a"), url("http://[::1]:8080/a"));
+    }
+
+    #[test]
+    fn empty_port_after_scheme_and_host_is_default_port() {
+        assert_eq!(resolve_input("http://example.com:"), url("http://example.com:"));
+        assert_eq!(resolve_input("https://example.com:/a?b#c"), url("https://example.com:/a?b#c"));
+        assert_eq!(resolve_input("https:example.com:"), url("https://example.com:"));
+        assert_eq!(resolve_input("http://[::1]:/"), url("http://[::1]:/"));
+        assert_eq!(resolve_input("http://user@example.com:"), url("http://user@example.com:"));
+        // Still needs a host, and only one colon may be empty.
+        assert_eq!(resolve_input("http://:"), url("https://duckduckgo.com/?q=http%3A%2F%2F%3A"));
+        assert_eq!(resolve_input("http://user@:/"), url("https://duckduckgo.com/?q=http%3A%2F%2Fuser%40%3A%2F"));
+        assert_eq!(resolve_input("http://example.com::"), url("https://duckduckgo.com/?q=http%3A%2F%2Fexample.com%3A%3A"));
+        // Without a scheme, "example.com:" reads as an unknown scheme, not a
+        // host with a port (a port needs digits): a search, as before.
+        assert_eq!(resolve_input("example.com:"), url("https://duckduckgo.com/?q=example.com%3A"));
+        assert_eq!(resolve_input("localhost:"), url("https://duckduckgo.com/?q=localhost%3A"));
     }
 
     #[test]

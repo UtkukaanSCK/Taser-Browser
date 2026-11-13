@@ -24,6 +24,11 @@ use tao::dpi::LogicalSize;
 use wry::WebViewExtWindows;
 
 static FAILS: AtomicU32 = AtomicU32::new(0);
+static PASSES: AtomicU32 = AtomicU32::new(0);
+
+/// PASS lines of a complete, passing run. Fewer means a check was skipped
+/// (e.g. a script callback that never came). Update it with the checks.
+const EXPECTED_CHECKS: u32 = 172;
 
 fn dir() -> PathBuf {
     std::env::var_os("XB_SELFTEST_DIR").map(PathBuf::from).unwrap_or_else(|| ".".into())
@@ -37,9 +42,8 @@ fn log(line: &str) {
 }
 
 fn check(name: &str, ok: bool, detail: impl std::fmt::Display) {
-    if !ok {
-        FAILS.fetch_add(1, Ordering::Relaxed);
-    }
+    let counter = if ok { &PASSES } else { &FAILS };
+    counter.fetch_add(1, Ordering::Relaxed);
     log(&format!("{} {name}{}", if ok { "PASS" } else { "FAIL" }, if ok { String::new() } else { format!(" -- {detail}") }));
 }
 
@@ -225,19 +229,30 @@ fn press(app: &mut App, key: u32, mods: Mods) -> Option<Shortcut> {
 
 /// Runs `js` in a webview and passes its (string) result to `then` when it
 /// completes. Scripts run in submission order, so a read queued before an
-/// action sees the state from before it.
-fn eval(v: &wry::WebView, js: &str, then: impl Fn(String) + Send + 'static) {
-    let _ = v.evaluate_script_with_callback(js, move |r| then(decode(&r)));
-}
-
-fn ui_eval(app: &App, js: &str, then: impl Fn(String) + Send + 'static) {
-    eval(&app.ui, js, then);
-}
-
-fn page_eval(app: &App, js: &str, then: impl Fn(String) + Send + 'static) {
-    if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
-        eval(v, js, then);
+/// action sees the state from before it. When there is no view, the script
+/// cannot be started or it throws, `then` never runs and check `name` FAILs
+/// instead. (A callback WebView2 never calls is caught by `EXPECTED_CHECKS`.)
+fn eval(v: Option<&wry::WebView>, name: &'static str, js: &str, then: impl Fn(String) + Send + 'static) {
+    let Some(v) = v else { return check(name, false, "no webview to run the script in") };
+    let started = v.evaluate_script_with_callback(js, move |r| {
+        // Every real result is JSON; wry passes "" when the script threw.
+        if r.is_empty() {
+            check(name, false, "script threw");
+        } else {
+            then(decode(&r));
+        }
+    });
+    if let Err(e) = started {
+        check(name, false, format!("script not started: {e}"));
     }
+}
+
+fn ui_eval(app: &App, name: &'static str, js: &str, then: impl Fn(String) + Send + 'static) {
+    eval(Some(&app.ui), name, js, then);
+}
+
+fn page_eval(app: &App, name: &'static str, js: &str, then: impl Fn(String) + Send + 'static) {
+    eval(app.tabs.active().and_then(|id| app.view(id)), name, js, then);
 }
 
 /// Undoes the JSON string encoding of a script result (WebView2 also escapes
@@ -592,24 +607,27 @@ pub fn step(app: &mut App, n: u32) {
             let t = app.tabs.get(app.tabs.active().unwrap()).unwrap();
             check("loading-flag-during-load", t.loading, "not loading");
             capture(app, "05-loading");
-            let _ = app.ui.evaluate_script_with_callback(
+            ui_eval(
+                app,
+                "ui-shows-loading",
                 "JSON.stringify({ reload: document.getElementById('reload').hasAttribute('data-loading'), \
                  bar: document.getElementById('loadbar').hasAttribute('data-on'), \
                  barOpacity: getComputedStyle(document.getElementById('loadbar')).opacity, \
                  stopShown: getComputedStyle(document.querySelector('#reload svg:last-child')).display })",
                 |r| {
                     log(&format!("INFO ui-dom {r}"));
-                    let ok = r.contains(r#"\"reload\":true"#) && r.contains(r#"\"bar\":true"#);
+                    let ok = r.contains(r#""reload":true"#) && r.contains(r#""bar":true"#);
                     check("ui-shows-loading", ok, &r);
                 },
             );
             ui_eval(
                 app,
+                "ui-tab-shows-loading-dot",
                 "(() => { const t = document.querySelector('[role=tab][aria-selected=true]'); \
                  return `tab=${t.hasAttribute('data-loading')};dot=${getComputedStyle(t.querySelector('.dot')).display}`; })()",
                 |r| check("ui-tab-shows-loading-dot", field(&r, "tab") == "true" && field(&r, "dot") == "block", &r),
             );
-            ui_eval(app, "document.getElementById('reload').title", |r| {
+            ui_eval(app, "ui-stop-tooltip-promises-no-missing-shortcut", "document.getElementById('reload').title", |r| {
                 check("ui-stop-tooltip-promises-no-missing-shortcut", !r.contains("Esc"), &r);
             });
             ui_js(app, "document.getElementById('reload').click()"); // reload button acts as stop while loading
@@ -643,9 +661,10 @@ pub fn step(app: &mut App, n: u32) {
                     (app.window.theme() == tao::window::Theme::Dark) == r,
                     format!("tao={:?} registry dark={r}", app.window.theme()),
                 ),
-                None => log("INFO system theme registry value unreadable; using tao's theme"),
+                // Not a skip: the check count must not depend on the machine.
+                None => check("window-theme-matches-system", false, "system theme registry value unreadable"),
             }
-            ui_eval(app, &ui_static_js(), move |r| {
+            ui_eval(app, "ui-strip-height-matches-native", &ui_static_js(), move |r| {
                 log(&format!("INFO ui-static {r}"));
                 let h = crate::app::UI_HEIGHT;
                 check("ui-strip-height-matches-native", num(&r, "strip_h") == h && num(&r, "doc_h") == h, &r);
@@ -671,6 +690,7 @@ pub fn step(app: &mut App, n: u32) {
             let url = active_url(app);
             ui_eval(
                 app,
+                "ui-tab-title-live",
                 "(() => { const t = document.querySelector('[role=tab][aria-selected=true]'); \
                  return `title=${t.querySelector('.title').textContent};addr=${document.getElementById('address').value}`; })()",
                 move |r| {
@@ -679,7 +699,7 @@ pub fn step(app: &mut App, n: u32) {
                 },
             );
             let dark = system_apps_dark().unwrap_or(app.window.theme() == tao::window::Theme::Dark);
-            page_eval(app, "String(matchMedia('(prefers-color-scheme: dark)').matches)", move |r| {
+            page_eval(app, "content-prefers-color-scheme-matches-system", "String(matchMedia('(prefers-color-scheme: dark)').matches)", move |r| {
                 check("content-prefers-color-scheme-matches-system", r == dark.to_string(), format!("page dark={r} system dark={dark}"));
             });
             ui_js(app, CSP_PROBE_JS);
@@ -687,7 +707,7 @@ pub fn step(app: &mut App, n: u32) {
             page_js(app, "window.__m = 1;");
         }
         23 => {
-            ui_eval(app, CSP_READ_JS, |r| {
+            ui_eval(app, "csp-blocks-inline-event-handler", CSP_READ_JS, |r| {
                 log(&format!("INFO csp-ui {r}"));
                 check("csp-blocks-inline-event-handler", field(&r, "attr") == "no", &r);
                 check("csp-blocks-inline-script", field(&r, "script") == "no", &r);
@@ -699,7 +719,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             // Control: the very same probe must succeed where no CSP applies,
             // otherwise "blocked" above would prove nothing.
-            page_eval(app, CSP_READ_JS, |r| {
+            page_eval(app, "csp-probe-runs-in-unrestricted-page", CSP_READ_JS, |r| {
                 log(&format!("INFO csp-page {r}"));
                 check(
                     "csp-probe-runs-in-unrestricted-page",
@@ -707,7 +727,7 @@ pub fn step(app: &mut App, n: u32) {
                     &r,
                 );
             });
-            page_eval(app, "`m=${window.__m};nav=${performance.getEntriesByType('navigation')[0].type}`", |r| {
+            page_eval(app, "reload-setup-marker-and-fresh-navigation", "`m=${window.__m};nav=${performance.getEntriesByType('navigation')[0].type}`", |r| {
                 check("reload-setup-marker-and-fresh-navigation", field(&r, "m") == "1" && field(&r, "nav") == "navigate", &r);
             });
         }
@@ -717,11 +737,12 @@ pub fn step(app: &mut App, n: u32) {
             ui_js(app, "document.getElementById('reload').click()");
         }
         25 => {
-            page_eval(app, "`m=${window.__m};nav=${performance.getEntriesByType('navigation')[0].type}`", |r| {
+            page_eval(app, "reload-button-reloads-page", "`m=${window.__m};nav=${performance.getEntriesByType('navigation')[0].type}`", |r| {
                 check("reload-button-reloads-page", field(&r, "m") == "undefined" && field(&r, "nav") == "reload", &r);
             });
             ui_eval(
                 app,
+                "ui-loading-indicator-clears-after-reload",
                 "`reload=${document.getElementById('reload').hasAttribute('data-loading')};\
                  bar=${document.getElementById('loadbar').hasAttribute('data-on')}`",
                 |r| check("ui-loading-indicator-clears-after-reload", field(&r, "reload") == "false" && field(&r, "bar") == "false", &r),
@@ -734,7 +755,7 @@ pub fn step(app: &mut App, n: u32) {
             check("ctrl-r-maps-to-reload", press(app, vk::R, CTRL) == Some(Shortcut::Reload), "no mapping");
         }
         27 => {
-            page_eval(app, "`m=${window.__m};nav=${performance.getEntriesByType('navigation')[0].type}`", |r| {
+            page_eval(app, "reload-shortcut-reloads-page", "`m=${window.__m};nav=${performance.getEntriesByType('navigation')[0].type}`", |r| {
                 check("reload-shortcut-reloads-page", field(&r, "m") == "undefined" && field(&r, "nav") == "reload", &r);
             });
             type_in_address(app, "https://example.org/");
@@ -744,6 +765,7 @@ pub fn step(app: &mut App, n: u32) {
             check("history-setup-on-example-org", active_url(app).starts_with("https://example.org") && t.can_back, format!("{t:?}"));
             ui_eval(
                 app,
+                "ui-back-button-enabled-fwd-disabled",
                 "`back=${document.getElementById('back').disabled};fwd=${document.getElementById('forward').disabled}`",
                 |r| check("ui-back-button-enabled-fwd-disabled", field(&r, "back") == "false" && field(&r, "fwd") == "true", &r),
             );
@@ -753,6 +775,7 @@ pub fn step(app: &mut App, n: u32) {
             check("alt-left-goes-back", active_url(app).starts_with("https://example.com"), active_url(app));
             ui_eval(
                 app,
+                "ui-forward-button-enabled-after-back",
                 "`back=${document.getElementById('back').disabled};fwd=${document.getElementById('forward').disabled}`",
                 |r| check("ui-forward-button-enabled-after-back", field(&r, "fwd") == "false", &r),
             );
@@ -770,7 +793,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         31 => {
             check("pushstate-url-reached-app", active_url(app) == "https://example.org/p2", active_url(app));
-            ui_eval(app, "document.getElementById('address').value", |r| {
+            ui_eval(app, "typed-address-survives-url-update", "document.getElementById('address').value", |r| {
                 check("typed-address-survives-url-update", r == "typed-text", r);
             });
             ui_js(
@@ -780,7 +803,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         32 => {
             let url = active_url(app);
-            ui_eval(app, "document.getElementById('address').value", move |r| {
+            ui_eval(app, "escape-restores-address-url", "document.getElementById('address').value", move |r| {
                 check("escape-restores-address-url", r == url, format!("address={r} want {url}"));
             });
             // A refused navigation (Rust answers with xb.blocked()) must leave the
@@ -795,11 +818,11 @@ pub fn step(app: &mut App, n: u32) {
         }
         33 => {
             check("pushstate-after-refusal-reached-app", active_url(app) == "https://example.org/p2b", active_url(app));
-            ui_eval(app, "`v=${document.getElementById('address').value};f=${document.activeElement.id}`", |r| {
+            ui_eval(app, "refused-navigation-keeps-typed-text", "`v=${document.getElementById('address').value};f=${document.activeElement.id}`", |r| {
                 check("refused-navigation-keeps-typed-text", field(&r, "v") == "javascript:refused" && field(&r, "f") == "address", &r);
             });
             ui_js(app, "document.activeElement && document.activeElement.blur()");
-            ui_eval(app, "document.activeElement ? document.activeElement.id : 'none'", |r| {
+            ui_eval(app, "ctrl-t-setup-address-unfocused", "document.activeElement ? document.activeElement.id : 'none'", |r| {
                 check("ctrl-t-setup-address-unfocused", r != "address", r);
             });
             remember("t1", app.tabs.active().unwrap() as i64);
@@ -818,7 +841,7 @@ pub fn step(app: &mut App, n: u32) {
             check("ctrl-t-opens-another-tab", app.tabs.len() == 3, app.tabs.len());
         }
         34 => {
-            ui_eval(app, "document.activeElement ? document.activeElement.id : 'none'", |r| {
+            ui_eval(app, "ctrl-t-focuses-address-bar", "document.activeElement ? document.activeElement.id : 'none'", |r| {
                 check("ctrl-t-focuses-address-bar", r == "address", format!("activeElement={r}"));
             });
             // Order is [t1, b1, b2] with b2 active. Three tabs, so previous
@@ -841,12 +864,13 @@ pub fn step(app: &mut App, n: u32) {
         }
         35 => {
             ui_js(app, "document.activeElement && document.activeElement.blur()");
-            ui_eval(app, "document.activeElement ? document.activeElement.id : 'none'", |r| {
+            ui_eval(app, "ctrl-l-setup-address-unfocused", "document.activeElement ? document.activeElement.id : 'none'", |r| {
                 check("ctrl-l-setup-address-unfocused", r != "address", r);
             });
             check("ctrl-l-maps-to-focus-address", press(app, vk::L, CTRL) == Some(Shortcut::FocusAddress), "no mapping");
             ui_eval(
                 app,
+                "ctrl-l-focuses-and-selects-address",
                 "(() => { const a = document.getElementById('address'); \
                  return `id=${document.activeElement.id};len=${a.value.length};s=${a.selectionStart};e=${a.selectionEnd}`; })()",
                 |r| {
@@ -867,6 +891,7 @@ pub fn step(app: &mut App, n: u32) {
             check("selection-setup-pushstate-reached-app", url.ends_with("/p3"), &url);
             ui_eval(
                 app,
+                "focused-address-not-overwritten-by-url-update",
                 "(() => { const a = document.getElementById('address'); \
                  const o = `v=${a.value};len=${a.value.length};s=${a.selectionStart};e=${a.selectionEnd};f=${document.activeElement.id}`; \
                  document.execCommand('insertText', false, 'z'); return `${o};after=${a.value}`; })()",
@@ -925,7 +950,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         37 => {
             remember("len", app.tabs.len() as i64);
-            page_eval(app, "String(document.querySelectorAll('button').length)", |r| {
+            page_eval(app, "window-open-setup-page-loaded", "String(document.querySelectorAll('button').length)", |r| {
                 check("window-open-setup-page-loaded", r == "6", r);
             });
             if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
@@ -935,9 +960,9 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         38 => {
-            if let Some(v) = app.view(recall("t1") as TabId) {
-                eval(v, "String(window.__c)", |r| check("window-open-setup-clicks-reached-page", r == "5", r));
-            }
+            eval(app.view(recall("t1") as TabId), "window-open-setup-clicks-reached-page", "String(window.__c)", |r| {
+                check("window-open-setup-clicks-reached-page", r == "5", r)
+            });
             check(
                 "gesture-window-open-non-web-schemes-blocked",
                 app.tabs.len() as i64 == recall("len"),
@@ -950,9 +975,9 @@ pub fn step(app: &mut App, n: u32) {
         39 => {
             let t1 = recall("t1") as TabId;
             // The new tab is active now; the click counter lives in the opener.
-            if let Some(v) = app.view(t1) {
-                eval(v, "String(window.__c)", |r| check("window-open-setup-last-click-reached-page", r == "6", r));
-            }
+            eval(app.view(t1), "window-open-setup-last-click-reached-page", "String(window.__c)", |r| {
+                check("window-open-setup-last-click-reached-page", r == "6", r)
+            });
             let order: Vec<TabId> = app.tabs.ids().collect();
             check("window-open-with-gesture-opens-tab", app.tabs.len() as i64 == recall("len") + 1, app.tabs.to_json());
             check("window-open-tab-has-requested-url", active_url(app).contains("from=window-open"), active_url(app));
@@ -974,6 +999,7 @@ pub fn step(app: &mut App, n: u32) {
             check("hostile-title-reached-app", active_title(app).starts_with("<img"), active_title(app));
             ui_eval(
                 app,
+                "hostile-title-rendered-as-text-not-html",
                 "(() => { const t = document.querySelector('[role=tab][aria-selected=true] .title'); \
                  return `imgs=${document.querySelectorAll('#tabs img').length};pwn=${typeof window.__pwn};text=${t.textContent}`; })()",
                 |r| {
@@ -990,7 +1016,7 @@ pub fn step(app: &mut App, n: u32) {
             ui_js(app, "window.__w = window.open('https://example.org/'); location.href = 'https://example.com/';");
         }
         42 => {
-            ui_eval(app, "`href=${location.href};xb=${typeof window.xb}`", |r| {
+            ui_eval(app, "ui-cannot-navigate-away", "`href=${location.href};xb=${typeof window.xb}`", |r| {
                 check(
                     "ui-cannot-navigate-away",
                     crate::ui::is_ui_origin(field(&r, "href")) && field(&r, "xb") == "object",
@@ -999,7 +1025,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             // Denied popups return null; an allowed one would be a real window
             // (which is not a tab, so the tab count alone would not notice).
-            ui_eval(app, "String(window.__w)", |r| check("ui-window-open-denied", r == "null", format!("window.open returned {r}")));
+            ui_eval(app, "ui-window-open-denied", "String(window.__w)", |r| check("ui-window-open-denied", r == "null", format!("window.open returned {r}")));
             check("ui-window-open-opens-no-tab", app.tabs.len() as i64 == recall("len"), app.tabs.to_json());
             remember("base", app.tabs.len() as i64);
             for _ in 0..29 {
@@ -1011,7 +1037,7 @@ pub fn step(app: &mut App, n: u32) {
         43 => {
             let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
             capture(app, "06-30-tabs-1200");
-            ui_eval(app, &tab_strip_js(), move |r| {
+            ui_eval(app, "many-tabs-ui-lists-every-tab", &tab_strip_js(), move |r| {
                 log(&format!("INFO tab-strip-1200 {r}"));
                 check("many-tabs-ui-lists-every-tab", num(&r, "n") == n as f64 && num(&r, "selected") == 1.0 && field(&r, "sel_id") == active.to_string(), &r);
                 check("many-tabs-no-overflow", num(&r, "over") <= 0.0, &r);
@@ -1023,7 +1049,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         44 => {
             capture(app, "06-30-tabs-820");
-            ui_eval(app, &tab_strip_js(), |r| {
+            ui_eval(app, "many-tabs-820px-window-buttons-visible", &tab_strip_js(), |r| {
                 log(&format!("INFO tab-strip-820 {r}"));
                 // iw proves the resize reached the UI; otherwise this measured 1200 px.
                 check("many-tabs-820px-window-buttons-visible", num(&r, "iw") == 820.0 && field(&r, "win") == "true", &r);
@@ -1053,7 +1079,7 @@ pub fn step(app: &mut App, n: u32) {
             check("ui-tab-click-shows-only-that-view", only_active_visible(app), "visibility mismatch");
             // 30 tabs at the narrowest window.
             capture(app, "07-30-tabs-min-width");
-            ui_eval(app, &tab_strip_js(), |r| {
+            ui_eval(app, "many-tabs-min-width-window-is-minimum", &tab_strip_js(), |r| {
                 log(&format!("INFO tab-strip-min {r}"));
                 check("many-tabs-min-width-window-is-minimum", num(&r, "iw") == MIN_W, &r);
                 check(
@@ -1066,7 +1092,7 @@ pub fn step(app: &mut App, n: u32) {
                 check("many-tabs-min-width-active-tab-identifiable", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
                 check("many-tabs-min-width-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
             });
-            ui_eval(app, TAB_KEYS_JS, |r| {
+            ui_eval(app, "tabs-aria-structure", TAB_KEYS_JS, |r| {
                 log(&format!("INFO tab-keys {r}"));
                 check(
                     "tabs-aria-structure",
@@ -1134,7 +1160,7 @@ pub fn step(app: &mut App, n: u32) {
                 app.tabs.len() == 1 && app.views.len() == 1 && only_active_visible(app),
                 format!("{} tabs {} views", app.tabs.len(), app.views.len()),
             );
-            ui_eval(app, &tab_strip_js(), |r| {
+            ui_eval(app, "ui-tab-strip-follows-closes", &tab_strip_js(), |r| {
                 check("ui-tab-strip-follows-closes", num(&r, "n") == 1.0 && num(&r, "selected") == 1.0 && num(&r, "over") <= 0.0, &r);
             });
             let size = app.window.inner_size();
@@ -1147,6 +1173,7 @@ pub fn step(app: &mut App, n: u32) {
             check("ui-max-button-maximizes", app.window.is_maximized(), "not maximized");
             ui_eval(
                 app,
+                "ui-max-button-shows-restore-state",
                 "`max=${document.getElementById('max').hasAttribute('data-max')};res_hidden=${document.getElementById('resizer').hidden}`",
                 |r| {
                     check("ui-max-button-shows-restore-state", field(&r, "max") == "true", &r);
@@ -1174,6 +1201,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             ui_eval(
                 app,
+                "ui-max-button-resets-state",
                 "`max=${document.getElementById('max').hasAttribute('data-max')};res_hidden=${document.getElementById('resizer').hidden}`",
                 |r| check("ui-max-button-resets-state", field(&r, "max") == "false" && field(&r, "res_hidden") == "false", &r),
             );
@@ -1209,7 +1237,7 @@ pub fn step(app: &mut App, n: u32) {
             // configured: the narrowest width a user can drag the window to.
             let track = min_track_width(app);
             check("window-min-width-is-configured", (MIN_W..=MIN_W + 40.0).contains(&track), format!("OS minimum track width {track}, want {MIN_W}"));
-            ui_eval(app, &ui_static_js(), |r| {
+            ui_eval(app, "min-size-iw-is-minimum", &ui_static_js(), |r| {
                 log(&format!("INFO ui-static-min {r}"));
                 check("min-size-iw-is-minimum", num(&r, "iw") == MIN_W, &r);
                 check("min-size-chrome-complete", field(&r, "chrome") == "ok", format!("not visible: {}", field(&r, "chrome")));
@@ -1234,7 +1262,7 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         56 => {
-            page_eval(app, "String(window.__ap)", |r| {
+            page_eval(app, "autoplay-without-gesture-refused", "String(window.__ap)", |r| {
                 check("autoplay-without-gesture-refused", r == "NotAllowedError", format!("play() -> {r}"));
             });
             remember("len", app.tabs.len() as i64);
@@ -1288,7 +1316,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         60 => {
             // Refused before it starts: the old page stays (no network error page).
-            page_eval(app, "`href=${location.href};xb=${typeof window.xb};title=${document.title}`", |r| {
+            page_eval(app, "content-cannot-load-ui-origin", "`href=${location.href};xb=${typeof window.xb};title=${document.title}`", |r| {
                 check(
                     "content-cannot-load-ui-origin",
                     !crate::ui::is_ui_url(field(&r, "href")) && field(&r, "xb") == "undefined" && field(&r, "title") == "Autoplay",
@@ -1296,6 +1324,11 @@ pub fn step(app: &mut App, n: u32) {
                 );
             });
             check("address-bar-drops-refused-ui-url", !crate::ui::is_ui_url(&active_url(app)), active_url(app));
+            check(
+                "refused-ui-url-leaves-tab-not-loading",
+                app.tabs.active().and_then(|id| app.tabs.get(id)).is_some_and(|t| !t.loading),
+                app.tabs.to_json(),
+            );
             if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
                 let _ = v.load_html(
                     "<!doctype html><title>Frames</title><iframe id=f src=\"http://xb.ui/index.html\"></iframe><script>\
@@ -1306,6 +1339,7 @@ pub fn step(app: &mut App, n: u32) {
         61 => {
             page_eval(
                 app,
+                "content-script-cannot-navigate-to-ui-host",
                 "`alive=${window.__alive};href=${location.href};frame=${(() => { \
                  try { return document.getElementById('f').contentWindow.location.href; } catch (e) { return 'cross-origin'; } })()}`",
                 |r| {
@@ -1336,7 +1370,7 @@ pub fn step(app: &mut App, n: u32) {
         63 => {
             check("ui-crash-reloads-ui", app.ui_ready && !app.quit && app.fatal.is_none(), format!("ui_ready {} quit {}", app.ui_ready, app.quit));
             let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
-            ui_eval(app, &tab_strip_js(), move |r| {
+            ui_eval(app, "ui-crash-rerenders-tabs", &tab_strip_js(), move |r| {
                 check("ui-crash-rerenders-tabs", num(&r, "n") == n as f64 && field(&r, "sel_id") == active.to_string(), &r);
             });
             close_extra_tabs(app);
@@ -1344,7 +1378,15 @@ pub fn step(app: &mut App, n: u32) {
         64 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
-            log(&format!("DONE failures={}", FAILS.load(Ordering::Relaxed)));
+            let passes = PASSES.load(Ordering::Relaxed);
+            if passes != EXPECTED_CHECKS {
+                check(
+                    "all-expected-checks-ran",
+                    false,
+                    format!("{passes} PASS, want {EXPECTED_CHECKS} (a check failed, never ran, or was added)"),
+                );
+            }
+            log(&format!("DONE failures={} checks={passes}", FAILS.load(Ordering::Relaxed)));
         }
         _ => {}
     }
