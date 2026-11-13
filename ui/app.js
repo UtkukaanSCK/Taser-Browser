@@ -91,12 +91,19 @@
   }
 
   function renderTabs() {
-    const seen = new Set();
+    const seen = new Set(state.tabs.map((t) => t.id));
+    // Closed tabs go first: a stale node left in place would make the ordering
+    // below move every tab after it, and a moved element loses keyboard focus.
+    for (const [id, n] of nodes) {
+      if (!seen.has(id)) {
+        n.el.remove();
+        nodes.delete(id);
+      }
+    }
     // The one tab stop: the active tab (or the first tab while none is active).
-    const stop = state.tabs.some((t) => t.id === state.active) ? state.active : state.tabs[0]?.id;
+    const stop = seen.has(state.active) ? state.active : state.tabs[0]?.id;
     let prev = null;
     for (const t of state.tabs) {
-      seen.add(t.id);
       const n = nodes.get(t.id) || tabNode(t.id);
       const text = label(t);
       if (n.title.textContent !== text) n.title.textContent = text;
@@ -110,12 +117,6 @@
       const want = prev ? prev.nextSibling : tabsEl.firstChild;
       if (want !== n.el) tabsEl.insertBefore(n.el, want);
       prev = n.el;
-    }
-    for (const [id, n] of nodes) {
-      if (!seen.has(id)) {
-        n.el.remove();
-        nodes.delete(id);
-      }
     }
   }
 

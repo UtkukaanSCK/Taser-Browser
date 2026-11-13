@@ -28,7 +28,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 175;
+const EXPECTED_CHECKS: u32 = 176;
 
 fn dir() -> PathBuf {
     std::env::var_os("XB_SELFTEST_DIR").map(PathBuf::from).unwrap_or_else(|| ".".into())
@@ -95,26 +95,27 @@ const DELAYS: &[u64] = &[
     1500, // 43 tab strip at 1200px; shrink window
     2000, // 44 tab strip at 820px (UI needs a moment to see the new width); UI tab click
     1500, // 45 check switch; tab keys, tab strip at the minimum width; keyboard + middle-click close
-    600,  // 46 check closes; Delete key: repeat ignored, inactive tab, active tab
-    600,  // 47 check Delete results; close extras; window back to 1200x800
-    1200, // 48 check closed down; click UI maximize
-    1000, // 49 check maximized; click UI restore
-    1000, // 50 check restored; double-click strip
-    1000, // 51 check maximized; restore
-    1000, // 52 check restored; click UI minimize
-    1000, // 53 check minimized; restore window
-    1000, // 54 check restored; minimum window size
-    1500, // 55 chrome at minimum size; window back to 1200x800
-    700,  // 56 window title of a blank tab; fresh tab plays audio without a gesture
-    1200, // 57 check autoplay refused; window.open (script, gesture)
-    3000, // 58 check popup; window title follows tab switch; page renames itself
-    700,  // 59 check title; popup calls window.close()
-    1000, // 60 check tab closed cleanly; address bar to http://xb.ui/
-    1500, // 61 check refused; page frames / navigates to xb.ui itself
-    1500, // 62 check refused; crash a content renderer
-    1500, // 63 check tab survives; crash the UI renderer
-    3000, // 64 check UI reloaded and re-rendered; close extras
-    900,  // 65 last tab close quits
+    600,  // 46 check closes; Delete key on two inactive tabs (one repeated, one real)
+    600,  // 47 check those; Delete key on the active tab
+    600,  // 48 check it; close extras; window back to 1200x800
+    1200, // 49 check closed down; click UI maximize
+    1000, // 50 check maximized; click UI restore
+    1000, // 51 check restored; double-click strip
+    1000, // 52 check maximized; restore
+    1000, // 53 check restored; click UI minimize
+    1000, // 54 check minimized; restore window
+    1000, // 55 check restored; minimum window size
+    1500, // 56 chrome at minimum size; window back to 1200x800
+    700,  // 57 window title of a blank tab; fresh tab plays audio without a gesture
+    1200, // 58 check autoplay refused; window.open (script, gesture)
+    3000, // 59 check popup; window title follows tab switch; page renames itself
+    700,  // 60 check title; popup calls window.close()
+    1000, // 61 check tab closed cleanly; address bar to http://xb.ui/
+    1500, // 62 check refused; page frames / navigates to xb.ui itself
+    1500, // 63 check refused; crash a content renderer
+    1500, // 64 check tab survives; crash the UI renderer
+    3000, // 65 check UI reloaded and re-rendered; close extras
+    900,  // 66 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -401,7 +402,7 @@ const TAB_KEYS_JS: &str = "(() => { \
   `others_m1=${tabs.filter((t) => !sel.includes(t)).every((t) => t.tabIndex === -1)}`, \
   `only_tabs=${[...list.children].every((c) => c.getAttribute('role') === 'tab')}`, \
   `plus_outside=${!list.contains(nt) && !nt.closest('[role=tablist]')}`, \
-  `close_btns=${[...list.querySelectorAll('button')].every((b) => b.tabIndex === -1 && b.getAttribute('aria-label'))}`, \
+  `close_btns=${[...list.querySelectorAll('button')].every((b) => b.tabIndex === -1 && b.getAttribute('aria-label') && b.getAttribute('aria-hidden') === 'true')}`, \
   `named=${tabs.every((t) => t.getAttribute('aria-label'))}`]; \
   key(tabs[3], 'ArrowRight'); o.push(`right=${document.activeElement === tabs[4]}`); \
   key(tabs[3], 'ArrowLeft'); o.push(`left=${document.activeElement === tabs[2]}`); \
@@ -809,9 +810,14 @@ pub fn step(app: &mut App, n: u32) {
             });
             // A refused navigation (Rust answers with xb.blocked()) must leave the
             // text for the user to fix, even when the page updates right after.
+            // `data-blocked` (set by xb.blocked()) fades after 900 ms, so a latch
+            // records the moment it appears; step 33 reads the latch, not the timer.
             ui_js(
                 app,
                 "(() => { const a = document.getElementById('address'); a.focus(); a.value = 'javascript:refused'; \
+                 const box = document.getElementById('address-box'); window.__blocked = false; \
+                 new MutationObserver(() => { if (box.hasAttribute('data-blocked')) window.__blocked = true; }) \
+                 .observe(box, { attributes: true, attributeFilter: ['data-blocked'] }); \
                  a.dispatchEvent(new Event('input', { bubbles: true })); \
                  a.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); })()",
             );
@@ -819,12 +825,12 @@ pub fn step(app: &mut App, n: u32) {
         }
         33 => {
             check("pushstate-after-refusal-reached-app", active_url(app) == "https://example.org/p2b", active_url(app));
-            // `data-blocked` is set by Rust's xb.blocked() and lasts 900 ms: it proves
-            // Enter reached Rust and was refused, not that Enter did nothing.
+            // The latch proves Enter reached Rust and was refused (xb.blocked()),
+            // not that Enter did nothing.
             ui_eval(
                 app,
                 "refused-navigation-keeps-typed-text",
-                "`v=${document.getElementById('address').value};f=${document.activeElement.id};b=${document.getElementById('address-box').hasAttribute('data-blocked')}`",
+                "`v=${document.getElementById('address').value};f=${document.activeElement.id};b=${window.__blocked}`",
                 |r| {
                     check(
                         "refused-navigation-keeps-typed-text",
@@ -1163,46 +1169,74 @@ pub fn step(app: &mut App, n: u32) {
                 app.tabs.len() == 28 && app.views.len() == 28,
                 format!("{} tabs {} views", app.tabs.len(), app.views.len()),
             );
-            // The Delete key, on three tabs of the settled strip (DOM order is the
-            // tab order, the active tab is the one Enter activated):
+            // The Delete key on two inactive tabs of the settled strip (DOM order is
+            // the tab order):
             //  - `held`: a repeated keydown (key held down) must close nothing;
-            //  - `inactive`: closed, and keyboard focus lands on its next neighbour;
-            //  - the active tab: closed, and the next tab becomes active.
+            //  - `inactive`: closed, and keyboard focus must still be on its next
+            //    neighbour once the new state has rendered (step 47 reads it), with
+            //    no tab element moved: a moved element loses focus.
             // The UI messages are handled before the next step, which checks the state.
             let ids: Vec<TabId> = app.tabs.ids().collect();
-            let active = app.tabs.active().expect("an active tab");
-            let at = ids.iter().position(|&i| i == active).expect("active tab in order");
-            let (held, inactive, inactive_next, next) = (ids[12], ids[1], ids[2], ids[at + 1]);
+            let (Some(&held), Some(&inactive), Some(&inactive_next)) = (ids.get(12), ids.get(1), ids.get(2)) else {
+                return check("keyboard-delete-has-tabs-to-use", false, app.tabs.to_json());
+            };
             remember("del-held", held as i64);
             remember("del-inactive", inactive as i64);
-            remember("del-active", active as i64);
-            remember("del-next", next as i64);
-            ui_eval(
+            ui_js(
                 app,
-                "keyboard-delete-inactive-tab-focuses-neighbour",
                 &format!(
                     "(() => {{ const q = (id) => document.querySelector('[data-id=\"' + id + '\"]'); \
                      const key = (id, repeat) => {{ const t = q(id); t.focus(); \
                      t.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Delete', repeat, bubbles: true, cancelable: true }})); }}; \
+                     window.__nbr = q({inactive_next}); window.__added = 0; \
+                     window.__obs = new MutationObserver((ms) => {{ for (const m of ms) window.__added += m.addedNodes.length; }}); \
+                     window.__obs.observe(document.getElementById('tablist'), {{ childList: true }}); \
                      key({held}, true); \
-                     key({inactive}, false); \
-                     const focus = document.activeElement === q({inactive_next}); \
-                     key({active}, false); \
-                     return 'focus=' + focus; }})()"
+                     key({inactive}, false); }})()"
                 ),
-                |r| check("keyboard-delete-inactive-tab-focuses-neighbour", r == "focus=true", &r),
             );
         }
         47 => {
             let (held, inactive) = (recall("del-held") as TabId, recall("del-inactive") as TabId);
-            let (active, next) = (recall("del-active") as TabId, recall("del-next") as TabId);
             check(
                 "keyboard-delete-repeat-closes-nothing",
                 app.tabs.get(held).is_some() && app.views.iter().any(|(id, _)| *id == held),
                 app.tabs.to_json(),
             );
             check("keyboard-delete-inactive-tab-closes-it", app.tabs.get(inactive).is_none(), app.tabs.to_json());
-            // State only: where the page focus goes is up to the content webview.
+            // Read after the state has rendered. The neighbour keeps focus only if
+            // the render leaves every remaining tab element where it is.
+            ui_eval(
+                app,
+                "keyboard-delete-inactive-tab-keeps-neighbour-focus",
+                "(() => { window.__obs.takeRecords(); window.__obs.disconnect(); \
+                 return 'focus=' + (document.activeElement === window.__nbr && window.__nbr.isConnected) \
+                 + ';added=' + window.__added + ';n=' + document.querySelectorAll('[role=tab]').length; })()",
+                |r| {
+                    check("keyboard-delete-inactive-tab-keeps-neighbour-focus", field(&r, "focus") == "true", &r);
+                    check("closing-a-tab-moves-no-other-tab-element", field(&r, "n") == "27" && field(&r, "added") == "0", &r);
+                },
+            );
+            // The active tab: closed, and the next tab becomes active. Checked on
+            // state only (page focus goes to the content webview), in the next step.
+            let ids: Vec<TabId> = app.tabs.ids().collect();
+            let active = app.tabs.active();
+            let next = active.and_then(|a| ids.iter().position(|&i| i == a)).and_then(|at| ids.get(at + 1)).copied();
+            let (Some(active), Some(next)) = (active, next) else {
+                return check("keyboard-delete-active-has-next-tab", false, app.tabs.to_json());
+            };
+            remember("del-active", active as i64);
+            remember("del-next", next as i64);
+            ui_js(
+                app,
+                &format!(
+                    "(() => {{ const t = document.querySelector('[data-id=\"{active}\"]'); t.focus(); \
+                     t.dispatchEvent(new KeyboardEvent('keydown', {{ key: 'Delete', bubbles: true, cancelable: true }})); }})()"
+                ),
+            );
+        }
+        48 => {
+            let (active, next) = (recall("del-active") as TabId, recall("del-next") as TabId);
             check(
                 "keyboard-delete-active-tab-activates-neighbour",
                 app.tabs.get(active).is_none() && app.tabs.active() == Some(next) && app.tabs.len() == 26,
@@ -1211,7 +1245,7 @@ pub fn step(app: &mut App, n: u32) {
             close_extra_tabs(app);
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
-        48 => {
+        49 => {
             check(
                 "many-tabs-closed-back-down",
                 app.tabs.len() == 1 && app.views.len() == 1 && only_active_visible(app),
@@ -1226,7 +1260,7 @@ pub fn step(app: &mut App, n: u32) {
             check("window-starts-unmaximized", !app.window.is_maximized() && !app.window.is_minimized(), "unexpected window state");
             ui_js(app, "document.getElementById('max').click()");
         }
-        49 => {
+        50 => {
             check("ui-max-button-maximizes", app.window.is_maximized(), "not maximized");
             ui_eval(
                 app,
@@ -1248,7 +1282,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             ui_js(app, "document.getElementById('max').click()");
         }
-        50 => {
+        51 => {
             let size = app.window.inner_size();
             check("ui-max-button-restores", !app.window.is_maximized(), "still maximized");
             check(
@@ -1270,23 +1304,23 @@ pub fn step(app: &mut App, n: u32) {
                  { button: 0, detail: 2, bubbles: true, cancelable: true }))",
             );
         }
-        51 => {
+        52 => {
             check("strip-double-click-maximizes", app.window.is_maximized(), "not maximized");
             ui_js(app, "document.getElementById('max').click()");
         }
-        52 => {
+        53 => {
             check("window-restored-before-minimize", !app.window.is_maximized() && !app.window.is_minimized(), "unexpected window state");
             ui_js(app, "document.getElementById('min').click()");
         }
-        53 => {
+        54 => {
             check("ui-min-button-minimizes", app.window.is_minimized(), "not minimized");
             app.window.set_minimized(false);
         }
-        54 => {
+        55 => {
             check("window-restores-from-minimize", !app.window.is_minimized(), "still minimized");
             app.window.set_inner_size(LogicalSize::new(MIN_W, 240.0));
         }
-        55 => {
+        56 => {
             let (w, h) = logical_size(app);
             log(&format!("INFO minimum window {w}x{h}"));
             // set_inner_size is not clamped, so ask the OS what `with_min_inner_size`
@@ -1303,7 +1337,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
-        56 => {
+        57 => {
             press(app, vk::T, CTRL);
             app.flush();
             check("window-title-blank-tab", app.window.title() == "X-Browser", app.window.title());
@@ -1317,7 +1351,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.load_html(AUTOPLAY_HTML);
             }
         }
-        57 => {
+        58 => {
             page_eval(app, "autoplay-without-gesture-refused", "String(window.__ap)", |r| {
                 check("autoplay-without-gesture-refused", r == "NotAllowedError", format!("play() -> {r}"));
             });
@@ -1326,7 +1360,7 @@ pub fn step(app: &mut App, n: u32) {
             // ExecuteScript counts as a user gesture, so this opens a tab.
             page_js(app, "window.open('https://example.com/?from=close')");
         }
-        58 => {
+        59 => {
             let (ap, popup) = (recall("ap") as TabId, app.tabs.active().unwrap());
             remember("popup", popup as i64);
             check(
@@ -1349,12 +1383,12 @@ pub fn step(app: &mut App, n: u32) {
             check("window-title-set-only-on-change", app.title_sets == sets + 2, format!("{} sets for 2 changes", app.title_sets - sets));
             page_js(app, "document.title = 'Renamed page'");
         }
-        59 => {
+        60 => {
             check("window-title-follows-page-title", app.window.title() == "Renamed page - X-Browser", app.window.title());
             remember("len", app.tabs.len() as i64);
             page_js(app, "window.close()");
         }
-        60 => {
+        61 => {
             let popup = recall("popup") as TabId;
             check(
                 "window-close-removes-tab",
@@ -1370,7 +1404,7 @@ pub fn step(app: &mut App, n: u32) {
             check("window-close-leaves-no-stray-host-window", hosts == app.views.len() + 1, format!("{hosts} child windows, {} views + UI", app.views.len()));
             app.handle(UserEvent::Ui(UiCommand::Navigate("http://xb.ui/index.html".into())));
         }
-        61 => {
+        62 => {
             // Refused before it starts: the old page stays (no network error page).
             page_eval(app, "content-cannot-load-ui-origin", "`href=${location.href};xb=${typeof window.xb};title=${document.title}`", |r| {
                 check(
@@ -1392,7 +1426,7 @@ pub fn step(app: &mut App, n: u32) {
                 );
             }
         }
-        62 => {
+        63 => {
             page_eval(
                 app,
                 "content-script-cannot-navigate-to-ui-host",
@@ -1413,7 +1447,7 @@ pub fn step(app: &mut App, n: u32) {
                 cdp(v, "Page.crash", "{}");
             }
         }
-        63 => {
+        64 => {
             let id = recall("crashed") as TabId;
             check(
                 "content-crash-keeps-tab-not-loading",
@@ -1423,7 +1457,7 @@ pub fn step(app: &mut App, n: u32) {
             check("content-crash-app-healthy", !app.quit && app.fatal.is_none() && app.ui_ready, format!("quit {} ui_ready {}", app.quit, app.ui_ready));
             cdp(&app.ui, "Page.crash", "{}");
         }
-        64 => {
+        65 => {
             check("ui-crash-reloads-ui", app.ui_ready && !app.quit && app.fatal.is_none(), format!("ui_ready {} quit {}", app.ui_ready, app.quit));
             let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
             ui_eval(app, "ui-crash-rerenders-tabs", &tab_strip_js(), move |r| {
@@ -1431,7 +1465,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             close_extra_tabs(app);
         }
-        65 => {
+        66 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
