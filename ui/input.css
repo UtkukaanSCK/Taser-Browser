@@ -1,6 +1,7 @@
 @import "tailwindcss" source(none);
 @source "./index.html";
-@source "./app.js";
+@source "./js/core.js";
+@source "./js/strip.js";
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;

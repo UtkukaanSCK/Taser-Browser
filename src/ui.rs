@@ -13,7 +13,8 @@ const PROTOCOL: &str = "xb";
 pub const START_URL: &str = "xb://ui/index.html";
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
-const APP_JS: &str = include_str!("../ui/app.js");
+const CORE_JS: &str = include_str!("../ui/js/core.js");
+const STRIP_JS: &str = include_str!("../ui/js/strip.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -53,7 +54,8 @@ pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
 fn asset(path: &str) -> Option<(&'static str, &'static str)> {
     Some(match path {
         "/" | "/index.html" => (INDEX_HTML, "text/html; charset=utf-8"),
-        "/app.js" => (APP_JS, "text/javascript; charset=utf-8"),
+        "/js/core.js" => (CORE_JS, "text/javascript; charset=utf-8"),
+        "/js/strip.js" => (STRIP_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })
@@ -167,7 +169,9 @@ mod tests {
         assert_eq!(r.status(), 200);
         assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], CSP);
         assert!(r.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
-        assert_eq!(get("/app.js").status(), 200);
+        assert_eq!(get("/js/core.js").status(), 200);
+        assert_eq!(get("/js/strip.js").status(), 200);
+        assert_eq!(get("/app.js").status(), 404);
         assert_eq!(get("/app.css").status(), 200);
         assert_eq!(get("/../Cargo.toml").status(), 404);
         assert_eq!(get("/secret").status(), 404);

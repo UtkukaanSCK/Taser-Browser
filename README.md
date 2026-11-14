@@ -12,7 +12,7 @@ Windows), built with `wry` + `tao` only.
 ## Build and run
 
 The compiled stylesheet `ui/dist/app.css` is checked in, so a plain build needs
-no Tailwind. After changing `ui/index.html`, `ui/app.js` or `ui/input.css`,
+no Tailwind. After changing `ui/index.html`, `ui/js/*.js` or `ui/input.css`,
 rebuild the CSS first:
 
 ```sh
@@ -76,7 +76,8 @@ done
 | `src/tabs.rs` | pure tab model (order, active tab, placement, JSON) |
 | `src/url.rs` | address bar input → URL or search; scheme blocking |
 | `src/commands.rs` | closed IPC command and shortcut sets |
-| `src/native.rs` | WebView2 events wry does not expose |
+| `src/native/mod.rs` | WebView2 features wry does not expose (keys, crashes, window) |
+| `src/native/content.rs` | content-tab hooks: URL, history, loading, popups |
 | `src/ui.rs` | embedded UI assets, custom protocol, CSP |
 | `src/timing.rs` | opt-in startup milestones (`XB_TIMING`) |
 | `src/selftest.rs` | in-app scenario test (`--features selftest` only) |
