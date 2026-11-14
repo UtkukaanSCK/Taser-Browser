@@ -14,6 +14,13 @@ pub struct Tab {
     pub can_forward: bool,
     /// The tab whose page opened this one (for placing later popups).
     pub opener: Option<TabId>,
+    /// The page's favicon as a validated `data:image/png;base64,` URL.
+    pub favicon: Option<String>,
+    /// `favicon` changed since the UI last got it (see `render_json`).
+    icon_dirty: bool,
+    /// The page is playing audio (shown even while muted).
+    pub audible: bool,
+    pub muted: bool,
 }
 
 #[derive(Debug, Default)]
@@ -31,6 +38,8 @@ pub enum Placement {
     /// Opened from a page: after its opener and the tabs it already opened,
     /// so popups A then B line up as opener, A, B (as in Chrome).
     After(TabId),
+    /// At this index (clamped to the end): a reopened tab goes back where it was.
+    At(usize),
 }
 
 /// Window caption for the active tab: `<title> - X-Browser`, or just the app
@@ -48,7 +57,6 @@ impl Tabs {
         Self { tabs: Vec::new(), active: None, next_id: 1 }
     }
 
-    #[cfg(any(test, feature = "selftest"))]
     pub fn len(&self) -> usize {
         self.tabs.len()
     }
@@ -74,8 +82,14 @@ impl Tabs {
         self.tabs.iter().map(|t| t.id)
     }
 
-    fn index_of(&self, id: TabId) -> Option<usize> {
+    /// Position of tab `id` in the strip.
+    pub fn index_of(&self, id: TabId) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// The tab at strip position `i`.
+    pub fn nth(&self, i: usize) -> Option<TabId> {
+        self.tabs.get(i).map(|t| t.id)
     }
 
     /// Adds a tab and returns its id. Does not activate it.
@@ -91,11 +105,16 @@ impl Tabs {
             can_forward: false,
             opener: match placement {
                 Placement::After(opener) => Some(opener),
-                Placement::End => None,
+                Placement::End | Placement::At(_) => None,
             },
+            favicon: None,
+            icon_dirty: false,
+            audible: false,
+            muted: false,
         };
         let at = match placement {
             Placement::End => self.tabs.len(),
+            Placement::At(i) => i.min(self.tabs.len()),
             Placement::After(opener) => match self.index_of(opener) {
                 // After the last tab this opener already opened, else right after it.
                 Some(i) => {
@@ -133,6 +152,46 @@ impl Tabs {
         true
     }
 
+    /// Moves tab `id` to strip position `to` (the others close up around it).
+    /// False, and nothing changes, for an unknown tab, a position past the
+    /// end, or the position it already has. A moved tab forgets its opener:
+    /// the user placed it, so later popups no longer line up after it.
+    pub fn move_to(&mut self, id: TabId, to: usize) -> bool {
+        let Some(from) = self.index_of(id) else { return false };
+        if to >= self.tabs.len() || to == from {
+            return false;
+        }
+        let mut tab = self.tabs.remove(from);
+        tab.opener = None;
+        self.tabs.insert(to, tab);
+        true
+    }
+
+    /// Sets a tab's favicon. True if it changed (the UI then gets it once).
+    pub fn set_favicon(&mut self, id: TabId, icon: Option<String>) -> bool {
+        let Some(t) = self.get_mut(id) else { return false };
+        if t.favicon == icon {
+            return false;
+        }
+        t.favicon = icon;
+        t.icon_dirty = true;
+        true
+    }
+
+    /// The UI lost its icons (it was reloaded): send every one again.
+    pub fn resend_icons(&mut self) {
+        for t in &mut self.tabs {
+            t.icon_dirty = true;
+        }
+    }
+
+    /// The UI has the icons from the last `render_json`.
+    pub fn icons_sent(&mut self) {
+        for t in &mut self.tabs {
+            t.icon_dirty = false;
+        }
+    }
+
     /// The tab `step` positions away from the active one, wrapping around.
     pub fn cycle(&self, step: isize) -> Option<TabId> {
         let i = self.index_of(self.active?)? as isize;
@@ -140,9 +199,21 @@ impl Tabs {
         Some(self.tabs[(i + step).rem_euclid(n) as usize].id)
     }
 
-    /// Serializes the state the UI needs.
+    /// Serializes the state the UI needs, without favicons (logs, tests).
+    #[cfg(any(test, feature = "selftest"))]
     pub fn to_json(&self) -> String {
-        let mut s = String::with_capacity(64 + self.tabs.len() * 160);
+        self.json(false)
+    }
+
+    /// `to_json` plus `"icon"` (a data URL or null) for each tab whose favicon
+    /// changed since `icons_sent`. Icons are up to ~43 KB each, so they are
+    /// not resent on every render; the UI keeps the last one per tab.
+    pub fn render_json(&self) -> String {
+        self.json(true)
+    }
+
+    fn json(&self, icons: bool) -> String {
+        let mut s = String::with_capacity(64 + self.tabs.len() * 180);
         s.push_str("{\"active\":");
         s.push_str(&self.active.unwrap_or(0).to_string());
         s.push_str(",\"tabs\":[");
@@ -162,6 +233,17 @@ impl Tabs {
             s.push_str(bool_str(t.can_back));
             s.push_str(",\"fwd\":");
             s.push_str(bool_str(t.can_forward));
+            s.push_str(",\"audio\":");
+            s.push_str(bool_str(t.audible));
+            s.push_str(",\"muted\":");
+            s.push_str(bool_str(t.muted));
+            if icons && t.icon_dirty {
+                s.push_str(",\"icon\":");
+                match &t.favicon {
+                    Some(icon) => push_json_str(&mut s, icon),
+                    None => s.push_str("null"),
+                }
+            }
             s.push('}');
         }
         s.push_str("]}");
@@ -332,11 +414,70 @@ mod tests {
         let u = |hex: &str| format!("{}u{hex}", '\\');
         let title = format!(r#"He said \"hi\" \\ {}/script>{}{}"#, u("003c"), u("2028"), u("0001"));
         let expected = format!(
-            r#"{{"active":1,"tabs":[{{"id":1,"url":"","title":"{title}","loading":true,"back":true,"fwd":false}}]}}"#
+            r#"{{"active":1,"tabs":[{{"id":1,"url":"","title":"{title}","loading":true,"back":true,"fwd":false,"audio":false,"muted":false}}]}}"#
         );
         let json = t.to_json();
         assert_eq!(json, expected);
         assert!(!json.contains('<') && !json.contains('\u{2028}'));
         assert_eq!(Tabs::new().to_json(), r#"{"active":0,"tabs":[]}"#);
+    }
+
+    #[test]
+    fn move_to_reorders_and_rejects_bad_targets() {
+        let mut t = Tabs::new();
+        let a = t.add("a", Placement::End);
+        let b = t.add("b", Placement::End);
+        let c = t.add("c", Placement::After(a));
+        assert_eq!(order(&t), vec![a, c, b]);
+        assert!(t.move_to(a, 2));
+        assert_eq!(order(&t), vec![c, b, a], "to the end");
+        assert!(t.move_to(a, 0));
+        assert_eq!(order(&t), vec![a, c, b], "back to the front");
+        assert!(t.move_to(c, 2));
+        assert_eq!(order(&t), vec![a, b, c]);
+        assert_eq!(t.get(c).unwrap().opener, None, "a moved tab forgets its opener");
+        assert!(!t.move_to(b, 1), "already there");
+        assert!(!t.move_to(b, 3), "past the end");
+        assert!(!t.move_to(b, usize::MAX));
+        assert!(!t.move_to(999, 0), "unknown tab");
+        assert_eq!(order(&t), vec![a, b, c], "failed moves change nothing");
+        assert_eq!(t.active(), Some(a), "moving never changes the active tab");
+        assert_eq!((t.index_of(c), t.nth(2), t.nth(3)), (Some(2), Some(c), None));
+    }
+
+    #[test]
+    fn placement_at_clamps_to_the_end() {
+        let mut t = Tabs::new();
+        let a = t.add("a", Placement::End);
+        let b = t.add("b", Placement::At(0));
+        let c = t.add("c", Placement::At(1));
+        let d = t.add("d", Placement::At(99));
+        assert_eq!(order(&t), vec![b, c, a, d]);
+        assert_eq!(t.get(c).unwrap().opener, None);
+    }
+
+    #[test]
+    fn icons_are_sent_once_and_again_after_a_ui_reload() {
+        let mut t = Tabs::new();
+        let a = t.add("a", Placement::End);
+        let b = t.add("b", Placement::End);
+        let icon = "data:image/png;base64,AAAA".to_string();
+        assert!(!t.render_json().contains("icon"), "no icon yet, none sent");
+        assert!(t.set_favicon(a, Some(icon.clone())));
+        assert!(!t.set_favicon(a, Some(icon.clone())), "same icon is no change");
+        assert!(!t.set_favicon(999, None));
+        let j = t.render_json();
+        assert!(j.contains(r#""icon":"data:image/png;base64,AAAA""#), "{j}");
+        assert!(!t.to_json().contains("icon"), "to_json never carries icons");
+        t.icons_sent();
+        assert!(!t.render_json().contains("icon"), "sent once");
+        assert!(t.set_favicon(a, None));
+        assert!(t.render_json().contains(r#""id":1,"#) && t.render_json().contains(r#""icon":null"#), "cleared icon is sent as null");
+        t.icons_sent();
+        t.set_favicon(b, Some(icon.clone()));
+        t.icons_sent();
+        t.resend_icons();
+        let j = t.render_json();
+        assert_eq!(j.matches(r#""icon":"#).count(), 2, "UI reload resends every tab's icon: {j}");
     }
 }

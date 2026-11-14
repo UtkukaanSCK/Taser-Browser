@@ -28,7 +28,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 176;
+const EXPECTED_CHECKS: u32 = 225;
 
 fn dir() -> PathBuf {
     std::env::var_os("XB_SELFTEST_DIR").map(PathBuf::from).unwrap_or_else(|| ".".into())
@@ -97,25 +97,47 @@ const DELAYS: &[u64] = &[
     1500, // 45 check switch; tab keys, tab strip at the minimum width; keyboard + middle-click close
     600,  // 46 check closes; Delete key on two inactive tabs (one repeated, one real)
     600,  // 47 check those; Delete key on the active tab
-    600,  // 48 check it; close extras; window back to 1200x800
-    1200, // 49 check closed down; click UI maximize
-    1000, // 50 check maximized; click UI restore
-    1000, // 51 check restored; double-click strip
-    1000, // 52 check maximized; restore
-    1000, // 53 check restored; click UI minimize
-    1000, // 54 check minimized; restore window
-    1000, // 55 check restored; minimum window size
-    1500, // 56 chrome at minimum size; window back to 1200x800
-    700,  // 57 window title of a blank tab; fresh tab plays audio without a gesture
-    1200, // 58 check autoplay refused; window.open (script, gesture)
-    3000, // 59 check popup; window title follows tab switch; page renames itself
-    700,  // 60 check title; popup calls window.close()
-    1000, // 61 check tab closed cleanly; address bar to http://xb.ui/
-    1500, // 62 check refused; page frames / navigates to xb.ui itself
-    1500, // 63 check refused; crash a content renderer
-    1500, // 64 check tab survives; crash the UI renderer
-    3000, // 65 check UI reloaded and re-rendered; close extras
-    900,  // 66 last tab close quits
+    600,  // 48 check it; scroll the list to its far end (still at the minimum width)
+    600,  // 49 real click on the far tab
+    600,  // 50 check far tab active; wheel over the list
+    800,  // 51 check wheel scroll; close extras; window back to 1200x800
+    1200, // 52 check closed down; click UI maximize
+    1000, // 53 check maximized; click UI restore
+    1000, // 54 check restored; double-click strip
+    1000, // 55 check maximized; restore
+    1000, // 56 check restored; click UI minimize
+    1000, // 57 check minimized; restore window
+    1000, // 58 check restored; minimum window size
+    1500, // 59 chrome at minimum size; window back to 1200x800
+    700,  // 60 window title of a blank tab; fresh tab plays audio without a gesture
+    1200, // 61 check autoplay refused; window.open (script, gesture)
+    3000, // 62 check popup; window title follows tab switch; page renames itself
+    700,  // 63 check title; popup calls window.close()
+    1000, // 64 check tab closed cleanly; address bar to http://xb.ui/
+    1500, // 65 check refused; page frames / navigates to xb.ui itself
+    1500, // 66 check refused; crash a content renderer
+    1500, // 67 check tab survives; crash the UI renderer
+    3000, // 68 check UI reloaded and re-rendered; close extras
+    3500, // 69 four tabs; Ctrl+1/3/8/9; last tab loads a page
+    1500, // 70 check load; page icon; Ctrl+Shift+PgUp/PgDn; UI move message
+    800,  // 71 check moves, favicon in state and UI; measure drag points
+    800,  // 72 real drag of a tab in the UI
+    3500, // 73 check drag; 820 px window, two more tabs (narrow, the icon tab inactive)
+    1200, // 74 measure a drag that starts on the icon tab's icon
+    800,  // 75 real drag from the icon
+    800,  // 76 check it moved; measure a drag to cancel
+    800,  // 77 real drag, held
+    800,  // 78 check it is being dragged; Escape, then the release
+    800,  // 79 check order kept; close the two tabs; the icon tab loads a page without an icon
+    3500, // 80 check its icon is gone; close that tab, Ctrl+Shift+T reopens it
+    900,  // 81 check restored URL; load link page
+    1500, // 82 Ctrl+click a link
+    1500, // 83 check background tab; middle-click a link
+    900,  // 84 check background tab; input window notifies the host; load audio page; mute
+    1500, // 85 check muted; click starts a tone
+    900,  // 86 check audio indicator; 30 tabs at the minimum width
+    1500, // 87 check the playing tab is marked there (inactive, then active); close extras
+    900,  // 88 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -328,7 +350,7 @@ fn min_track_width(app: &App) -> f64 {
 fn close_extra_tabs(app: &mut App) {
     let extra: Vec<TabId> = app.tabs.ids().skip(1).collect();
     for id in extra {
-        app.close_tab(id);
+        app.close_tab(id, true);
     }
 }
 
@@ -365,8 +387,11 @@ fn ui_static_js() -> String {
     )
 }
 
-/// Tab strip geometry: overflow of the tab list, the tab zone and the whole
-/// strip, per-tab boxes, the "+" button, the active tab and the window chrome.
+/// Tab strip geometry: overflow of the tab list (it may scroll), the tab zone
+/// and the whole strip (they may not), per-tab boxes, the scroll arrows, the
+/// "+" button, the active tab and the window chrome. `leak` counts tabs whose
+/// middle lies outside the tab list's box yet can be hit there (the list must
+/// clip what it scrolls; a tab cut by the list's edge is hit only inside it).
 fn tab_strip_js() -> String {
     format!(
         "(() => {{ {VIS_JS} \
@@ -374,11 +399,13 @@ fn tab_strip_js() -> String {
   const tabs = [...strip.querySelectorAll('[role=tab]')]; \
   const rects = tabs.map((e) => e.getBoundingClientRect()); \
   const inside = (a, b) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5; \
+  const hitOut = (e, r) => {{ const x = r.left + r.width / 2; if (x >= sr.left && x <= sr.right) return false;   const h = document.elementFromPoint(x, r.top + r.height / 2); return !!h && e.contains(h); }}; \
   const sel = tabs.filter((e) => e.getAttribute('aria-selected') === 'true'); \
   return [`n=${{tabs.length}}`, `cw=${{strip.clientWidth}}`, `over=${{strip.scrollWidth - strip.clientWidth}}`, \
   `zover=${{zone.scrollWidth - zone.clientWidth}}`, `sover=${{q('strip').scrollWidth - q('strip').clientWidth}}`, \
   `minw=${{Math.min(...rects.map((r) => r.width)).toFixed(1)}}`, \
-  `outside=${{rects.filter((r) => !inside(r, sr)).length}}`, \
+  `leak=${{tabs.filter((e, i) => hitOut(e, rects[i])).length}}`, \
+  `ovf=${{zone.hasAttribute('data-overflow')}}`, `arrows=${{vis('tab-left') && vis('tab-right')}}`, \
   `newtab=${{vis('new-tab') && inside(nt, zr)}}`, \
   `win=${{['min', 'max', 'close'].every(vis)}}`, `selected=${{sel.length}}`, \
   `sel_id=${{sel[0] ? sel[0].dataset.id : 'none'}}`, `sel_vis=${{visEl(selTab)}}`, \
@@ -412,6 +439,64 @@ const TAB_KEYS_JS: &str = "(() => { \
   const sel2 = tabs.filter((t) => t.getAttribute('aria-selected') === 'true'); \
   o.push(`sel_kept=${sel2.length === 1 && sel2[0] === sel[0]}`); \
   return o.join(';'); })()";
+
+/// Mouse reachability of every tab: back to the start with the left arrow,
+/// then right-arrow clicks until the end, noting each tab that was visible and
+/// on top (`visEl`) at some point. Arrows are clicked as a mouse would (a
+/// disabled one ignores the click).
+fn reach_js() -> String {
+    format!(
+        "(() => {{ {VIS_JS} \
+  const list = q('tablist'), L = q('tab-left'), R = q('tab-right'); \
+  const tabs = [...list.querySelectorAll('[role=tab]')]; \
+  const arrows = visEl(L) && visEl(R); \
+  for (let i = 0; i < 100 && !L.disabled; i++) L.click(); \
+  const start = list.scrollLeft === 0; \
+  const seen = new Set(); let clicks = 0; \
+  for (;;) {{ tabs.forEach((t, i) => {{ if (visEl(t)) seen.add(i); }}); if (R.disabled || clicks >= 100) break; R.click(); clicks++; }} \
+  const end = list.scrollLeft >= list.scrollWidth - list.clientWidth - 1; \
+  return `n=${{tabs.length}};seen=${{seen.size}};clicks=${{clicks}};arrows=${{arrows}};start=${{start}};end=${{end}}`; }})()"
+    )
+}
+
+/// Scrolls the tab list to its end with the right arrow and reports where the
+/// last tab and the middle of the list are (for real CDP mouse input).
+const SCROLL_END_JS: &str = "(() => { const list = document.getElementById('tablist'), R = document.getElementById('tab-right'); \
+  for (let i = 0; i < 100 && !R.disabled; i++) R.click(); \
+  const t = list.lastElementChild.getBoundingClientRect(), l = list.getBoundingClientRect(); \
+  return `x=${t.left + t.width / 2};y=${t.top + t.height / 2};wx=${l.left + l.width / 2};wy=${l.top + l.height / 2};id=${list.lastElementChild.dataset.id}`; })()";
+
+/// Screen points carried from a script result to a later step (CDP input).
+static SPOT: std::sync::Mutex<[f64; 4]> = std::sync::Mutex::new([f64::NAN; 4]);
+
+fn set_spot(p: [f64; 4]) {
+    if let Ok(mut s) = SPOT.lock() {
+        *s = p;
+    }
+}
+
+fn spot() -> [f64; 4] {
+    SPOT.lock().map(|s| *s).unwrap_or([f64::NAN; 4])
+}
+
+/// The tab ids in strip order as the UI shows them.
+const UI_ORDER_JS: &str = "[...document.querySelectorAll('#tablist [role=tab]')].map((t) => t.dataset.id).join(',')";
+
+/// A 16x16 PNG icon the favicon test page links to.
+const ICON_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mM4oaHxnxLMMGrAqAGjBgwXAwCpMhcfTAD1DwAAAABJRU5ErkJggg==";
+
+/// Two links filling the top of the page: Ctrl+click goes to the first, a
+/// middle click to the second.
+const LINKS_HTML: &str = "<!doctype html><title>Links</title><body style=\"margin:0\">\
+  <a href=\"https://example.com/?bg=ctrl\" style=\"display:block;height:200px\">ctrl</a>\
+  <a href=\"https://example.com/?bg=middle\" style=\"display:block;height:200px\">middle</a></body>";
+
+/// A page that starts a quiet tone on its first click (a user gesture).
+const AUDIO_HTML: &str = "<!doctype html><title>Audio</title><body style=\"margin:0;height:100vh\"><script>\
+  window.__tone = 'idle'; \
+  document.addEventListener('mousedown', () => { const c = new AudioContext(); const o = c.createOscillator(), g = c.createGain(); \
+  g.gain.value = 0.1; o.connect(g).connect(c.destination); o.start(); window.__ctx = c; \
+  c.resume().then(() => { window.__tone = c.state; }); }, { once: true });</script></body>";
 
 /// Tries every inline-code route the CSP must refuse, in whatever document it
 /// runs in. Results are read back by `CSP_READ_JS`.
@@ -1019,7 +1104,7 @@ pub fn step(app: &mut App, n: u32) {
                 app,
                 "hostile-title-rendered-as-text-not-html",
                 "(() => { const t = document.querySelector('[role=tab][aria-selected=true] .title'); \
-                 return `imgs=${document.querySelectorAll('#tabs img').length};pwn=${typeof window.__pwn};text=${t.textContent}`; })()",
+                 return `imgs=${document.querySelectorAll('#tabs img:not(.icon)').length};pwn=${typeof window.__pwn};text=${t.textContent}`; })()",
                 |r| {
                     check(
                         "hostile-title-rendered-as-text-not-html",
@@ -1058,8 +1143,16 @@ pub fn step(app: &mut App, n: u32) {
             ui_eval(app, "many-tabs-ui-lists-every-tab", &tab_strip_js(), move |r| {
                 log(&format!("INFO tab-strip-1200 {r}"));
                 check("many-tabs-ui-lists-every-tab", num(&r, "n") == n as f64 && num(&r, "selected") == 1.0 && field(&r, "sel_id") == active.to_string(), &r);
-                check("many-tabs-no-overflow", num(&r, "over") <= 0.0, &r);
-                check("many-tabs-all-inside-strip-with-width", num(&r, "minw") > 0.0 && num(&r, "outside") == 0.0, &r);
+                // 30 tabs do not fit at 1200 px either: the list scrolls (with
+                // its arrows), the zone and the strip never overflow.
+                check(
+                    "many-tabs-list-scrolls-strip-does-not",
+                    num(&r, "over") > 0.0 && field(&r, "ovf") == "true" && field(&r, "arrows") == "true"
+                        && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "leak") == 0.0,
+                    &r,
+                );
+                check("many-tabs-keep-minimum-width", num(&r, "minw") >= 36.0, &r);
+                check("many-tabs-active-tab-scrolled-into-view", field(&r, "sel_vis") == "true", &r);
                 check("many-tabs-new-tab-button-visible", field(&r, "newtab") == "true", &r);
                 check("many-tabs-window-buttons-visible", field(&r, "win") == "true", &r);
             });
@@ -1073,7 +1166,8 @@ pub fn step(app: &mut App, n: u32) {
                 check("many-tabs-820px-window-buttons-visible", num(&r, "iw") == 820.0 && field(&r, "win") == "true", &r);
                 check(
                     "many-tabs-820px-no-overflow",
-                    num(&r, "over") <= 0.0 && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "outside") == 0.0,
+                    field(&r, "arrows") == "true" && num(&r, "minw") >= 36.0
+                        && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "leak") == 0.0,
                     &r,
                 );
                 check("many-tabs-820px-new-tab-visible", field(&r, "newtab") == "true", &r);
@@ -1102,13 +1196,24 @@ pub fn step(app: &mut App, n: u32) {
                 check("many-tabs-min-width-window-is-minimum", num(&r, "iw") == MIN_W, &r);
                 check(
                     "many-tabs-min-width-no-overflow",
-                    num(&r, "over") <= 0.0 && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "outside") == 0.0,
+                    field(&r, "arrows") == "true" && num(&r, "minw") >= 36.0
+                        && num(&r, "zover") <= 0.0 && num(&r, "sover") <= 0.0 && num(&r, "leak") == 0.0,
                     &r,
                 );
                 check("many-tabs-min-width-chrome-visible", field(&r, "chrome") == "ok", &r);
                 check("many-tabs-min-width-new-tab-visible", field(&r, "newtab") == "true", &r);
                 check("many-tabs-min-width-active-tab-identifiable", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
                 check("many-tabs-min-width-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+            });
+            // Every one of the 30 tabs can be brought into view with the mouse.
+            ui_eval(app, "many-tabs-min-width-every-tab-reachable", &reach_js(), |r| {
+                log(&format!("INFO tab-reach-min {r}"));
+                check(
+                    "many-tabs-min-width-every-tab-reachable",
+                    num(&r, "n") == 30.0 && num(&r, "seen") == 30.0 && field(&r, "arrows") == "true"
+                        && field(&r, "start") == "true" && field(&r, "end") == "true",
+                    &r,
+                );
             });
             ui_eval(app, "tabs-aria-structure", TAB_KEYS_JS, |r| {
                 log(&format!("INFO tab-keys {r}"));
@@ -1242,10 +1347,40 @@ pub fn step(app: &mut App, n: u32) {
                 app.tabs.get(active).is_none() && app.tabs.active() == Some(next) && app.tabs.len() == 26,
                 format!("active {:?} want {next}: {}", app.tabs.active(), app.tabs.to_json()),
             );
+            // Real (CDP) mouse input on the far end of the strip, still at the
+            // minimum width: scroll there with the arrow, note where it is.
+            set_spot([f64::NAN; 4]);
+            let far = order(app).last().map_or(-1, |&id| id as i64);
+            remember("far", far);
+            ui_eval(app, "strip-scrolled-to-the-end", SCROLL_END_JS, move |r| {
+                log(&format!("INFO strip-end {r}"));
+                set_spot([num(&r, "x"), num(&r, "y"), num(&r, "wx"), num(&r, "wy")]);
+                check("strip-scrolled-to-the-end", field(&r, "id") == far.to_string() && num(&r, "x") < MIN_W, &r);
+            });
+        }
+        49 => {
+            let [x, y, ..] = spot();
+            check("strip-far-tab-has-a-point", x.is_finite() && y.is_finite(), format!("{x},{y}"));
+            cdp_click(&app.ui, x, y);
+        }
+        50 => {
+            let far = recall("far") as TabId;
+            check("strip-real-click-activates-far-tab", app.tabs.active() == Some(far), format!("{:?} want {far}", app.tabs.active()));
+            // Wheel up over the list scrolls it back toward the start.
+            let [_, _, wx, wy] = spot();
+            cdp_wheel(&app.ui, wx, wy, -400.0);
+        }
+        51 => {
+            ui_eval(
+                app,
+                "strip-wheel-scrolls-tabs",
+                "(() => { const l = document.getElementById('tablist'); return `sl=${l.scrollLeft};max=${l.scrollWidth - l.clientWidth}`; })()",
+                |r| check("strip-wheel-scrolls-tabs", num(&r, "max") > 0.0 && num(&r, "sl") < num(&r, "max") - 100.0, &r),
+            );
             close_extra_tabs(app);
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
-        49 => {
+        52 => {
             check(
                 "many-tabs-closed-back-down",
                 app.tabs.len() == 1 && app.views.len() == 1 && only_active_visible(app),
@@ -1260,7 +1395,7 @@ pub fn step(app: &mut App, n: u32) {
             check("window-starts-unmaximized", !app.window.is_maximized() && !app.window.is_minimized(), "unexpected window state");
             ui_js(app, "document.getElementById('max').click()");
         }
-        50 => {
+        53 => {
             check("ui-max-button-maximizes", app.window.is_maximized(), "not maximized");
             ui_eval(
                 app,
@@ -1282,7 +1417,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             ui_js(app, "document.getElementById('max').click()");
         }
-        51 => {
+        54 => {
             let size = app.window.inner_size();
             check("ui-max-button-restores", !app.window.is_maximized(), "still maximized");
             check(
@@ -1304,23 +1439,23 @@ pub fn step(app: &mut App, n: u32) {
                  { button: 0, detail: 2, bubbles: true, cancelable: true }))",
             );
         }
-        52 => {
+        55 => {
             check("strip-double-click-maximizes", app.window.is_maximized(), "not maximized");
             ui_js(app, "document.getElementById('max').click()");
         }
-        53 => {
+        56 => {
             check("window-restored-before-minimize", !app.window.is_maximized() && !app.window.is_minimized(), "unexpected window state");
             ui_js(app, "document.getElementById('min').click()");
         }
-        54 => {
+        57 => {
             check("ui-min-button-minimizes", app.window.is_minimized(), "not minimized");
             app.window.set_minimized(false);
         }
-        55 => {
+        58 => {
             check("window-restores-from-minimize", !app.window.is_minimized(), "still minimized");
             app.window.set_inner_size(LogicalSize::new(MIN_W, 240.0));
         }
-        56 => {
+        59 => {
             let (w, h) = logical_size(app);
             log(&format!("INFO minimum window {w}x{h}"));
             // set_inner_size is not clamped, so ask the OS what `with_min_inner_size`
@@ -1337,7 +1472,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
-        57 => {
+        60 => {
             press(app, vk::T, CTRL);
             app.flush();
             check("window-title-blank-tab", app.window.title() == "X-Browser", app.window.title());
@@ -1351,7 +1486,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.load_html(AUTOPLAY_HTML);
             }
         }
-        58 => {
+        61 => {
             page_eval(app, "autoplay-without-gesture-refused", "String(window.__ap)", |r| {
                 check("autoplay-without-gesture-refused", r == "NotAllowedError", format!("play() -> {r}"));
             });
@@ -1360,7 +1495,7 @@ pub fn step(app: &mut App, n: u32) {
             // ExecuteScript counts as a user gesture, so this opens a tab.
             page_js(app, "window.open('https://example.com/?from=close')");
         }
-        59 => {
+        62 => {
             let (ap, popup) = (recall("ap") as TabId, app.tabs.active().unwrap());
             remember("popup", popup as i64);
             check(
@@ -1383,17 +1518,24 @@ pub fn step(app: &mut App, n: u32) {
             check("window-title-set-only-on-change", app.title_sets == sets + 2, format!("{} sets for 2 changes", app.title_sets - sets));
             page_js(app, "document.title = 'Renamed page'");
         }
-        60 => {
+        63 => {
             check("window-title-follows-page-title", app.window.title() == "Renamed page - X-Browser", app.window.title());
             remember("len", app.tabs.len() as i64);
+            remember("closed", app.closed.len() as i64);
             page_js(app, "window.close()");
         }
-        61 => {
+        64 => {
             let popup = recall("popup") as TabId;
             check(
                 "window-close-removes-tab",
                 app.tabs.get(popup).is_none() && app.view(popup).is_none() && app.tabs.len() as i64 == recall("len") - 1,
                 app.tabs.to_json(),
+            );
+            // Not something Ctrl+Shift+T brings back (only the user's own closes are).
+            check(
+                "page-window-close-not-remembered",
+                app.closed.len() as i64 == recall("closed") && !app.closed.newest().is_some_and(|u| u.contains("from=close")),
+                format!("{} remembered, newest {:?}", app.closed.len(), app.closed.newest()),
             );
             check(
                 "window-close-app-healthy",
@@ -1404,7 +1546,7 @@ pub fn step(app: &mut App, n: u32) {
             check("window-close-leaves-no-stray-host-window", hosts == app.views.len() + 1, format!("{hosts} child windows, {} views + UI", app.views.len()));
             app.handle(UserEvent::Ui(UiCommand::Navigate("http://xb.ui/index.html".into())));
         }
-        62 => {
+        65 => {
             // Refused before it starts: the old page stays (no network error page).
             page_eval(app, "content-cannot-load-ui-origin", "`href=${location.href};xb=${typeof window.xb};title=${document.title}`", |r| {
                 check(
@@ -1422,11 +1564,11 @@ pub fn step(app: &mut App, n: u32) {
             if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
                 let _ = v.load_html(
                     "<!doctype html><title>Frames</title><iframe id=f src=\"http://xb.ui/index.html\"></iframe><script>\
-                     window.__alive = 1; setTimeout(() => { location.href = 'https://xb.ui/app.js'; }, 300);</script>",
+                     window.__alive = 1; setTimeout(() => { location.href = 'https://xb.ui/js/core.js'; }, 300);</script>",
                 );
             }
         }
-        63 => {
+        66 => {
             page_eval(
                 app,
                 "content-script-cannot-navigate-to-ui-host",
@@ -1447,7 +1589,7 @@ pub fn step(app: &mut App, n: u32) {
                 cdp(v, "Page.crash", "{}");
             }
         }
-        64 => {
+        67 => {
             let id = recall("crashed") as TabId;
             check(
                 "content-crash-keeps-tab-not-loading",
@@ -1457,7 +1599,7 @@ pub fn step(app: &mut App, n: u32) {
             check("content-crash-app-healthy", !app.quit && app.fatal.is_none() && app.ui_ready, format!("quit {} ui_ready {}", app.quit, app.ui_ready));
             cdp(&app.ui, "Page.crash", "{}");
         }
-        65 => {
+        68 => {
             check("ui-crash-reloads-ui", app.ui_ready && !app.quit && app.fatal.is_none(), format!("ui_ready {} quit {}", app.ui_ready, app.quit));
             let (n, active) = (app.tabs.len(), app.tabs.active().unwrap_or(0));
             ui_eval(app, "ui-crash-rerenders-tabs", &tab_strip_js(), move |r| {
@@ -1465,7 +1607,412 @@ pub fn step(app: &mut App, n: u32) {
             });
             close_extra_tabs(app);
         }
-        66 => {
+        // Strip features on a fresh row of four tabs [a, b, c, d].
+        69 => {
+            // Earlier steps closed tabs too; start from an empty reopen stack.
+            app.closed = Default::default();
+            for _ in 0..3 {
+                press(app, vk::T, CTRL);
+            }
+            app.flush();
+            let ids = order(app);
+            check("strip-test-tabs-opened", ids.len() == 4 && app.tabs.active() == ids.last().copied(), app.tabs.to_json());
+            let [a, b, c, d] = ids[..] else { return };
+            for (k, id) in [("sa", a), ("sb", b), ("sc", c), ("sd", d)] {
+                remember(k, id as i64);
+            }
+            // d gets a web page (for the icon and for Ctrl+Shift+T).
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?reopen=1".into())));
+            let mut jump = |key: u32| {
+                press(app, key, CTRL);
+                app.tabs.active()
+            };
+            let (one, three, eight, nine) = (jump(0x31), jump(0x33), jump(0x38), jump(0x39));
+            let got = format!("{one:?} {three:?} {eight:?} {nine:?} for [{a}, {b}, {c}, {d}]");
+            check("ctrl-1-selects-first-tab", one == Some(a), &got);
+            check("ctrl-3-selects-third-tab", three == Some(c), &got);
+            check("ctrl-8-past-the-last-tab-does-nothing", eight == Some(c), &got);
+            check("ctrl-9-selects-last-tab", nine == Some(d), &got);
+        }
+        70 => {
+            let [a, b, c, d] = ["sa", "sb", "sc", "sd"].map(|k| recall(k) as TabId);
+            check("strip-test-page-loaded", tab_url(app, d).contains("reopen=1") && app.tabs.active() == Some(d), tab_url(app, d));
+            page_js(
+                app,
+                &format!(
+                    "(() => {{ const l = document.createElement('link'); l.rel = 'icon'; l.href = '{ICON_PNG}'; document.head.appendChild(l); }})()"
+                ),
+            );
+            press(app, vk::PRIOR, CTRL_SHIFT);
+            let moved_left = order(app);
+            press(app, vk::NEXT, CTRL_SHIFT);
+            // Already the last tab: nothing.
+            press(app, vk::NEXT, CTRL_SHIFT);
+            let moved_back = order(app);
+            check("ctrl-shift-pgup-moves-tab-left", moved_left == [a, b, d, c], format!("{moved_left:?}"));
+            check(
+                "ctrl-shift-pgdn-moves-tab-right-up-to-the-end",
+                moved_back == [a, b, c, d] && app.tabs.active() == Some(d),
+                format!("{moved_back:?} active {:?}", app.tabs.active()),
+            );
+            // A drop in the UI arrives as a `move` message on the UI's own IPC channel.
+            ui_js(app, &format!("window.ipc.postMessage('move:{a}:3')"));
+        }
+        71 => {
+            let [a, b, c, d] = ["sa", "sb", "sc", "sd"].map(|k| recall(k) as TabId);
+            let ids = order(app);
+            check("ui-move-command-reorders", ids == [b, c, d, a], format!("{ids:?}"));
+            let want = ids_csv(&ids);
+            ui_eval(app, "ui-strip-follows-reorder", UI_ORDER_JS, move |r| {
+                check("ui-strip-follows-reorder", r == want, format!("{r} want {want}"));
+            });
+            let icon = app.tabs.get(d).and_then(|t| t.favicon.clone()).unwrap_or_default();
+            check(
+                "favicon-reaches-tab-as-png-data-url",
+                icon.starts_with("data:image/png;base64,iVBORw0KGgo"),
+                icon.chars().take(60).collect::<String>(),
+            );
+            let icons: Vec<String> = ids
+                .iter()
+                .map(|&id| {
+                    let f = app.tabs.get(id).and_then(|t| t.favicon.clone()).unwrap_or_default();
+                    format!("{id}:{}:{}", f.len(), f.chars().skip(22).take(40).collect::<String>())
+                })
+                .collect();
+            check(
+                "favicon-only-on-its-tab",
+                [a, b, c].iter().all(|&id| app.tabs.get(id).is_some_and(|t| t.favicon.is_none())),
+                icons.join(" "),
+            );
+            ui_eval(
+                app,
+                "favicon-shown-in-ui",
+                &format!(
+                    "(() => {{ const t = (id) => document.querySelector('[data-id=\"' + id + '\"]'); \
+                     const i = t({d}).querySelector('img.icon'); \
+                     return [`src=${{i.getAttribute('src').startsWith('data:image/png;base64,')}}`, \
+                     `shown=${{i.getBoundingClientRect().width === 16 && i.naturalWidth > 0}}`, \
+                     `others=${{[{a}, {b}, {c}].every((id) => !t(id).hasAttribute('data-icon') && !t(id).querySelector('img.icon').hasAttribute('src'))}}`].join(';'); }})()"
+                ),
+                |r| check("favicon-shown-in-ui", ["src", "shown", "others"].iter().all(|k| field(&r, k) == "true"), &r),
+            );
+            // Where b (first) and a (last) are, for a real drag of b past a.
+            set_spot([f64::NAN; 4]);
+            ui_eval(
+                app,
+                "drag-points-measured",
+                &format!(
+                    "(() => {{ const r = (id) => document.querySelector('[data-id=\"' + id + '\"]').getBoundingClientRect(); \
+                     const b = r({b}), a = r({a}); return `x0=${{b.left + b.width / 2}};y=${{b.top + b.height / 2}};x1=${{a.right - 4}}`; }})()"
+                ),
+                |r| {
+                    set_spot([num(&r, "x0"), num(&r, "y"), num(&r, "x1"), 0.0]);
+                    check("drag-points-measured", num(&r, "x1") > num(&r, "x0"), &r);
+                },
+            );
+        }
+        72 => {
+            let [x0, y, x1, _] = spot();
+            if x0.is_finite() && y.is_finite() && x1.is_finite() {
+                cdp_drag(&app.ui, x0, x1, y);
+            }
+        }
+        73 => {
+            let [a, b, c, d] = ["sa", "sb", "sc", "sd"].map(|k| recall(k) as TabId);
+            let ids = order(app);
+            check("ui-drag-moves-tab", ids == [c, d, a, b], format!("{ids:?}"));
+            // Narrow tabs, d inactive (two new blank tabs, the last one
+            // active): a drag that starts on d's page icon.
+            app.window.set_inner_size(LogicalSize::new(820.0, 520.0));
+            for key in ["se", "sf"] {
+                app.handle(UserEvent::Ui(UiCommand::NewTab));
+                remember(key, app.tabs.active().map_or(-1, |id| id as i64));
+            }
+            app.flush();
+        }
+        74 => {
+            let [b, d] = ["sb", "sd"].map(|k| recall(k) as TabId);
+            check("drag-on-icon-tab-inactive", app.tabs.active() != Some(d) && app.tabs.len() == 6, app.tabs.to_json());
+            set_spot([f64::NAN; 4]);
+            ui_eval(
+                app,
+                "drag-on-icon-points-measured",
+                &format!(
+                    "(() => {{ const t = (id) => document.querySelector('[data-id=\"' + id + '\"]'); \
+                     const d = t({d}), i = d.querySelector('img.icon').getBoundingClientRect(), b = t({b}).getBoundingClientRect(); \
+                     const x = i.left + i.width / 2, y = i.top + i.height / 2, l = document.getElementById('tablist'); \
+                     return [`x0=${{x}}`, `y=${{y}}`, `x1=${{b.right - 4}}`, `w=${{d.getBoundingClientRect().width}}`, `iw=${{i.width}}`, \
+                     `sel=${{d.getAttribute('aria-selected')}}`, `icon=${{d.hasAttribute('data-icon')}}`, \
+                     `on_icon=${{d.querySelector('.fav').contains(document.elementFromPoint(x, y))}}`, \
+                     `fits=${{l.scrollWidth <= l.clientWidth}}`,                      `guard=${{(() => {{ const img = d.querySelector('img.icon'); return img.draggable === false && getComputedStyle(img).pointerEvents === 'none'                      && getComputedStyle(d).getPropertyValue('-webkit-user-drag') === 'none'; }})()}}`].join(';'); }})()"
+                ),
+                |r| {
+                    set_spot([num(&r, "x0"), num(&r, "y"), num(&r, "x1"), 0.0]);
+                    // Narrow (no title, icon only), inactive, the press point on its icon.
+                    check(
+                        "drag-on-icon-points-measured",
+                        num(&r, "w") < 52.0 && num(&r, "iw") == 16.0 && field(&r, "sel") == "false" && field(&r, "icon") == "true"
+                            && field(&r, "on_icon") == "true" && field(&r, "fits") == "true" && num(&r, "x1") > num(&r, "x0"),
+                        &r,
+                    );
+                    // CDP input never starts a native drag, so the drag below passes
+                    // without these guards too; they are checked directly.
+                    check("tab-icon-never-starts-native-drag", field(&r, "guard") == "true", &r);
+                },
+            );
+        }
+        75 => {
+            let [x0, y, x1, _] = spot();
+            if x0.is_finite() && y.is_finite() && x1.is_finite() {
+                cdp_drag(&app.ui, x0, x1, y);
+            }
+        }
+        76 => {
+            let [a, b, c, d, e, f] = ["sa", "sb", "sc", "sd", "se", "sf"].map(|k| recall(k) as TabId);
+            let ids = order(app);
+            check("ui-drag-from-page-icon-moves-tab", ids == [c, a, b, d, e, f], format!("{ids:?}"));
+            // Next: a drag of a to the far left, cancelled with Escape.
+            set_spot([f64::NAN; 4]);
+            ui_eval(
+                app,
+                "escape-drag-points-measured",
+                &format!(
+                    "(() => {{ const r = (id) => document.querySelector('[data-id=\"' + id + '\"]').getBoundingClientRect(); \
+                     const a = r({a}), c = r({c}); return `x0=${{a.left + a.width / 2}};y=${{a.top + a.height / 2}};x1=${{c.left + 4}}`; }})()"
+                ),
+                |r| {
+                    set_spot([num(&r, "x0"), num(&r, "y"), num(&r, "x1"), 0.0]);
+                    check("escape-drag-points-measured", num(&r, "x1") < num(&r, "x0"), &r);
+                },
+            );
+        }
+        77 => {
+            let [x0, y, x1, _] = spot();
+            if x0.is_finite() && y.is_finite() && x1.is_finite() {
+                cdp_drag_hold(&app.ui, x0, x1, y);
+            }
+        }
+        78 => {
+            // Still held: the tab is being dragged and already shown first.
+            let [a, c] = ["sa", "sc"].map(|k| recall(k) as TabId);
+            let want = format!("{a},{c},");
+            ui_eval(
+                app,
+                "escape-test-drag-in-progress",
+                &format!("`order=${{{UI_ORDER_JS}}};dragging=${{document.querySelectorAll('[data-dragging]').length}}`"),
+                move |r| check("escape-test-drag-in-progress", field(&r, "order").starts_with(&want) && field(&r, "dragging") == "1", &r),
+            );
+            let [_, y, x1, _] = spot();
+            if y.is_finite() && x1.is_finite() {
+                cdp_escape_release(&app.ui, x1, y);
+            }
+        }
+        79 => {
+            let [a, b, c, d, e, f] = ["sa", "sb", "sc", "sd", "se", "sf"].map(|k| recall(k) as TabId);
+            let ids = order(app);
+            let want = ids_csv(&[c, a, b, d, e, f]);
+            check("escape-cancels-drag", ids == [c, a, b, d, e, f], format!("{ids:?}"));
+            ui_eval(
+                app,
+                "escape-restores-ui-order",
+                &format!("`order=${{{UI_ORDER_JS}}};dragging=${{document.querySelectorAll('[data-dragging]').length}}`"),
+                move |r| check("escape-restores-ui-order", field(&r, "order") == want && field(&r, "dragging") == "0", &r),
+            );
+            for id in [e, f] {
+                app.close_tab(id, true);
+            }
+            app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
+            // d's next document declares no icon: the previous one must go.
+            if let Some(v) = app.view(d) {
+                let _ = v.load_url("https://example.com/?reopen=1&icon=none");
+            }
+        }
+        80 => {
+            let d = recall("sd") as TabId;
+            check(
+                "favicon-dropped-by-next-page",
+                tab_url(app, d).contains("icon=none") && app.tabs.get(d).is_some_and(|t| t.favicon.is_none()),
+                format!("{} icon {:?}", tab_url(app, d), app.tabs.get(d).and_then(|t| t.favicon.as_ref()).map(|f| f.len())),
+            );
+            ui_eval(
+                app,
+                "ui-drops-favicon-with-the-page",
+                &format!(
+                    "(() => {{ const t = document.querySelector('[data-id=\"{d}\"]'); \
+                     return `attr=${{t.hasAttribute('data-icon')}};src=${{t.querySelector('img.icon').hasAttribute('src')}}`; }})()"
+                ),
+                |r| check("ui-drops-favicon-with-the-page", field(&r, "attr") == "false" && field(&r, "src") == "false", &r),
+            );
+            // Ctrl+Shift+T: close d (a web page) and bring it back in its place.
+            app.activate(d);
+            let at = app.tabs.index_of(d);
+            press(app, vk::W, CTRL);
+            check("closed-tab-remembered", app.tabs.get(d).is_none() && app.closed.len() == 1, app.tabs.to_json());
+            press(app, vk::T, CTRL_SHIFT);
+            let back = app.tabs.active();
+            check(
+                "ctrl-shift-t-reopens-in-place",
+                back.is_some_and(|id| id != d) && back.and_then(|id| app.tabs.index_of(id)) == at && app.tabs.len() == 4 && app.closed.len() == 0,
+                format!("active {back:?} at {:?} want {at:?}: {}", back.and_then(|id| app.tabs.index_of(id)), app.tabs.to_json()),
+            );
+            remember("reopened", back.map_or(-1, |id| id as i64));
+            press(app, vk::T, CTRL_SHIFT);
+            check("ctrl-shift-t-with-nothing-closed-does-nothing", app.tabs.len() == 4 && app.tabs.active() == back, app.tabs.to_json());
+        }
+        81 => {
+            let back = recall("reopened") as TabId;
+            check("ctrl-shift-t-tab-is-active", app.tabs.active() == Some(back), format!("{:?} want {back}", app.tabs.active()));
+            page_eval(app, "ctrl-shift-t-restores-url", "location.href", |r| {
+                check("ctrl-shift-t-restores-url", r.starts_with("https://example.com/") && r.contains("reopen=1"), &r);
+            });
+            remember("opener", back as i64);
+            if let Some(v) = app.view(back) {
+                let _ = v.load_html(LINKS_HTML);
+            }
+        }
+        82 => {
+            remember("len", app.tabs.len() as i64);
+            // Ctrl held (as the new-window handler reads it) and a Ctrl+click.
+            set_ctrl_state(true);
+            if let Some(v) = app.view(recall("opener") as TabId) {
+                cdp_click_with(v, 100.0, 100.0, "left", 2);
+            }
+        }
+        83 => {
+            set_ctrl_state(false);
+            let opener = recall("opener") as TabId;
+            let bg: Vec<TabId> = order(app).into_iter().filter(|&id| tab_url(app, id).contains("bg=ctrl")).collect();
+            check(
+                "ctrl-click-opens-background-tab",
+                app.tabs.len() as i64 == recall("len") + 1 && bg.len() == 1 && app.tabs.active() == Some(opener),
+                format!("active {:?} opener {opener}: {}", app.tabs.active(), app.tabs.to_json()),
+            );
+            check("background-tab-stays-hidden", only_active_visible(app), "visibility mismatch");
+            // Middle click. CDP input goes straight to the renderer, so the host
+            // window hears of no press: it is told (the WM_PARENTNOTIFY a real
+            // press causes) and must have recorded it. A real middle press is on
+            // the manual checklist.
+            let recorded = app.view(opener).and_then(|v| crate::native::simulate_press(v, true));
+            check("simulated-middle-press-recorded-by-host", recorded == Some(true), format!("{recorded:?}"));
+            if let Some(v) = app.view(opener) {
+                cdp_click_with(v, 100.0, 300.0, "middle", 0);
+            }
+        }
+        84 => {
+            let opener = recall("opener") as TabId;
+            let mid: Vec<TabId> = order(app).into_iter().filter(|&id| tab_url(app, id).contains("bg=middle")).collect();
+            check(
+                "middle-click-opens-background-tab",
+                app.tabs.len() as i64 == recall("len") + 2 && mid.len() == 1 && app.tabs.active() == Some(opener),
+                format!("active {:?} opener {opener}: {}", app.tabs.active(), app.tabs.to_json()),
+            );
+            // The audio test runs on the opener alone (a full-width tab).
+            for id in order(app) {
+                if id != opener {
+                    app.close_tab(id, true);
+                }
+            }
+            if let Some(v) = app.view(opener) {
+                // Whether Chromium's windows under the host would tell it about
+                // real presses: WS_EX_NOPARENTNOTIFY on the window under the
+                // pointer, or on one between it and the host, would not.
+                let probe = crate::native::parent_notify_probe(v);
+                let detail = probe.iter().map(|(c, own, path)| format!("{c}:{}{}", u8::from(*own), u8::from(*path))).collect::<Vec<_>>().join(" ");
+                log(&format!("INFO parent-notify {detail}"));
+                // Chromium's input window, and every window between it and the host,
+                // must let presses through (a compositor helper window may opt out).
+                let input: Vec<_> = probe.iter().filter(|(c, _, _)| c == "Chrome_RenderWidgetHostHWND").collect();
+                check("page-input-window-notifies-host-of-presses", !input.is_empty() && input.iter().all(|(_, _, path)| !path), &detail);
+                let _ = v.load_html(AUDIO_HTML);
+            }
+            // Mute first (the tab's sound button), so the test tone is never heard.
+            ui_js(app, &format!("document.querySelector('[data-id=\"{opener}\"] .audio').click()"));
+        }
+        85 => {
+            let opener = recall("opener") as TabId;
+            let native_muted = app.view(opener).is_some_and(is_muted);
+            check(
+                "sound-button-mutes-tab",
+                app.tabs.get(opener).is_some_and(|t| t.muted) && native_muted,
+                format!("native {native_muted}: {}", app.tabs.to_json()),
+            );
+            if let Some(v) = app.view(opener) {
+                cdp_click(v, 100.0, 100.0);
+            }
+        }
+        86 => {
+            let opener = recall("opener") as TabId;
+            page_eval(app, "audio-test-tone-state", "String(window.__tone)", |r| log(&format!("INFO tone {r}")));
+            check(
+                "audio-indicator-follows-playback",
+                app.tabs.get(opener).is_some_and(|t| t.audible && t.muted),
+                app.tabs.to_json(),
+            );
+            ui_eval(
+                app,
+                "ui-shows-muted-sound-button",
+                &format!(
+                    "(() => {{ const t = document.querySelector('[data-id=\"{opener}\"]'), b = t.querySelector('.audio'), \
+                     m = getComputedStyle(t.querySelector('.tab-body'), '::after'); \
+                     return `audio=${{t.hasAttribute('data-audio')}};muted=${{t.hasAttribute('data-muted')}};w=${{b.getBoundingClientRect().width}};\
+                     tw=${{t.getBoundingClientRect().width}};content=${{m.content}};mw=${{parseFloat(m.width) || 0}};label=${{b.getAttribute('aria-label')}}`; }})()"
+                ),
+                |r| {
+                    check(
+                        "ui-shows-muted-sound-button",
+                        field(&r, "audio") == "true" && field(&r, "muted") == "true" && num(&r, "w") > 0.0 && field(&r, "label") == "Sesi aç",
+                        &r,
+                    );
+                    // One sound marker: with the button shown, no corner dot. (`content:
+                    // none` = not generated; its declared width is reported regardless.)
+                    check(
+                        "wide-tab-shows-no-audio-dot",
+                        num(&r, "tw") >= 76.0 && num(&r, "w") > 0.0 && field(&r, "content") == "none",
+                        &r,
+                    );
+                },
+            );
+            // The narrowest strip: 30 tabs at the minimum width, the sound button
+            // hidden on every tab. The playing tab must still be marked.
+            app.window.set_inner_size(LogicalSize::new(MIN_W, 240.0));
+            for _ in 0..29 {
+                app.handle(UserEvent::Ui(UiCommand::NewTab));
+            }
+            app.flush();
+        }
+        87 => {
+            let opener = recall("opener") as TabId;
+            let inactive = app.tabs.active() != Some(opener) && app.tabs.len() == 30;
+            check("narrow-audio-test-setup", inactive && app.tabs.get(opener).is_some_and(|t| t.audible), app.tabs.to_json());
+            let js = format!(
+                "(() => {{ const t = document.querySelector('[data-id=\"{opener}\"]'), m = getComputedStyle(t.querySelector('.tab-body'), '::after'); \
+                 return [`w=${{t.getBoundingClientRect().width}}`, `sel=${{t.getAttribute('aria-selected')}}`, \
+                 `speaker=${{getComputedStyle(t.querySelector('.audio')).display}}`, `content=${{m.content}}`, `display=${{m.display}}`, \
+                 `mw=${{parseFloat(m.width)}}`, `mh=${{parseFloat(m.height)}}`, `bg=${{m.backgroundColor}}`, \
+                 `title=${{t.title}}`, `label=${{t.getAttribute('aria-label')}}`].join(';'); }})()"
+            );
+            // Marked: the dot is generated, shown and sized, and the name says so.
+            let marked = |r: &str| {
+                num(r, "w") < 52.0 && field(r, "speaker") == "none" && field(r, "content") != "none" && field(r, "display") != "none"
+                    && num(r, "mw") >= 4.0 && num(r, "mh") >= 4.0 && !field(r, "bg").contains("rgba(0, 0, 0, 0)")
+                    && field(r, "title").contains("(ses çalıyor") && field(r, "label").contains("(ses çalıyor")
+            };
+            ui_eval(app, "narrow-inactive-tab-shows-audio-mark", &js, move |r| {
+                log(&format!("INFO narrow-audio-inactive {r}"));
+                check("narrow-inactive-tab-shows-audio-mark", marked(&r) && field(&r, "sel") == "false", &r);
+            });
+            // The active tab at this width shows only its close button.
+            app.activate(opener);
+            app.flush();
+            ui_eval(app, "narrow-active-tab-shows-audio-mark", &js, move |r| {
+                log(&format!("INFO narrow-audio-active {r}"));
+                check("narrow-active-tab-shows-audio-mark", marked(&r) && field(&r, "sel") == "true", &r);
+            });
+            page_js(app, "window.__ctx && window.__ctx.close()");
+            close_extra_tabs(app);
+            app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
+        }
+        88 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -1495,10 +2042,93 @@ fn cdp(v: &wry::WebView, method: &str, params: &str) {
 }
 
 fn cdp_click(v: &wry::WebView, x: f64, y: f64) {
+    cdp_click_with(v, x, y, "left", 0);
+}
+
+/// A CDP click with `button` ("left", "middle") and CDP `modifiers` (2 = Ctrl).
+fn cdp_click_with(v: &wry::WebView, x: f64, y: f64, button: &str, modifiers: u32) {
     for kind in ["mousePressed", "mouseReleased"] {
-        let params = format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"left","clickCount":1}}"#);
+        let params = format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"{button}","clickCount":1,"modifiers":{modifiers}}}"#);
         cdp(v, "Input.dispatchMouseEvent", &params);
     }
+}
+
+/// A left-button drag from (x0, y) to (x1, y) in a few moves.
+fn cdp_drag(v: &wry::WebView, x0: f64, x1: f64, y: f64) {
+    let ev = |kind: &str, x: f64, buttons: u32| {
+        let params = format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"left","buttons":{buttons},"clickCount":1}}"#);
+        cdp(v, "Input.dispatchMouseEvent", &params);
+    };
+    ev("mousePressed", x0, 1);
+    for i in 1..=6 {
+        ev("mouseMoved", x0 + (x1 - x0) * f64::from(i) / 6.0, 1);
+    }
+    ev("mouseReleased", x1, 0);
+}
+
+/// The first half of `cdp_drag`: pressed and moved, not released.
+fn cdp_drag_hold(v: &wry::WebView, x0: f64, x1: f64, y: f64) {
+    let ev = |kind: &str, x: f64| {
+        let params = format!(r#"{{"type":"{kind}","x":{x},"y":{y},"button":"left","buttons":1,"clickCount":1}}"#);
+        cdp(v, "Input.dispatchMouseEvent", &params);
+    };
+    ev("mousePressed", x0);
+    for i in 1..=6 {
+        ev("mouseMoved", x0 + (x1 - x0) * f64::from(i) / 6.0);
+    }
+}
+
+/// Escape, then the release that ends a `cdp_drag_hold`.
+fn cdp_escape_release(v: &wry::WebView, x: f64, y: f64) {
+    for kind in ["rawKeyDown", "keyUp"] {
+        let params = format!(r#"{{"type":"{kind}","key":"Escape","code":"Escape","windowsVirtualKeyCode":27,"nativeVirtualKeyCode":27}}"#);
+        cdp(v, "Input.dispatchKeyEvent", &params);
+    }
+    let params = format!(r#"{{"type":"mouseReleased","x":{x},"y":{y},"button":"left","buttons":0,"clickCount":1}}"#);
+    cdp(v, "Input.dispatchMouseEvent", &params);
+}
+
+fn cdp_wheel(v: &wry::WebView, x: f64, y: f64, dy: f64) {
+    let params = format!(r#"{{"type":"mouseWheel","x":{x},"y":{y},"deltaX":0,"deltaY":{dy}}}"#);
+    cdp(v, "Input.dispatchMouseEvent", &params);
+}
+
+/// Sets or clears the Ctrl key in this thread's keyboard state, which is what
+/// `GetKeyState` in the new-window handler reads (no input is sent anywhere).
+fn set_ctrl_state(down: bool) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, SetKeyboardState, VK_CONTROL, VK_LCONTROL};
+    let mut keys = [0u8; 256];
+    unsafe {
+        if GetKeyboardState(&mut keys).is_err() {
+            return;
+        }
+        for k in [VK_CONTROL, VK_LCONTROL] {
+            keys[usize::from(k.0)] = if down { 0x80 } else { 0 };
+        }
+        let _ = SetKeyboardState(&keys);
+    }
+}
+
+/// WebView2's own mute state for this view (ICoreWebView2_8::IsMuted).
+fn is_muted(v: &wry::WebView) -> bool {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+    use windows::core::Interface;
+    use wry::WebViewExtWindows;
+    let Ok(wv) = v.webview().cast::<ICoreWebView2_8>() else { return false };
+    let mut muted = windows::core::BOOL(0);
+    unsafe { wv.IsMuted(&mut muted).is_ok() && muted.as_bool() }
+}
+
+fn tab_url(app: &App, id: TabId) -> String {
+    app.tabs.get(id).map(|t| t.url.clone()).unwrap_or_default()
+}
+
+fn order(app: &App) -> Vec<TabId> {
+    app.tabs.ids().collect()
+}
+
+fn ids_csv(ids: &[TabId]) -> String {
+    ids.iter().map(ToString::to_string).collect::<Vec<_>>().join(",")
 }
 
 /// Direct child windows of the main window (wry's host per webview).

@@ -3,7 +3,22 @@
 
 use super::Proxy;
 use crate::tabs::TabId;
+use std::time::{Duration, Instant};
 use wry::WebView;
+
+/// A middle press this recent before a new-window request counts as the
+/// middle click that asked for it. Chromium opens a middle-clicked link on
+/// button *up*, so the button state itself is already gone by then.
+pub const MIDDLE_CLICK_WINDOW: Duration = Duration::from_secs(2);
+
+/// Whether a page's (user-initiated) new-window request opens as a
+/// background tab: Ctrl+click or middle click, as in Chrome; adding Shift
+/// opens it in front. `last_press` is the last mouse button pressed over the
+/// page (`true` = middle) and when.
+pub fn opens_in_background(ctrl: bool, shift: bool, last_press: Option<(bool, Instant)>, now: Instant) -> bool {
+    let middle = matches!(last_press, Some((true, at)) if now.saturating_duration_since(at) < MIDDLE_CLICK_WINDOW);
+    !shift && (ctrl || middle)
+}
 
 #[cfg(windows)]
 mod imp {
@@ -11,11 +26,135 @@ mod imp {
     use crate::app::{PageEvent, UserEvent};
     use crate::native::attach_process_failed;
     use crate::ui::is_ui_url;
-    use crate::url::is_web_url;
+    use crate::url::is_tab_url;
+    use std::cell::Cell;
+    use std::rc::Rc;
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use webview2_com::*;
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyState, VK_CONTROL, VK_SHIFT};
+    use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_NCDESTROY, WM_PARENTNOTIFY, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
+    };
     use windows::core::{BOOL, PWSTR};
     use wry::WebViewExtWindows;
+
+    /// The last mouse button pressed over the page (`true` = middle), and when.
+    type LastPress = Cell<Option<(bool, Instant)>>;
+
+    const PRESS_SUBCLASS_ID: usize = 0x5842_5052; // "XBPR"
+
+    /// wry's per-webview host window; the page's own windows are its children.
+    fn host(view: &WebView) -> Option<HWND> {
+        let mut hwnd = HWND::default();
+        unsafe { view.controller().ParentWindow(&mut hwnd).ok()? };
+        (!hwnd.is_invalid()).then_some(hwnd)
+    }
+
+    /// Button presses on a child window reach every ancestor as
+    /// WM_PARENTNOTIFY (the page's windows live in the WebView2 browser
+    /// process; the message still arrives here). Only which button and when
+    /// is kept, nothing about the page.
+    unsafe extern "system" fn press_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        id: usize,
+        data: usize,
+    ) -> LRESULT {
+        unsafe {
+            let last = &*(data as *const LastPress);
+            match msg {
+                WM_PARENTNOTIFY => match (wparam.0 & 0xFFFF) as u32 {
+                    WM_MBUTTONDOWN => last.set(Some((true, Instant::now()))),
+                    WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_XBUTTONDOWN => last.set(Some((false, Instant::now()))),
+                    _ => {}
+                },
+                WM_NCDESTROY => {
+                    let _ = RemoveWindowSubclass(hwnd, Some(press_proc), id);
+                    drop(Rc::from_raw(data as *const LastPress));
+                }
+                _ => {}
+            }
+            DefSubclassProc(hwnd, msg, wparam, lparam)
+        }
+    }
+
+    /// Starts recording button presses over the tab's page. Without it (no
+    /// host window) middle-clicked links simply open in front.
+    fn watch_presses(view: &WebView) -> Rc<LastPress> {
+        let last = Rc::new(LastPress::new(None));
+        if let Some(hwnd) = host(view) {
+            let data = Rc::into_raw(last.clone());
+            if !unsafe { SetWindowSubclass(hwnd, Some(press_proc), PRESS_SUBCLASS_ID, data as usize) }.as_bool() {
+                drop(unsafe { Rc::from_raw(data) });
+            }
+            #[cfg(feature = "selftest")]
+            WATCHED.with_borrow_mut(|w| {
+                w.retain(|(_, l)| l.strong_count() > 0);
+                w.push((hwnd.0 as isize, Rc::downgrade(&last)));
+            });
+        }
+        last
+    }
+
+    /// Self-test only. Sends the host window the WM_PARENTNOTIFY a real press
+    /// over the page would cause (CDP input reaches the renderer directly and
+    /// causes none), then reads back what the press subclass recorded:
+    /// Some(middle) when it recorded a press within the last second.
+    #[cfg(feature = "selftest")]
+    pub fn simulate_press(view: &WebView, middle: bool) -> Option<bool> {
+        use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
+        let hwnd = host(view)?;
+        let button = if middle { WM_MBUTTONDOWN } else { WM_LBUTTONDOWN };
+        unsafe { SendMessageW(hwnd, WM_PARENTNOTIFY, Some(WPARAM(button as usize)), Some(LPARAM(0))) };
+        let last = WATCHED.with_borrow(|w| w.iter().find(|(h, _)| *h == hwnd.0 as isize).and_then(|(_, l)| l.upgrade()))?;
+        last.get().filter(|(_, at)| at.elapsed() < Duration::from_secs(1)).map(|(m, _)| m)
+    }
+
+    // Self-test only: the press record of each watched host window, to read
+    // back what the subclass recorded (GetWindowSubclass is not exported by
+    // name from the comctl32 the app loads).
+    #[cfg(feature = "selftest")]
+    thread_local! {
+        static WATCHED: std::cell::RefCell<Vec<(isize, std::rc::Weak<LastPress>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Self-test only: every window under the host, as (class name, has
+    /// WS_EX_NOPARENTNOTIFY itself, it or an ancestor below the host has it).
+    /// A real press over a window whose path is quiet never reaches the host.
+    #[cfg(feature = "selftest")]
+    pub fn parent_notify_probe(view: &WebView) -> Vec<(String, bool, bool)> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumChildWindows, GWL_EXSTYLE, GetClassNameW, GetParent, GetWindowLongPtrW, WS_EX_NOPARENTNOTIFY,
+        };
+        let quiet = |hwnd: HWND| unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32 & WS_EX_NOPARENTNOTIFY.0 != 0;
+        unsafe extern "system" fn each(hwnd: HWND, data: LPARAM) -> BOOL {
+            unsafe { (*(data.0 as *mut Vec<HWND>)).push(hwnd) };
+            BOOL(1)
+        }
+        let Some(top) = host(view) else { return Vec::new() };
+        let mut all: Vec<HWND> = Vec::new();
+        unsafe {
+            let _ = EnumChildWindows(Some(top), Some(each), LPARAM(&mut all as *mut _ as isize));
+        }
+        all.into_iter()
+            .map(|hwnd| {
+                let mut name = [0u16; 128];
+                let n = unsafe { GetClassNameW(hwnd, &mut name) } as usize;
+                let class = String::from_utf16_lossy(&name[..n.min(name.len())]);
+                let mut path = false;
+                let mut w = hwnd;
+                while w != top && !w.is_invalid() {
+                    path |= quiet(w);
+                    w = unsafe { GetParent(w) }.unwrap_or_default();
+                }
+                (class, quiet(hwnd), path)
+            })
+            .collect()
+    }
 
     fn source(wv: &ICoreWebView2) -> Option<String> {
         let mut uri = PWSTR::null();
@@ -45,6 +184,14 @@ mod imp {
         let wv = view.webview();
         let mut token = 0i64;
         attach_process_failed(view, Some(tab), proxy)?;
+        // Icons and the sound mark are extras: a tab without them still works.
+        if let Err(e) = crate::native::attach_favicon(view, tab, proxy) {
+            eprintln!("x-browser: tab {tab}: no favicon events: {e}");
+        }
+        if let Err(e) = crate::native::attach_audio(view, tab, proxy) {
+            eprintln!("x-browser: tab {tab}: no audio events: {e}");
+        }
+        let last_press = watch_presses(view);
         unsafe {
             // Fires for new documents *and* same-document changes (pushState,
             // #fragment), which NavigationStarting/Completed do not report.
@@ -133,7 +280,11 @@ mod imp {
 
             // wry (no new-window handler given) already marks every request
             // handled, so no popup window ever appears. Here we only decide
-            // whether to open the URL as a tab: user-initiated, http(s) only.
+            // whether to open the URL as a tab: user-initiated, http(s) only, at
+            // most MAX_URL_LEN bytes (longer is refused, not cut);
+            // in the background for Ctrl+click and middle click. WebView2
+            // does not say which it was, so the modifier state (shared with
+            // the page's input queue) and the last press are asked instead.
             let p = proxy.clone();
             wv.add_NewWindowRequested(
                 &NewWindowRequestedEventHandler::create(Box::new(move |_, args| {
@@ -143,8 +294,13 @@ mod imp {
                     let mut uri = PWSTR::null();
                     args.Uri(&mut uri)?;
                     let url = take_pwstr(uri);
-                    if user.as_bool() && is_web_url(&url) {
-                        let _ = p.send_event(UserEvent::OpenTab { opener: tab, url });
+                    if user.as_bool() && is_tab_url(&url) {
+                        // The thread's key state, or the key physically down now
+                        // (the press may not have reached this thread's queue yet).
+                        let down = |vk: u16| GetKeyState(vk as i32) < 0 || GetAsyncKeyState(vk as i32) < 0;
+                        let background =
+                            opens_in_background(down(VK_CONTROL.0), down(VK_SHIFT.0), last_press.get(), Instant::now());
+                        let _ = p.send_event(UserEvent::OpenTab { opener: tab, url, background });
                     }
                     Ok(())
                 })),
@@ -168,3 +324,23 @@ mod imp {
 }
 
 pub use imp::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_only_for_ctrl_or_a_recent_middle_press() {
+        let now = Instant::now();
+        let ago = |ms: u64| now.checked_sub(Duration::from_millis(ms)).unwrap_or(now);
+        let left = |ms: u64| Some((false, ago(ms)));
+        let middle = |ms: u64| Some((true, ago(ms)));
+        assert!(!opens_in_background(false, false, None, now), "plain target=_blank click");
+        assert!(!opens_in_background(false, false, left(10), now));
+        assert!(opens_in_background(true, false, left(10), now), "Ctrl+click");
+        assert!(!opens_in_background(true, true, left(10), now), "Ctrl+Shift+click opens in front");
+        assert!(opens_in_background(false, false, middle(300), now), "middle click (opens on button up)");
+        assert!(!opens_in_background(false, true, middle(300), now), "Shift+middle click opens in front");
+        assert!(!opens_in_background(false, false, middle(2500), now), "a stale middle press does not count");
+    }
+}

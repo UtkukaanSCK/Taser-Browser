@@ -3,6 +3,7 @@
 
 use crate::commands::{Shortcut, TopEdge, UiCommand};
 use crate::native::{self, Proxy};
+use crate::strip::{self, ClosedTabs};
 use crate::tabs::{Placement, TabId, Tabs};
 use crate::ui;
 use crate::url::{self, Resolved};
@@ -21,8 +22,9 @@ pub enum UserEvent {
     Shortcut(Shortcut),
     /// From a content webview. Untrusted: only updates that tab's display state.
     Page(TabId, PageEvent),
-    /// A page asked for a new window (user-initiated, http/https only).
-    OpenTab { opener: TabId, url: String },
+    /// A page asked for a new window (user-initiated, http/https only);
+    /// `background` for Ctrl+click and middle click.
+    OpenTab { opener: TabId, url: String, background: bool },
     /// A WebView2 process died or hung. `tab` is `None` for the UI webview.
     ProcessFailed { tab: Option<TabId>, failure: Failure },
     #[cfg(feature = "selftest")]
@@ -37,6 +39,10 @@ pub enum PageEvent {
     History { back: bool, forward: bool },
     /// The page called `window.close()` (and WebView2 allowed it).
     CloseRequested,
+    /// The page's icon as a checked PNG `data:` URL (see `native::png_data_url`);
+    /// None while a new document has none yet.
+    Favicon(Option<String>),
+    Audio { playing: bool, muted: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +86,8 @@ pub struct App {
     context: WebContext,
     pub window: Window,
     pub tabs: Tabs,
+    /// Ctrl+Shift+T stack (see `strip`).
+    pub closed: ClosedTabs,
     proxy: Proxy,
     /// Last caption given to the window, so it is only set when it changes.
     title: String,
@@ -154,6 +162,7 @@ impl App {
             ui,
             views: Vec::new(),
             tabs: Tabs::new(),
+            closed: ClosedTabs::default(),
             proxy,
             context,
             dirty: true,
@@ -236,8 +245,14 @@ impl App {
         Ok(id)
     }
 
-    pub fn close_tab(&mut self, id: TabId) {
+    /// Closes tab `id`. `remember`: whether Ctrl+Shift+T may bring it back,
+    /// true for the user's own closes (button, Ctrl+W, middle click), false
+    /// when the page closed itself (window.close()).
+    pub fn close_tab(&mut self, id: TabId, remember: bool) {
         let was_active = self.tabs.active();
+        if remember {
+            self.closed.remember(&self.tabs, id);
+        }
         if !self.tabs.close(id) {
             return;
         }
@@ -344,8 +359,10 @@ impl App {
         }
         if self.dirty && self.ui_ready {
             self.dirty = false;
-            let js = format!("xb.render({},{})", self.tabs.to_json(), self.window.is_maximized());
-            let _ = self.ui.evaluate_script(&js);
+            let js = format!("xb.render({},{})", self.tabs.render_json(), self.window.is_maximized());
+            if self.ui.evaluate_script(&js).is_ok() {
+                self.tabs.icons_sent();
+            }
         }
         if std::mem::take(&mut self.focus_pending) {
             self.focus_after_switch();
@@ -406,10 +423,11 @@ impl App {
             UserEvent::Ui(cmd) => self.on_ui(cmd),
             UserEvent::Shortcut(sc) => self.on_shortcut(sc),
             UserEvent::Page(id, ev) => self.on_page(id, ev),
-            UserEvent::OpenTab { opener, url } => {
-                if self.tabs.get(opener).is_some() {
-                    let _ = self.open_tab(&url, Placement::After(opener), true);
-                    if let Some(v) = self.active_view() {
+            UserEvent::OpenTab { opener, url, background } => {
+                // Checked where it is raised too; over-long URLs are refused, not cut.
+                if self.tabs.get(opener).is_some() && crate::url::is_tab_url(&url) {
+                    let _ = self.open_tab(&url, Placement::After(opener), !background);
+                    if !background && let Some(v) = self.active_view() {
                         let _ = v.focus();
                     }
                 }
@@ -425,6 +443,8 @@ impl App {
             UiCommand::Ready => {
                 self.ui_ready = true;
                 self.dirty = true;
+                // A (re)loaded UI has no icons yet.
+                self.tabs.resend_icons();
                 crate::timing::mark("ui-ready");
                 if crate::timing::quit_when_ready() {
                     self.quit = true;
@@ -434,7 +454,7 @@ impl App {
                 }
             }
             UiCommand::NewTab => self.new_blank_tab(),
-            UiCommand::CloseTab(id) => self.close_tab(id),
+            UiCommand::CloseTab(id) => self.close_tab(id, true),
             UiCommand::Activate(id) => self.activate(id),
             UiCommand::Navigate(text) => self.navigate(&text),
             UiCommand::Back => self.with_active(|v| v.go_back()),
@@ -469,6 +489,7 @@ impl App {
                     let _ = v.focus();
                 }
             }
+            UiCommand::Strip(cmd) => strip::on_command(self, cmd),
         }
     }
 
@@ -477,7 +498,7 @@ impl App {
             Shortcut::NewTab => self.new_blank_tab(),
             Shortcut::CloseTab => {
                 if let Some(id) = self.tabs.active() {
-                    self.close_tab(id);
+                    self.close_tab(id, true);
                 }
             }
             Shortcut::FocusAddress => self.focus_address(),
@@ -490,19 +511,31 @@ impl App {
             }
             Shortcut::Back => self.with_active(|v| v.go_back()),
             Shortcut::Forward => self.with_active(|v| v.go_forward()),
+            Shortcut::Tab(key) => strip::on_key(self, key),
         }
     }
 
     fn on_page(&mut self, id: TabId, ev: PageEvent) {
         if let PageEvent::CloseRequested = ev {
-            self.close_tab(id);
+            // The page's own window.close(): not something to reopen.
+            self.close_tab(id, false);
+            return;
+        }
+        if let PageEvent::Favicon(icon) = ev {
+            if self.tabs.set_favicon(id, icon) {
+                self.dirty = true;
+            }
             return;
         }
         let Some(tab) = self.tabs.get_mut(id) else { return };
         match ev {
-            PageEvent::CloseRequested => {}
+            PageEvent::CloseRequested | PageEvent::Favicon(_) => {}
+            PageEvent::Audio { playing, muted } => {
+                tab.audible = playing;
+                tab.muted = muted;
+            }
             PageEvent::Title(t) => tab.title = t.chars().take(512).collect(),
-            PageEvent::Url(u) => tab.url = u.chars().take(8192).collect(),
+            PageEvent::Url(u) => tab.url = crate::url::cap_url(&u),
             PageEvent::Loading(l) => tab.loading = l,
             PageEvent::History { back, forward } => {
                 tab.can_back = back;

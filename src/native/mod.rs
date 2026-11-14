@@ -17,8 +17,12 @@ pub enum ProfileBusy {
     OtherOptions,
 }
 
+mod audio;
 mod content;
+mod favicon;
+pub use audio::*;
 pub use content::*;
+pub use favicon::*;
 
 #[cfg(windows)]
 mod imp {

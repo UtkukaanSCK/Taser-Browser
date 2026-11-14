@@ -4,6 +4,7 @@
 //!   native key event, so content pages cannot inject one and none carries
 //!   data (no URL, path or text).
 
+use crate::strip::{StripCmd, TabKey};
 use crate::tabs::TabId;
 
 /// Longest address bar input accepted over IPC.
@@ -27,6 +28,8 @@ pub enum UiCommand {
     ResizeTop(TopEdge),
     /// The address bar lost focus; return focus to the page (Esc).
     FocusContent,
+    /// Reorder and mute (see `strip`).
+    Strip(StripCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +65,7 @@ impl UiCommand {
             ("resize", Some("nw")) => Self::ResizeTop(TopEdge::Left),
             ("resize", Some("ne")) => Self::ResizeTop(TopEdge::Right),
             ("focus-content", None) => Self::FocusContent,
+            ("move" | "mute", Some(a)) => Self::Strip(StripCmd::parse(name, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -78,6 +82,8 @@ pub enum Shortcut {
     PrevTab,
     Back,
     Forward,
+    /// Reopen, Ctrl+1..9 and keyboard reorder (see `strip`).
+    Tab(TabKey),
 }
 
 /// Windows virtual-key codes used below (identical values on every keyboard layout).
@@ -125,13 +131,17 @@ impl Shortcut {
             RIGHT if alt_only && !m.shift => Self::Forward,
             BROWSER_BACK if none => Self::Back,
             BROWSER_FORWARD if none => Self::Forward,
-            _ => return None,
+            _ => return TabKey::from_key(vk, m).map(Self::Tab),
         })
     }
 
     /// Whether holding the key down should repeat the action.
     pub fn repeats(self) -> bool {
-        matches!(self, Self::NextTab | Self::PrevTab)
+        match self {
+            Self::NextTab | Self::PrevTab => true,
+            Self::Tab(k) => k.repeats(),
+            _ => false,
+        }
     }
 }
 
@@ -153,13 +163,15 @@ mod tests {
         assert_eq!(UiCommand::parse("navigate:"), Some(UiCommand::Navigate(String::new())));
         assert_eq!(UiCommand::parse("resize:nw"), Some(UiCommand::ResizeTop(TopEdge::Left)));
         assert_eq!(UiCommand::parse("quit"), Some(UiCommand::CloseWindow));
+        assert_eq!(UiCommand::parse("move:4:2"), Some(UiCommand::Strip(StripCmd::Move { id: 4, to: 2 })));
+        assert_eq!(UiCommand::parse("mute:4"), Some(UiCommand::Strip(StripCmd::ToggleMute(4))));
     }
 
     #[test]
     fn rejects_malformed_or_unknown() {
         for bad in [
             "", "nope", "close", "close:", "close:x", "close:-1", "activate:1.5", "new:1", "ready:x",
-            "resize:s", "resize", "navigate", "Back", " back",
+            "resize:s", "resize", "navigate", "Back", " back", "move", "move:4", "move:4:x", "mute", "mute:",
         ] {
             assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
         }
@@ -195,7 +207,7 @@ mod tests {
         assert_eq!(Shortcut::from_key(LEFT, NONE), None, "plain arrows move the caret");
         assert_eq!(Shortcut::from_key(LEFT, CTRL), None, "Ctrl+Left jumps words");
         assert_eq!(Shortcut::from_key(TAB, NONE), None, "plain Tab moves focus");
-        assert_eq!(Shortcut::from_key(T, CTRL_SHIFT), None, "Ctrl+Shift+T is not implemented");
+        assert_eq!(Shortcut::from_key(T, CTRL_SHIFT), Some(Shortcut::Tab(TabKey::Reopen)), "Ctrl+Shift+T reopens");
         assert_eq!(Shortcut::from_key(0x43, CTRL), None, "Ctrl+C stays copy");
     }
 
@@ -244,5 +256,17 @@ mod tests {
         assert!(Shortcut::NextTab.repeats());
         assert!(!Shortcut::CloseTab.repeats());
         assert!(!Shortcut::NewTab.repeats());
+        assert!(Shortcut::Tab(TabKey::MoveLeft).repeats());
+        assert!(!Shortcut::Tab(TabKey::Reopen).repeats(), "a held Ctrl+Shift+T reopens one tab");
+    }
+
+    #[test]
+    fn strip_keys_reach_the_shortcut_set() {
+        use vk::*;
+        assert_eq!(Shortcut::from_key(0x31, CTRL), Some(Shortcut::Tab(TabKey::Select(1))));
+        assert_eq!(Shortcut::from_key(0x39, CTRL), Some(Shortcut::Tab(TabKey::Last)));
+        assert_eq!(Shortcut::from_key(NEXT, CTRL_SHIFT), Some(Shortcut::Tab(TabKey::MoveRight)));
+        assert_eq!(Shortcut::from_key(NEXT, CTRL), Some(Shortcut::NextTab), "Ctrl+PgDn still cycles");
+        assert_eq!(Shortcut::from_key(0x31, ALTGR), None);
     }
 }

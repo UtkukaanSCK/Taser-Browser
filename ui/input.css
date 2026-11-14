@@ -63,4 +63,85 @@
   .win {
     @apply flex h-full w-11 items-center justify-center transition-colors duration-100 hover:bg-hover;
   }
+  /* Tab list scroll arrows, shown only while the tabs overflow. */
+  .arrow {
+    @apply hidden h-7 w-4 shrink-0 items-center justify-center rounded text-muted transition-colors duration-100 group-data-[overflow]/tabs:flex hover:bg-hover hover:text-ink disabled:opacity-35 disabled:hover:bg-transparent;
+  }
+
+  /* Which parts of a tab show, by state and by the tab's own width (it is the
+     container). Kept here as plain rules, not display utilities on the
+     elements, so that the states combine in one readable place. */
+  /* Base (one class deep), then states (one attribute more): showing first,
+     hiding last, so a loading tab hides its icon even when it has one. */
+  .tab .fav,
+  .tab .audio,
+  .tab .close {
+    display: flex;
+  }
+  .tab .glyph {
+    display: block;
+    color: var(--color-muted);
+  }
+  .tab .dot,
+  .tab .icon,
+  .tab .silent {
+    display: none;
+  }
+  .tab[data-icon] .icon,
+  .tab[data-loading] .dot,
+  .tab[data-muted] .silent {
+    display: block;
+  }
+  .tab[data-icon] .glyph,
+  .tab[data-loading] .glyph,
+  .tab[data-loading] .icon,
+  .tab[data-muted] .sound,
+  .tab:not([data-audio], [data-muted]) .audio {
+    display: none;
+  }
+  @container (width < 76px) {
+    .tab[aria-selected="false"] .close,
+    .tab .audio {
+      display: none !important;
+    }
+  }
+  /* Sound mark: a dot in the tab's corner while its page plays audio (grey
+     while muted), only where the sound button is hidden (below 76px, the
+     rule above), down to the narrowest tab: one sound marker at any width. */
+  .tab-body::after {
+    content: none;
+  }
+  .tab[data-audio] .tab-body::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: var(--color-accent);
+    pointer-events: none;
+  }
+  .tab[data-audio][data-muted] .tab-body::after {
+    background: var(--color-muted);
+  }
+  @container (width >= 76px) {
+    .tab[data-audio] .tab-body::after {
+      content: none;
+    }
+  }
+  /* A tab is dragged by strip.js only: never as a native drag (the page
+     icon would otherwise start an image drag and cancel the reorder). */
+  .tab {
+    -webkit-user-drag: none;
+  }
+  .tab .icon {
+    pointer-events: none;
+  }
+  @container (width < 52px) {
+    .tab .title,
+    .tab[aria-selected="true"] .fav {
+      display: none !important;
+    }
+  }
 }

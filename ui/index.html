@@ -27,16 +27,24 @@
     <svg class="hidden group-data-[loading]:block" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg>
   </button>
 
-  <!-- Narrow windows: the address box gives up width first (down to min-w-28). -->
-  <div id="address-box" class="ml-1 flex h-7 w-[clamp(140px,34vw,520px)] min-w-28 shrink items-center rounded-md border border-line bg-surface px-2 transition-colors duration-100 focus-within:border-accent data-[blocked]:border-danger">
+  <!-- Narrow windows: the address box gives up width first (down to min-w-25). -->
+  <div id="address-box" class="ml-1 flex h-7 w-[clamp(140px,34vw,520px)] min-w-25 shrink items-center rounded-md border border-line bg-surface px-2 transition-colors duration-100 focus-within:border-accent data-[blocked]:border-danger">
     <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Adres"
            placeholder="Ara ya da adres gir"
            class="h-full w-full min-w-0 bg-transparent text-ink outline-none select-text placeholder:text-muted">
   </div>
 
-  <!-- Tab zone: never narrower than active tab + "+" + pr-8 of empty drag area. -->
-  <div id="tabs" data-drag class="ml-1 flex h-full min-w-[92px] flex-1 items-center overflow-hidden pr-8">
-    <div id="tablist" role="tablist" aria-label="Sekmeler" class="flex h-full min-w-0 flex-[0_1_auto] items-center"></div>
+  <!-- Tab zone: never narrower than the scroll arrows + one tab + "+" + pr-8 of
+       empty drag area. Tabs that do not fit scroll inside #tablist; the arrows
+       show only then (data-overflow, set by strip.js). -->
+  <div id="tabs" data-drag class="group/tabs ml-1 flex h-full min-w-[130px] flex-1 items-center overflow-hidden pr-8">
+    <button id="tab-left" class="arrow" tabindex="-1" aria-hidden="true" title="Önceki sekmeler" aria-label="Önceki sekmeler">
+      <svg class="size-3" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+    </button>
+    <div id="tablist" role="tablist" aria-label="Sekmeler" class="relative flex h-full min-w-0 flex-[0_1_auto] items-center overflow-x-auto overflow-y-hidden [scrollbar-width:none]"></div>
+    <button id="tab-right" class="arrow" tabindex="-1" aria-hidden="true" title="Sonraki sekmeler" aria-label="Sonraki sekmeler">
+      <svg class="size-3" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>
+    </button>
     <button id="new-tab" class="nav shrink-0" title="Yeni sekme (Ctrl+T)" aria-label="Yeni sekme">
       <svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>
     </button>
@@ -58,18 +66,29 @@
   <div id="loadbar" class="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-accent opacity-0 transition-opacity duration-100 data-[on]:opacity-100"></div>
 </div>
 
-<!-- A tab is a bare box that can shrink to nothing; the visible part (.tab-body)
-     is inset inside it and sheds its padding, close button and title as the tab
-     narrows (container queries on the tab's own width). Thresholds:
-     28px = the active tab's minimum width; below it a tab is a bare sliver,
-     44px = sheds its padding, loading dot and close button,
-     76px = an inactive tab already hides its close button. -->
+<!-- A tab shrinks from 200px down to min-w-9 (36px); past that the list scrolls.
+     The visible part (.tab-body) is inset inside it and sheds its contents as
+     the tab narrows (container queries on the tab's own width; which child
+     shows when is in input.css, .tab rules):
+     76px = an inactive tab hides its close button, every tab its sound button,
+     52px = no title: an inactive tab shows its icon, the active tab only its
+            close button (and an accent border).
+     Below 76px, in place of the sound button, a tab playing audio has a dot
+     in its corner (.tab-body::after). -->
 <template id="tab-tpl">
-  <div role="tab" tabindex="-1" aria-selected="false" class="tab group @container relative h-7 w-[200px] min-w-0 flex-[0_1_200px] overflow-hidden outline-none aria-selected:min-w-7">
-    <div class="tab-body absolute inset-x-px inset-y-0 flex items-center gap-1.5 overflow-hidden rounded-md border border-transparent ps-2 pe-1 text-muted transition-colors duration-100 group-hover:bg-hover group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-accent group-aria-selected:border-line group-aria-selected:bg-surface group-aria-selected:text-ink @max-[44px]:px-1 @max-[44px]:group-aria-selected:border-accent @max-[28px]:gap-0 @max-[28px]:border-0 @max-[28px]:bg-line @max-[28px]:px-0 @max-[28px]:group-hover:bg-muted @max-[28px]:group-focus-visible:bg-accent">
-      <span class="dot hidden size-1.5 shrink-0 rounded-full bg-accent group-data-[loading]:block @max-[44px]:group-data-[loading]:hidden"></span>
-      <span class="title min-w-0 flex-1 truncate leading-normal @max-[28px]:hidden"></span>
-      <button class="close flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink @max-[76px]:group-aria-[selected=false]:hidden @max-[44px]:hidden" tabindex="-1" aria-hidden="true" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
+  <div role="tab" tabindex="-1" aria-selected="false" class="tab group @container relative h-7 w-[200px] min-w-9 flex-[0_1_200px] overflow-hidden outline-none data-[dragging]:z-10 data-[dragging]:opacity-85">
+    <div class="tab-body absolute inset-x-px inset-y-0 flex items-center gap-1.5 overflow-hidden rounded-md border border-transparent ps-2 pe-1 text-muted transition-colors duration-100 group-hover:bg-hover group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-accent group-aria-selected:border-line group-aria-selected:bg-surface group-aria-selected:text-ink @max-[52px]:justify-center @max-[52px]:gap-0 @max-[52px]:px-0 @max-[52px]:group-aria-selected:border-accent">
+      <span class="fav size-4 shrink-0 items-center justify-center">
+        <span class="dot size-1.5 rounded-full bg-accent"></span>
+        <img class="icon size-4" alt="" draggable="false">
+        <svg class="glyph size-3.5" viewBox="0 0 16 16"><path d="M4.5 2.5H9l2.5 2.5v8.5h-7zM9 2.5V5h2.5"/></svg>
+      </span>
+      <span class="title min-w-0 flex-1 truncate leading-normal"></span>
+      <button class="audio size-5 shrink-0 items-center justify-center rounded hover:bg-line hover:text-ink" tabindex="-1" aria-hidden="true" title="Sesi kapat" aria-label="Sesi kapat">
+        <svg class="sound size-3.5" viewBox="0 0 16 16"><path d="M2.5 6h2l3-2.5v9l-3-2.5h-2zM10 6a2.5 2.5 0 0 1 0 4m1.5-6a5 5 0 0 1 0 8"/></svg>
+        <svg class="silent size-3.5" viewBox="0 0 16 16"><path d="M2.5 6h2l3-2.5v9l-3-2.5h-2zM10 6l4 4m0-4-4 4"/></svg>
+      </button>
+      <button class="close size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink" tabindex="-1" aria-hidden="true" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
         <svg class="size-3" viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
       </button>
     </div>

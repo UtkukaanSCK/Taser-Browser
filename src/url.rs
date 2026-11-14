@@ -263,6 +263,26 @@ pub fn is_web_url(url: &str) -> bool {
     lower.starts_with("https://") || lower.starts_with("http://")
 }
 
+/// Longest URL (in bytes) a tab is opened with or remembered for reopening.
+pub const MAX_URL_LEN: usize = 8 * 1024;
+
+/// A web URL within `MAX_URL_LEN`: what a page may open as a new tab.
+/// Longer ones are refused, never cut (a cut URL is a different address).
+pub fn is_tab_url(url: &str) -> bool {
+    url.len() <= MAX_URL_LEN && is_web_url(url)
+}
+
+/// A page's URL as kept for display. One over `MAX_URL_LEN` is cut, but to
+/// just over it (at a character boundary), so it still fails `is_tab_url`
+/// and a cut URL is never reopened as if it were the page's.
+pub fn cap_url(url: &str) -> String {
+    if url.len() <= MAX_URL_LEN {
+        return url.to_string();
+    }
+    let end = url.char_indices().map(|(i, c)| i + c.len_utf8()).find(|&end| end > MAX_URL_LEN).unwrap_or(url.len());
+    url[..end].to_string()
+}
+
 /// Lowercased host of an absolute `scheme://` URL, without userinfo, port or
 /// trailing dots (IPv6 literals keep their brackets). `None` if there is no
 /// `//` authority.
@@ -285,6 +305,35 @@ pub fn display_url(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_urls_are_web_and_capped() {
+        let at_cap = format!("https://example.com/{}", "a".repeat(MAX_URL_LEN - 20));
+        assert_eq!(at_cap.len(), MAX_URL_LEN);
+        assert!(is_tab_url(&at_cap));
+        assert!(!is_tab_url(&format!("{at_cap}a")), "one byte over is refused");
+        assert!(!is_tab_url("javascript:alert(1)"));
+        assert!(!is_tab_url("about:blank"));
+        // Multi-byte characters count as bytes.
+        let wide = format!("https://example.com/{}", "ş".repeat(MAX_URL_LEN / 2));
+        assert!(wide.chars().count() < MAX_URL_LEN && !is_tab_url(&wide));
+    }
+
+    #[test]
+    fn capped_urls_stay_over_the_cap() {
+        let short = "https://example.com/";
+        assert_eq!(cap_url(short), short);
+        let at_cap = format!("https://example.com/{}", "a".repeat(MAX_URL_LEN - 20));
+        assert_eq!(cap_url(&at_cap), at_cap, "at the cap: unchanged");
+        let long = format!("{at_cap}{}", "b".repeat(100_000));
+        let cut = cap_url(&long);
+        assert_eq!(cut.len(), MAX_URL_LEN + 1);
+        assert!(!is_tab_url(&cut), "a cut URL is never a tab URL");
+        let wide = format!("https://example.com/{}", "ş".repeat(MAX_URL_LEN));
+        let cut = cap_url(&wide);
+        assert!(cut.len() > MAX_URL_LEN && cut.len() <= MAX_URL_LEN + 4 && wide.starts_with(&cut));
+        assert!(!is_tab_url(&cut));
+    }
 
     fn url(s: &str) -> Resolved {
         Resolved::Url(s.to_string())

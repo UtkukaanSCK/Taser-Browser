@@ -6,6 +6,7 @@ mod commands;
 mod native;
 #[cfg(feature = "selftest")]
 mod selftest;
+mod strip;
 mod tabs;
 mod timing;
 mod ui;

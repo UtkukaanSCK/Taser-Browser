@@ -76,8 +76,11 @@ done
 | `src/tabs.rs` | pure tab model (order, active tab, placement, JSON) |
 | `src/url.rs` | address bar input → URL or search; scheme blocking |
 | `src/commands.rs` | closed IPC command and shortcut sets |
+| `src/strip.rs` | tab strip extras: reorder, reopen closed tab, Ctrl+1..9, mute |
 | `src/native/mod.rs` | WebView2 features wry does not expose (keys, crashes, window) |
 | `src/native/content.rs` | content-tab hooks: URL, history, loading, popups |
+| `src/native/favicon.rs` | tab favicons as checked, size-capped PNG `data:` URLs |
+| `src/native/audio.rs` | per-tab "playing sound" state and muting |
 | `src/ui.rs` | embedded UI assets, custom protocol, CSP |
 | `src/timing.rs` | opt-in startup milestones (`XB_TIMING`) |
 | `src/selftest.rs` | in-app scenario test (`--features selftest` only) |

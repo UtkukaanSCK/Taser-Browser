@@ -145,7 +145,7 @@ mod tests {
     fn content_may_not_load_ui_host() {
         assert!(is_ui_url("http://xb.ui/index.html"));
         assert!(is_ui_url("https://xb.ui/"));
-        assert!(is_ui_url("http://XB.UI./app.js"));
+        assert!(is_ui_url("http://XB.UI./js/core.js"));
         assert!(is_ui_url("http://user@xb.ui:8080/"));
         assert!(is_ui_url("ws://xb.ui/"));
         assert!(!is_ui_url("http://xb.ui.evil.com/"));
