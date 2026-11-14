@@ -20,9 +20,13 @@ pub enum ProfileBusy {
 mod audio;
 mod content;
 mod favicon;
+mod fullscreen;
+mod zoom;
 pub use audio::*;
 pub use content::*;
 pub use favicon::*;
+pub use fullscreen::*;
+pub use zoom::*;
 
 #[cfg(windows)]
 mod imp {
@@ -61,7 +65,8 @@ mod imp {
                         shift: down(VK_SHIFT.0),
                         alt: status.IsMenuKeyDown.as_bool() || down(VK_MENU.0),
                     };
-                    if let Some(sc) = Shortcut::from_key(key, mods) {
+                    let esc_exits = crate::page_tools::esc_exits_fullscreen();
+                    if let Some(sc) = Shortcut::from_key_in(key, mods, esc_exits) {
                         // Swallow it either way so the page / WebView defaults
                         // (e.g. its own Ctrl+R) never run twice.
                         args.SetHandled(true)?;

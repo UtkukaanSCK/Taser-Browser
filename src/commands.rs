@@ -4,6 +4,7 @@
 //!   native key event, so content pages cannot inject one and none carries
 //!   data (no URL, path or text).
 
+use crate::page_tools::{PageCmd, PageKey};
 use crate::strip::{StripCmd, TabKey};
 use crate::tabs::TabId;
 
@@ -30,6 +31,8 @@ pub enum UiCommand {
     FocusContent,
     /// Reorder and mute (see `strip`).
     Strip(StripCmd),
+    /// Zoom reset (see `page_tools`).
+    Page(PageCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +69,7 @@ impl UiCommand {
             ("resize", Some("ne")) => Self::ResizeTop(TopEdge::Right),
             ("focus-content", None) => Self::FocusContent,
             ("move" | "mute", Some(a)) => Self::Strip(StripCmd::parse(name, a)?),
+            ("zoom-reset", Some(a)) => Self::Page(PageCmd::parse(name, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -84,6 +88,8 @@ pub enum Shortcut {
     Forward,
     /// Reopen, Ctrl+1..9 and keyboard reorder (see `strip`).
     Tab(TabKey),
+    /// Zoom, F11 and Esc out of fullscreen (see `page_tools`).
+    Page(PageKey),
 }
 
 /// Windows virtual-key codes used below (identical values on every keyboard layout).
@@ -110,9 +116,17 @@ pub struct Mods {
 }
 
 impl Shortcut {
+    /// `from_key_in` outside fullscreen, where Esc is always the page's.
+    #[cfg(any(test, feature = "selftest"))]
+    pub fn from_key(vk: u32, m: Mods) -> Option<Self> {
+        Self::from_key_in(vk, m, false)
+    }
+
     /// Maps a key-down to a shortcut. Ctrl+Alt (AltGr on e.g. Turkish layouts)
     /// never matches, so typing characters like `@` or `€` is unaffected.
-    pub fn from_key(vk: u32, m: Mods) -> Option<Self> {
+    /// `esc_exits`: the window is in F11 fullscreen, where Esc leaves it
+    /// (`page_tools::esc_exits_fullscreen`).
+    pub fn from_key_in(vk: u32, m: Mods, esc_exits: bool) -> Option<Self> {
         use vk::*;
         let ctrl_only = m.ctrl && !m.alt;
         let alt_only = m.alt && !m.ctrl;
@@ -131,7 +145,11 @@ impl Shortcut {
             RIGHT if alt_only && !m.shift => Self::Forward,
             BROWSER_BACK if none => Self::Back,
             BROWSER_FORWARD if none => Self::Forward,
-            _ => return TabKey::from_key(vk, m).map(Self::Tab),
+            _ => {
+                return TabKey::from_key(vk, m)
+                    .map(Self::Tab)
+                    .or_else(|| PageKey::from_key(vk, m, esc_exits).map(Self::Page));
+            }
         })
     }
 
@@ -140,6 +158,7 @@ impl Shortcut {
         match self {
             Self::NextTab | Self::PrevTab => true,
             Self::Tab(k) => k.repeats(),
+            Self::Page(k) => k.repeats(),
             _ => false,
         }
     }
@@ -165,6 +184,7 @@ mod tests {
         assert_eq!(UiCommand::parse("quit"), Some(UiCommand::CloseWindow));
         assert_eq!(UiCommand::parse("move:4:2"), Some(UiCommand::Strip(StripCmd::Move { id: 4, to: 2 })));
         assert_eq!(UiCommand::parse("mute:4"), Some(UiCommand::Strip(StripCmd::ToggleMute(4))));
+        assert_eq!(UiCommand::parse("zoom-reset:4"), Some(UiCommand::Page(PageCmd::ZoomReset(4))));
     }
 
     #[test]
@@ -172,6 +192,7 @@ mod tests {
         for bad in [
             "", "nope", "close", "close:", "close:x", "close:-1", "activate:1.5", "new:1", "ready:x",
             "resize:s", "resize", "navigate", "Back", " back", "move", "move:4", "move:4:x", "mute", "mute:",
+            "zoom-reset", "zoom-reset:", "zoom-reset:x", "zoom-reset:1:2", "zoom", "zoom:1", "fullscreen",
         ] {
             assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
         }
@@ -219,6 +240,7 @@ mod tests {
             for shift in [false, true] {
                 let m = Mods { shift, ..ALTGR };
                 assert_eq!(Shortcut::from_key(key, m), None, "vk {key:#x} shift={shift}");
+                assert_eq!(Shortcut::from_key_in(key, m, true), None, "vk {key:#x} shift={shift} in fullscreen");
             }
         }
     }
@@ -268,5 +290,38 @@ mod tests {
         assert_eq!(Shortcut::from_key(NEXT, CTRL_SHIFT), Some(Shortcut::Tab(TabKey::MoveRight)));
         assert_eq!(Shortcut::from_key(NEXT, CTRL), Some(Shortcut::NextTab), "Ctrl+PgDn still cycles");
         assert_eq!(Shortcut::from_key(0x31, ALTGR), None);
+    }
+
+    #[test]
+    fn page_keys_reach_the_shortcut_set() {
+        use crate::page_tools::keys::*;
+        assert_eq!(Shortcut::from_key(OEM_PLUS, CTRL), Some(Shortcut::Page(PageKey::ZoomIn)));
+        assert_eq!(Shortcut::from_key(OEM_MINUS, CTRL), Some(Shortcut::Page(PageKey::ZoomOut)));
+        assert_eq!(Shortcut::from_key(ZERO, CTRL), Some(Shortcut::Page(PageKey::ZoomReset)), "Ctrl+0 is not a tab");
+        assert_eq!(Shortcut::from_key(F11, NONE), Some(Shortcut::Page(PageKey::ToggleFullscreen)));
+        assert_eq!(Shortcut::from_key(ESCAPE, NONE), None, "Esc stays the page's");
+        assert_eq!(Shortcut::from_key_in(ESCAPE, NONE, true), Some(Shortcut::Page(PageKey::ExitFullscreen)));
+        assert!(Shortcut::Page(PageKey::ZoomIn).repeats());
+        assert!(!Shortcut::Page(PageKey::ToggleFullscreen).repeats(), "a held F11 toggles once");
+    }
+
+    #[test]
+    fn find_print_and_devtools_keys_reach_webview2() {
+        use crate::page_tools::keys::*;
+        for esc in [false, true] {
+            assert_eq!(Shortcut::from_key_in(F, CTRL, esc), None, "Ctrl+F opens WebView2's find bar");
+            assert_eq!(Shortcut::from_key_in(P, CTRL, esc), None, "Ctrl+P opens WebView2's print preview");
+            assert_eq!(Shortcut::from_key_in(F12, NONE, esc), None, "F12 is not ours (DevTools stay off)");
+        }
+    }
+
+    #[test]
+    fn only_esc_depends_on_fullscreen() {
+        // Outside Esc, being in fullscreen changes no mapping.
+        for key in (0..=0xFF_u32).filter(|&k| k != crate::page_tools::keys::ESCAPE) {
+            for m in [NONE, CTRL, CTRL_SHIFT, ALT, Mods { shift: true, ..NONE }] {
+                assert_eq!(Shortcut::from_key_in(key, m, true), Shortcut::from_key(key, m), "vk {key:#x} {m:?}");
+            }
+        }
     }
 }

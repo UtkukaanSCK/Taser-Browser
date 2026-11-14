@@ -32,6 +32,12 @@
     <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Adres"
            placeholder="Ara ya da adres gir"
            class="h-full w-full min-w-0 bg-transparent text-ink outline-none select-text placeholder:text-muted">
+    <!-- Page zoom other than 100% (core.js); a click resets it. -->
+    <button id="zoom" hidden tabindex="-1"
+            class="ml-1 flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-muted hover:bg-hover hover:text-ink">
+      <svg class="size-3" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg>
+      <span id="zoom-level"></span>
+    </button>
   </div>
 
   <!-- Tab zone: never narrower than the scroll arrows + one tab + "+" + pr-8 of
@@ -64,6 +70,14 @@
   </div>
 
   <div id="loadbar" class="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-accent opacity-0 transition-opacity duration-100 data-[on]:opacity-100"></div>
+</div>
+
+<!-- Fullscreen notice (core.js, xb.notice). While it is up the UI webview is
+     only this band over the top of the page, and the strip under it is inert.
+     The site name comes from the host, set through textContent only. -->
+<div id="fs-notice" hidden role="status"
+     class="fixed inset-0 z-50 flex items-center justify-center overflow-hidden whitespace-nowrap bg-[#202124] px-4 text-[13px] text-white">
+  <span id="fs-notice-site" dir="ltr" class="font-semibold"></span><span id="fs-notice-text"></span>
 </div>
 
 <!-- A tab shrinks from 200px down to min-w-9 (36px); past that the list scrolls.

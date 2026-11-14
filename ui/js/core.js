@@ -28,6 +28,11 @@ const ui = {
   const maxBtn = $("max");
   const resizer = $("resizer");
   const loadbar = $("loadbar");
+  const zoomBtn = $("zoom");
+  const zoomLevel = $("zoom-level");
+  const notice = $("fs-notice");
+  const noticeSite = $("fs-notice-site");
+  const noticeText = $("fs-notice-text");
 
   /** The user is working in the address bar (focused it, or typed into it). */
   let editing = false;
@@ -61,6 +66,13 @@ const ui = {
     maxBtn.toggleAttribute("data-max", maximized);
     maxBtn.title = maximized ? "Önceki boyutuna getir" : "Ekranı kapla";
     resizer.hidden = maximized;
+    const zoom = t && Number.isInteger(t.zoom) ? t.zoom : 100;
+    zoomBtn.hidden = zoom === 100;
+    if (zoom !== 100) {
+      zoomLevel.textContent = "%" + zoom;
+      zoomBtn.title = `Yakınlaştırma %${zoom}. Sıfırla (Ctrl+0)`;
+      zoomBtn.setAttribute("aria-label", `Yakınlaştırmayı sıfırla (%${zoom})`);
+    }
     syncAddress(switched);
   }
 
@@ -99,6 +111,9 @@ const ui = {
   fwd.addEventListener("click", () => send("forward"));
   reload.addEventListener("click", () => send(reload.hasAttribute("data-loading") ? "stop" : "reload"));
   newTab.addEventListener("click", () => send("new"));
+  zoomBtn.addEventListener("click", () => {
+    if (ui.state.active != null) send("zoom-reset:" + ui.state.active);
+  });
 
   // Window chrome. Empty strip space drags the window; double-click maximizes.
   for (const el of [$("tabs"), $("strip")]) {
@@ -135,6 +150,14 @@ const ui = {
       addrBox.setAttribute("data-blocked", "");
       clearTimeout(blockedTimer);
       blockedTimer = setTimeout(() => addrBox.removeAttribute("data-blocked"), 900);
+    },
+    /** Fullscreen notice: `site` (or null) and `text`; `notice(null)` hides it. */
+    notice(site, text) {
+      const on = typeof text === "string";
+      noticeSite.textContent = on && typeof site === "string" ? site : "";
+      noticeText.textContent = on ? text : "";
+      notice.hidden = !on;
+      $("strip").inert = on;
     },
   });
 

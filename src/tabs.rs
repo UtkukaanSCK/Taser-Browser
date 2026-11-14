@@ -21,6 +21,8 @@ pub struct Tab {
     /// The page is playing audio (shown even while muted).
     pub audible: bool,
     pub muted: bool,
+    /// Page zoom in whole percent (100 = none), as WebView2 last reported it.
+    pub zoom: u16,
 }
 
 #[derive(Debug, Default)]
@@ -111,6 +113,7 @@ impl Tabs {
             icon_dirty: false,
             audible: false,
             muted: false,
+            zoom: 100,
         };
         let at = match placement {
             Placement::End => self.tabs.len(),
@@ -237,6 +240,8 @@ impl Tabs {
             s.push_str(bool_str(t.audible));
             s.push_str(",\"muted\":");
             s.push_str(bool_str(t.muted));
+            s.push_str(",\"zoom\":");
+            s.push_str(&t.zoom.to_string());
             if icons && t.icon_dirty {
                 s.push_str(",\"icon\":");
                 match &t.favicon {
@@ -414,7 +419,7 @@ mod tests {
         let u = |hex: &str| format!("{}u{hex}", '\\');
         let title = format!(r#"He said \"hi\" \\ {}/script>{}{}"#, u("003c"), u("2028"), u("0001"));
         let expected = format!(
-            r#"{{"active":1,"tabs":[{{"id":1,"url":"","title":"{title}","loading":true,"back":true,"fwd":false,"audio":false,"muted":false}}]}}"#
+            r#"{{"active":1,"tabs":[{{"id":1,"url":"","title":"{title}","loading":true,"back":true,"fwd":false,"audio":false,"muted":false,"zoom":100}}]}}"#
         );
         let json = t.to_json();
         assert_eq!(json, expected);

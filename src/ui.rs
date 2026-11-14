@@ -48,8 +48,16 @@ pub fn is_ui_url(url: &str) -> bool {
 /// plus `--autoplay-policy=no-user-gesture-required`; we keep the two UI
 /// tweaks (no "mini menu" on text selection) but leave SmartScreen on and
 /// Chromium's default autoplay policy in place.
+///
+/// Keyboard Lock (`navigator.keyboard.lock()`) would let a fullscreen page
+/// take Esc and F11 from the app, and Alt+Tab or the Windows key from the
+/// system, while the strip is hidden. `SystemKeyboardLock` off keeps the
+/// system keys out of its reach (Chromium then uses no OS keyboard hook);
+/// the API itself has no switch (it is not a Blink runtime feature, so
+/// `--disable-blink-features=KeyboardLock` does nothing), and content tabs
+/// remove it with a script instead (`page_tools::NO_KEYBOARD_LOCK`).
 #[cfg(windows)]
-pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
+pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,SystemKeyboardLock";
 
 fn asset(path: &str) -> Option<(&'static str, &'static str)> {
     Some(match path {
@@ -160,6 +168,7 @@ mod tests {
         assert!(BROWSER_ARGS.contains("msWebOOUI") && BROWSER_ARGS.contains("msPdfOOUI"));
         assert!(!BROWSER_ARGS.contains("SmartScreen"));
         assert!(!BROWSER_ARGS.contains("autoplay"));
+        assert!(BROWSER_ARGS.contains("SystemKeyboardLock"));
     }
 
     #[test]

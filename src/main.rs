@@ -4,6 +4,7 @@
 mod app;
 mod commands;
 mod native;
+mod page_tools;
 #[cfg(feature = "selftest")]
 mod selftest;
 mod strip;

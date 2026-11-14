@@ -9,12 +9,17 @@
 //!
 //! Not covered here (needs a human / real input; tested by hand): physical key
 //! presses reaching the native AcceleratorKeyPressed hook, dragging the window
-//! by the strip, dragging the top edge to resize, and live switching of the
-//! system light/dark theme.
+//! by the strip, dragging the top edge to resize, live switching of the
+//! system light/dark theme, Ctrl+F itself (the find bar is opened through the
+//! Find API instead) and Ctrl+P (the print preview is never opened here).
+//! Checks named after a key (zoom step, Esc in fullscreen) test the key's
+//! mapping and the app's handling of it, not delivery of a physical key; a
+//! page's Keyboard Lock is tested as an API only.
 
 use crate::app::{App, UserEvent};
 use crate::commands::{Mods, Shortcut, UiCommand, vk};
 use crate::native::Proxy;
+use crate::page_tools::PageKey;
 use crate::tabs::TabId;
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,7 +33,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 225;
+const EXPECTED_CHECKS: u32 = 314;
 
 fn dir() -> PathBuf {
     std::env::var_os("XB_SELFTEST_DIR").map(PathBuf::from).unwrap_or_else(|| ".".into())
@@ -137,7 +142,56 @@ const DELAYS: &[u64] = &[
     1500, // 85 check muted; click starts a tone
     900,  // 86 check audio indicator; 30 tabs at the minimum width
     1500, // 87 check the playing tab is marked there (inactive, then active); close extras
-    900,  // 88 last tab close quits
+    1000, // 88 page tools: find/print/F12 keys, settings; navigate to example.com
+    3500, // 89 check load; Keyboard Lock probe; Ctrl+=
+    700,  // 90 check one zoom step and the indicator; Keyboard Lock result; same-origin second tab
+    3500, // 91 zoom scope (per tab?); indicator follows tabs; navigate to example.org
+    3500, // 92 zoom after a cross-origin navigation; Ctrl+0
+    700,  // 93 check reset and hidden indicator; Ctrl+NumPad-
+    700,  // 94 check zoom out; click the indicator
+    700,  // 95 check reset by indicator; CDP Ctrl+wheel
+    900,  // 96 note wheel; Ctrl+0; F11
+    1500, // 97 check F11 covers the screen, the notice over it
+    2600, // 98 check the notice timed out; Esc
+    1500, // 99 check restored; maximize
+    1000, // 100 check maximized; F11
+    1500, // 101 check fullscreen from maximized, notice again; F11
+    1500, // 102 check maximized again; restore; navigate to example.com
+    3500, // 103 check 1200x800; write the requestFullscreen page
+    1000, // 104 CDP click requestFullscreen
+    1500, // 105 check element fullscreen and the site notice; Esc
+    1500, // 106 check restored; second tab; back to a fresh page
+    3500, // 107 write the requestFullscreen page
+    1000, // 108 CDP click requestFullscreen again
+    1500, // 109 check fullscreen, notice again; other tab fails; tab switch ends it
+    1500, // 110 check restored, old tab left fullscreen; a fresh page
+    3500, // 111 write the requestFullscreen page
+    1000, // 112 CDP click requestFullscreen a third time
+    1500, // 113 check fullscreen; this tab's renderer fails
+    1500, // 114 check restored; F11
+    1500, // 115 tab switch keeps F11 and the notice; F11 off
+    1500, // 116 check restored; F11
+    1500, // 117 Ctrl+L leaves fullscreen
+    1500, // 118 check restored, address focused
+    600,  // 119 F11
+    1500, // 120 Ctrl+T leaves fullscreen
+    1500, // 121 check restored, address focused; close the new tab
+    600,  // 122 F11
+    800,  // 123 focus the UI webview (the notice band) while the notice is up
+    3300, // 124 check the timeout gave the page its keys back
+    600,  // 125 F11 off
+    600,  // 126 F11 (first entry)
+    500,  // 127 F11 off
+    500,  // 128 F11 (second entry, ~1 s after the first)
+    3000, // 129 check the first entry's timer left the notice up
+    1000, // 130 check the second deadline took it down; F11 off
+    1500, // 131 open the find bar (Find API)
+    1500, // 132 check matches and bar; move the window
+    900,  // 133 note bar after move; tab switch
+    900,  // 134 note bar on the other tab; switch back
+    900,  // 135 note bar back on the tab; stop find
+    900,  // 136 check bar closed; close extras
+    900,  // 137 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -2013,6 +2067,531 @@ pub fn step(app: &mut App, n: u32) {
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
         88 => {
+            // Page tools. Find, print and DevTools keys are not ours: they reach
+            // WebView2 (find bar, print preview) or nothing (F12, DevTools off).
+            use crate::page_tools::keys as pk;
+            check(
+                "find-print-devtools-keys-reach-webview2",
+                Shortcut::from_key(pk::F, CTRL).is_none() && Shortcut::from_key(pk::P, CTRL).is_none() && Shortcut::from_key(pk::F12, NONE).is_none(),
+                "Ctrl+F, Ctrl+P or F12 is mapped",
+            );
+            check(
+                "esc-is-the-pages-outside-fullscreen",
+                !crate::page_tools::esc_exits_fullscreen() && press_live(app, pk::ESCAPE, NONE).is_none(),
+                "Esc mapped while not fullscreen",
+            );
+            let id = app.tabs.active().unwrap();
+            let content = settings_of(app.view(id).unwrap());
+            let ui = settings_of(&app.ui);
+            log(&format!("INFO settings (devtools, browser keys, zoom): content {content:?}, ui {ui:?}"));
+            check("content-keeps-browser-keys", content.1, format!("{content:?}"));
+            check("devtools-off-in-ui-and-content", !content.0 && !ui.0, format!("content {content:?} ui {ui:?}"));
+            check("zoom-control-on-content-not-ui", content.2 && !ui.2, format!("content {content:?} ui {ui:?}"));
+            remember("zoom-a", i64::from(id));
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/".into())));
+        }
+        89 => {
+            let a = recall("zoom-a") as TabId;
+            check("zoom-test-page-loaded", tab_url(app, a).starts_with("https://example.com/"), tab_url(app, a));
+            // A page's Keyboard Lock would take Esc and F11 from the app (and
+            // Alt+Tab from the system) in fullscreen; it must not be there.
+            page_js(app, KEYBOARD_LOCK_JS);
+            let sc = press(app, crate::page_tools::keys::OEM_PLUS, CTRL);
+            check("ctrl-plus-is-zoom-in", sc == Some(Shortcut::Page(PageKey::ZoomIn)), format!("{sc:?}"));
+        }
+        90 => {
+            let a = recall("zoom-a") as TabId;
+            // The shortcut's handling moves one step (100 -> 110). That a physical
+            // key press arrives once (not also as WebView2's own zoom key) is on
+            // the manual checklist.
+            let native = native_zoom(app, a);
+            check(
+                "zoom-in-shortcut-moves-one-step",
+                app.tabs.get(a).is_some_and(|t| t.zoom == 110) && (native - 1.1).abs() < 0.001,
+                format!("native {native}: {}", app.tabs.to_json()),
+            );
+            page_eval(app, "zoom-scales-page", "`w=${innerWidth}`", |r| {
+                check("zoom-scales-page", (num(&r, "w") - 1200.0 / 1.1).abs() <= 2.0, &r);
+            });
+            page_eval(app, "keyboard-lock-unavailable", "`main=${window.__kl};iframe=${window.__kl2}`", |r| {
+                log(&format!("INFO Keyboard Lock in a content tab: {r}"));
+                let main = field(&r, "main");
+                check("keyboard-lock-unavailable", main == "missing" || main.starts_with("rejected"), &r);
+                let borrowed = field(&r, "iframe");
+                check("keyboard-lock-not-borrowable-from-iframe", borrowed == "missing" || borrowed.starts_with("rejected"), &r);
+            });
+            ui_eval(app, "zoom-indicator-shows-level", ZOOM_UI_JS, |r| {
+                check(
+                    "zoom-indicator-shows-level",
+                    field(&r, "hidden") == "false" && field(&r, "text") == "%110" && field(&r, "inside") == "true"
+                        && field(&r, "top") == "true" && field(&r, "label").contains("%110"),
+                    &r,
+                );
+            });
+            // Per tab or per origin: a second tab on the same origin.
+            app.handle(UserEvent::Ui(UiCommand::NewTab));
+            remember("zoom-b", i64::from(app.tabs.active().unwrap()));
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?second-tab".into())));
+        }
+        91 => {
+            let (a, b) = (recall("zoom-a") as TabId, recall("zoom-b") as TabId);
+            let (za, zb) = (app.tabs.get(a).map_or(0, |t| t.zoom), app.tabs.get(b).map_or(0, |t| t.zoom));
+            let nb = native_zoom(app, b);
+            log(&format!(
+                "INFO zoom scope: tab A (example.com) {za}%, new tab B on the same origin {zb}% (native {nb}), B url {}",
+                tab_url(app, b)
+            ));
+            check("zoom-state-matches-webview2", zb == crate::page_tools::zoom_percent(nb), format!("{zb} vs {nb}"));
+            let want = if zb == 100 { "hidden=true".to_string() } else { format!("text=%{zb}") };
+            ui_eval(app, "zoom-indicator-follows-new-tab", ZOOM_UI_JS, move |r| {
+                check("zoom-indicator-follows-new-tab", r.contains(&want), format!("want {want}: {r}"));
+            });
+            app.activate(a);
+            app.flush();
+            ui_eval(app, "zoom-indicator-follows-tab-switch", ZOOM_UI_JS, |r| {
+                check("zoom-indicator-follows-tab-switch", field(&r, "hidden") == "false" && field(&r, "text") == "%110", &r);
+            });
+            // Does a zoom set by the host survive a navigation to another origin?
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/".into())));
+        }
+        92 => {
+            let a = recall("zoom-a") as TabId;
+            let za = app.tabs.get(a).map_or(0, |t| t.zoom);
+            let na = native_zoom(app, a);
+            log(&format!("INFO zoom scope: tab A after navigating to {} is at {za}% (native {na})", tab_url(app, a)));
+            check(
+                "zoom-state-matches-webview2-after-navigation",
+                tab_url(app, a).starts_with("https://example.org/") && za == crate::page_tools::zoom_percent(na),
+                format!("{za} vs {na} at {}", tab_url(app, a)),
+            );
+            let sc = press(app, crate::page_tools::keys::ZERO, CTRL);
+            check("ctrl-0-is-zoom-reset", sc == Some(Shortcut::Page(PageKey::ZoomReset)), format!("{sc:?}"));
+        }
+        93 => {
+            let a = recall("zoom-a") as TabId;
+            let na = native_zoom(app, a);
+            check(
+                "ctrl-0-resets-zoom",
+                app.tabs.get(a).is_some_and(|t| t.zoom == 100) && (na - 1.0).abs() < 0.001,
+                format!("native {na}: {}", app.tabs.to_json()),
+            );
+            ui_eval(app, "zoom-indicator-hidden-at-100", ZOOM_UI_JS, |r| {
+                check("zoom-indicator-hidden-at-100", field(&r, "hidden") == "true" && num(&r, "w") == 0.0, &r);
+            });
+            let sc = press(app, crate::page_tools::keys::SUBTRACT, CTRL);
+            check("ctrl-numpad-minus-is-zoom-out", sc == Some(Shortcut::Page(PageKey::ZoomOut)), format!("{sc:?}"));
+        }
+        94 => {
+            let a = recall("zoom-a") as TabId;
+            let na = native_zoom(app, a);
+            check(
+                "zoom-out-one-step",
+                app.tabs.get(a).is_some_and(|t| t.zoom == 90) && (na - 0.9).abs() < 0.001,
+                format!("native {na}: {}", app.tabs.to_json()),
+            );
+            ui_eval(app, "zoom-indicator-shows-zoom-out", ZOOM_UI_JS, |r| {
+                check("zoom-indicator-shows-zoom-out", field(&r, "hidden") == "false" && field(&r, "text") == "%90", &r);
+            });
+            // The indicator is the reset button (click -> IPC zoom-reset:<id>).
+            ui_js(app, "document.getElementById('zoom').click()");
+        }
+        95 => {
+            let a = recall("zoom-a") as TabId;
+            let na = native_zoom(app, a);
+            check(
+                "zoom-indicator-click-resets",
+                app.tabs.get(a).is_some_and(|t| t.zoom == 100) && (na - 1.0).abs() < 0.001,
+                format!("native {na}: {}", app.tabs.to_json()),
+            );
+            ui_eval(app, "zoom-indicator-hidden-after-reset", ZOOM_UI_JS, |r| {
+                check("zoom-indicator-hidden-after-reset", field(&r, "hidden") == "true", &r);
+            });
+            // Tab B has served its purpose (zoom scope); later steps count on two tabs.
+            app.close_tab(recall("zoom-b") as TabId, true);
+            // Ctrl+wheel is WebView2's own; whether a CDP wheel reaches it is only noted.
+            if let Some(v) = app.view(a) {
+                cdp(v, "Input.dispatchMouseEvent", r#"{"type":"mouseWheel","x":300,"y":300,"deltaX":0,"deltaY":-120,"modifiers":2}"#);
+            }
+        }
+        96 => {
+            let a = recall("zoom-a") as TabId;
+            log(&format!("INFO CDP Ctrl+wheel up: tab A at {}% (native {})", app.tabs.get(a).map_or(0, |t| t.zoom), native_zoom(app, a)));
+            press(app, crate::page_tools::keys::ZERO, CTRL);
+            // F11 from a normal 1200x800 window.
+            if let Ok(p) = app.window.outer_position() {
+                remember("win-x", i64::from(p.x));
+                remember("win-y", i64::from(p.y));
+            }
+            let sc = press(app, crate::page_tools::keys::F11, NONE);
+            check("f11-is-toggle-fullscreen", sc == Some(Shortcut::Page(PageKey::ToggleFullscreen)), format!("{sc:?}"));
+            // The strip gives way to the notice band (checked in the next step).
+            check(
+                "f11-hides-strip",
+                app.fullscreen.window && app.window.fullscreen().is_some() && app.fullscreen.notice_up(),
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+            // State only: the Esc mapping is armed (a real Esc key is on the manual list).
+            check("esc-mapping-armed-in-f11", crate::page_tools::esc_exits_fullscreen(), "Esc not armed");
+        }
+        97 => {
+            check_layout("f11-covers-screen", fullscreen_layout(app));
+            page_eval(app, "f11-page-gets-whole-screen", "`w=${innerWidth};h=${innerHeight};sw=${screen.width};sh=${screen.height}`", |r| {
+                check(
+                    "f11-page-gets-whole-screen",
+                    (num(&r, "w") - num(&r, "sw")).abs() <= 1.0 && (num(&r, "h") - num(&r, "sh")).abs() <= 1.0,
+                    &r,
+                );
+            });
+            check_notice(app, ["f11-notice-over-page", "f11-notice-shows", "f11-notice-keeps-page-focus"], "", F11_NOTICE);
+            capture(app, "16-fullscreen-f11");
+        }
+        98 => {
+            // NOTICE_TIME (3.5 s) after F11: the notice is gone, the strip stays hidden.
+            check(
+                "f11-notice-times-out",
+                !app.fullscreen.notice_up() && !visible(&app.ui) && app.fullscreen.window,
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+            ui_eval(app, "f11-notice-hidden-after-timeout", NOTICE_UI_JS, |r| {
+                check("f11-notice-hidden-after-timeout", field(&r, "hidden") == "true" && field(&r, "inert") == "false", &r);
+            });
+            check_layout("f11-covers-screen-after-notice", fullscreen_layout(app));
+            // The mapping with the live Esc state, then the app's handling of it.
+            let sc = press_live(app, crate::page_tools::keys::ESCAPE, NONE);
+            check("esc-mapping-leaves-f11", sc == Some(Shortcut::Page(PageKey::ExitFullscreen)), format!("{sc:?}"));
+        }
+        99 => {
+            check_layout("esc-restores-window", normal_layout(app, false));
+            let p = app.window.outer_position().map(|p| (i64::from(p.x), i64::from(p.y))).unwrap_or((-1, -1));
+            check(
+                "f11-restores-position",
+                p == (recall("win-x"), recall("win-y")),
+                format!("{p:?} want {}, {}", recall("win-x"), recall("win-y")),
+            );
+            check(
+                "esc-disarmed-after-fullscreen",
+                !crate::page_tools::esc_exits_fullscreen() && press_live(app, crate::page_tools::keys::ESCAPE, NONE).is_none(),
+                "Esc still mapped",
+            );
+            app.window.set_maximized(true);
+        }
+        100 => {
+            check("maximized-before-f11", app.window.is_maximized(), "not maximized");
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        101 => {
+            check_layout("f11-from-maximized-covers-screen", fullscreen_layout(app));
+            // Every entry shows the notice again.
+            check("f11-notice-again-on-reentry", app.fullscreen.notice_up() && visible(&app.ui), format!("{:?}", app.fullscreen));
+            ui_eval(app, "f11-notice-text-on-reentry", NOTICE_UI_JS, |r| {
+                check("f11-notice-text-on-reentry", field(&r, "hidden") == "false" && field(&r, "text") == F11_NOTICE, &r);
+            });
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        102 => {
+            check_layout("f11-again-restores-maximized", normal_layout(app, true));
+            app.window.set_maximized(false);
+            // The requestFullscreen page, on a real origin (the notice names it).
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?fullscreen".into())));
+        }
+        103 => {
+            check_layout("unmaximized-after-fullscreen", normal_layout(app, false));
+            write_fullscreen_page(app);
+        }
+        104 => {
+            // A trusted click on the page's requestFullscreen button.
+            if let Some(v) = app.view(recall("zoom-a") as TabId) {
+                cdp_click(v, 150.0, 100.0);
+            }
+        }
+        105 => {
+            let a = recall("zoom-a") as TabId;
+            check("page-fullscreen-reported", app.fullscreen.page == Some(a) && !app.fullscreen.window, format!("{:?}", app.fullscreen));
+            check_layout("page-fullscreen-covers-screen", fullscreen_layout(app));
+            page_eval(app, "page-fullscreen-element-fills-screen", FS_PAGE_JS, |r| {
+                check(
+                    "page-fullscreen-element-fills-screen",
+                    field(&r, "fs") == "stage" && (num(&r, "ew") - num(&r, "sw")).abs() <= 1.0 && (num(&r, "eh") - num(&r, "sh")).abs() <= 1.0,
+                    &r,
+                );
+            });
+            check_notice(
+                app,
+                ["page-notice-over-page", "page-notice-names-site", "page-notice-keeps-page-focus"],
+                "example.com",
+                PAGE_NOTICE,
+            );
+            check("esc-mapping-armed-in-page-fullscreen", crate::page_tools::esc_exits_fullscreen(), "Esc left to the page");
+            capture(app, "17-fullscreen-page");
+            // Esc through the host: it restores the window whatever the page does.
+            let sc = press_live(app, crate::page_tools::keys::ESCAPE, NONE);
+            check("esc-mapping-leaves-page-fullscreen", sc == Some(Shortcut::Page(PageKey::ExitFullscreen)), format!("{sc:?}"));
+        }
+        106 => {
+            check_layout("page-fullscreen-exit-restores-window", normal_layout(app, false));
+            check("page-fullscreen-state-cleared", !app.fullscreen.on() && !app.fullscreen.notice_up(), format!("{:?}", app.fullscreen));
+            page_eval(app, "page-left-fullscreen", "`fs=${document.fullscreenElement}`", |r| {
+                check("page-left-fullscreen", field(&r, "fs") == "null", &r);
+            });
+            ui_eval(app, "notice-gone-strip-back", NOTICE_UI_JS, |r| {
+                check("notice-gone-strip-back", field(&r, "hidden") == "true" && field(&r, "inert") == "false", &r);
+            });
+            // A second tab to switch to while the page is fullscreen.
+            let a = recall("zoom-a") as TabId;
+            app.handle(UserEvent::Ui(UiCommand::NewTab));
+            remember("fs-other", i64::from(app.tabs.active().unwrap()));
+            app.activate(a);
+            app.flush();
+            // A fresh document for the second request.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?fullscreen-2".into())));
+        }
+        107 => write_fullscreen_page(app),
+        108 => {
+            if let Some(v) = app.view(recall("zoom-a") as TabId) {
+                cdp_click(v, 150.0, 100.0);
+            }
+        }
+        109 => {
+            let a = recall("zoom-a") as TabId;
+            let other = recall("fs-other") as TabId;
+            log(&format!("INFO second fullscreen request: {:?}, active {:?}, tabs {}", app.fullscreen, app.tabs.active(), app.tabs.len()));
+            page_eval(app, "second-fullscreen-request-state", "`req=${window.__fs};fs=${document.fullscreenElement && document.fullscreenElement.id};vis=${document.visibilityState};focus=${document.hasFocus()}`", |r| {
+                log(&format!("INFO second fullscreen request in page: {r}"));
+            });
+            check("page-fullscreen-again", app.fullscreen.page == Some(a), format!("{:?}", app.fullscreen));
+            check_layout("page-fullscreen-again-covers-screen", fullscreen_layout(app));
+            check("page-notice-again-on-reentry", app.fullscreen.notice_up() && visible(&app.ui), format!("{:?}", app.fullscreen));
+            ui_eval(app, "page-notice-site-on-reentry", NOTICE_UI_JS, |r| {
+                check("page-notice-site-on-reentry", field(&r, "hidden") == "false" && field(&r, "site") == "example.com", &r);
+            });
+            // Another tab's renderer failing leaves this tab's fullscreen alone.
+            app.handle(UserEvent::ProcessFailed { tab: Some(other), failure: crate::app::Failure::RendererExited });
+            check("other-tab-failure-keeps-fullscreen", app.fullscreen.page == Some(a), format!("{:?}", app.fullscreen));
+            app.handle(UserEvent::Shortcut(Shortcut::NextTab));
+            check(
+                "tab-switch-ends-page-fullscreen",
+                app.tabs.active() == Some(other) && !app.fullscreen.on() && !app.fullscreen.notice_up() && visible(&app.ui),
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+        }
+        110 => {
+            let a = recall("zoom-a") as TabId;
+            check_layout("tab-switch-restores-window", normal_layout(app, false));
+            check("tab-switch-shows-only-new-tab", only_active_visible(app), "views out of step");
+            eval(app.view(a), "old-tab-left-element-fullscreen", "`fs=${document.fullscreenElement}`", |r| {
+                check("old-tab-left-element-fullscreen", field(&r, "fs") == "null", &r);
+            });
+            // A third entry, for a renderer failure of the fullscreen tab itself.
+            app.activate(a);
+            app.flush();
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?fullscreen-3".into())));
+        }
+        111 => write_fullscreen_page(app),
+        112 => {
+            if let Some(v) = app.view(recall("zoom-a") as TabId) {
+                cdp_click(v, 150.0, 100.0);
+            }
+        }
+        113 => {
+            let a = recall("zoom-a") as TabId;
+            check("page-fullscreen-third", app.fullscreen.page == Some(a) && app.fullscreen.notice_up(), format!("{:?}", app.fullscreen));
+            // The event WebView2 raises when this tab's renderer dies.
+            app.handle(UserEvent::ProcessFailed { tab: Some(a), failure: crate::app::Failure::RendererExited });
+            check(
+                "failed-tab-gives-up-fullscreen",
+                !app.fullscreen.on() && !app.fullscreen.notice_up() && visible(&app.ui) && !crate::page_tools::esc_exits_fullscreen(),
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+        }
+        114 => {
+            check_layout("failed-tab-restores-window", normal_layout(app, false));
+            // F11 belongs to the window: it stays across a tab switch.
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        115 => {
+            app.handle(UserEvent::Shortcut(Shortcut::NextTab));
+            check(
+                "f11-survives-tab-switch",
+                app.tabs.active() == Some(recall("fs-other") as TabId) && app.fullscreen.window,
+                format!("{:?}", app.fullscreen),
+            );
+            check_layout("f11-switched-tab-covers-screen", fullscreen_layout(app));
+            // The notice (still up) stays above the newly shown page.
+            check_layout("notice-above-switched-tab", notice_on_top(app));
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        116 => {
+            check_layout("f11-off-after-tab-switch", normal_layout(app, false));
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        117 => {
+            // Ctrl+L needs the strip: fullscreen gives way.
+            let sc = press(app, vk::L, CTRL);
+            check(
+                "ctrl-l-leaves-fullscreen",
+                sc == Some(Shortcut::FocusAddress) && !app.fullscreen.on(),
+                format!("{sc:?} {:?}", app.fullscreen),
+            );
+        }
+        118 => {
+            check_layout("ctrl-l-restores-window", normal_layout(app, false));
+            ui_eval(app, "ctrl-l-focuses-address-after-fullscreen", "`focus=${document.hasFocus()};el=${document.activeElement && document.activeElement.id}`", |r| {
+                check("ctrl-l-focuses-address-after-fullscreen", field(&r, "focus") == "true" && field(&r, "el") == "address", &r);
+            });
+        }
+        119 => {
+            press(app, crate::page_tools::keys::F11, NONE);
+            remember("tabs-before-ctrl-t", app.tabs.len() as i64);
+        }
+        120 => {
+            // Ctrl+T: a new tab whose address bar must be usable.
+            let sc = press(app, vk::T, CTRL);
+            check(
+                "ctrl-t-leaves-fullscreen",
+                sc == Some(Shortcut::NewTab) && !app.fullscreen.on() && app.tabs.len() as i64 == recall("tabs-before-ctrl-t") + 1,
+                format!("{sc:?} {:?}, {} tabs", app.fullscreen, app.tabs.len()),
+            );
+        }
+        121 => {
+            check_layout("ctrl-t-restores-window", normal_layout(app, false));
+            ui_eval(app, "ctrl-t-focuses-address-after-fullscreen", "`focus=${document.hasFocus()};el=${document.activeElement && document.activeElement.id}`", |r| {
+                check("ctrl-t-focuses-address-after-fullscreen", field(&r, "focus") == "true" && field(&r, "el") == "address", &r);
+            });
+            if let Some(id) = app.tabs.active() {
+                app.close_tab(id, false);
+            }
+            app.activate(recall("zoom-a") as TabId);
+        }
+        122 => {
+            // N1: a click on the notice band takes the keyboard into the UI
+            // webview; the timeout must hand it back to the page.
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        123 => {
+            // In-app stand-in for that click: focus moved into the UI webview
+            // through its controller (no desktop input).
+            let _ = app.ui.focus();
+            ui_eval(app, "notice-band-focus-moves-to-ui", "`up=${!document.getElementById('fs-notice').hidden};focus=${document.hasFocus()}`", |r| {
+                check("notice-band-focus-moves-to-ui", field(&r, "up") == "true" && field(&r, "focus") == "true", &r);
+            });
+        }
+        124 => {
+            check(
+                "notice-timeout-hides-band",
+                app.fullscreen.window && !app.fullscreen.notice_up() && !visible(&app.ui),
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+            page_eval(app, "notice-timeout-gives-page-keys-back", "`focus=${document.hasFocus()}`", |r| {
+                check("notice-timeout-gives-page-keys-back", field(&r, "focus") == "true", &r);
+            });
+        }
+        125 => {
+            press(app, crate::page_tools::keys::F11, NONE);
+            check("f11-off-before-stale-timer", !app.fullscreen.on(), format!("{:?}", app.fullscreen));
+        }
+        126 => {
+            // N2: F11 on, off and on again within about 1 s; the first entry's
+            // timer must not take the second entry's notice down.
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        127 => {
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        128 => {
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        129 => {
+            // About 4 s after the first entry (its deadline passed), 3 s after
+            // the second.
+            check(
+                "stale-notice-timer-ignored",
+                app.fullscreen.window && app.fullscreen.notice_up() && visible(&app.ui),
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+        }
+        130 => {
+            // Past the second entry's deadline.
+            check(
+                "notice-times-out-after-reentry",
+                app.fullscreen.window && !app.fullscreen.notice_up() && !visible(&app.ui),
+                format!("{:?} ui visible {}", app.fullscreen, visible(&app.ui)),
+            );
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        131 => {
+            // The find bar, opened in-app through WebView2's Find API (the same bar
+            // Ctrl+F opens): a window of the browser process, outside our HWND tree.
+            BASE_WINDOWS.set(browser_windows(app).into_iter().map(|(h, _)| h).collect());
+            log(&format!("INFO browser-process windows before find: {:?}", browser_windows(app)));
+            let started = app.view(recall("zoom-a") as TabId).map(|v| {
+                // Ctrl+F comes from a focused page.
+                let _ = v.focus();
+                find_start(v, "needle")
+            });
+            match started {
+                Some(Ok(f)) => FIND.with(|c| *c.borrow_mut() = Some(f)),
+                other => check("find-api-starts", false, format!("{other:?}")),
+            }
+        }
+        132 => {
+            let hr = FIND_START.load(Ordering::Relaxed);
+            let count = FIND.with(|c| {
+                c.borrow().as_ref().map_or(-1, |f| {
+                    let mut n = -1;
+                    unsafe {
+                        let _ = f.MatchCount(&mut n);
+                    }
+                    n
+                })
+            });
+            check("find-api-starts", hr == 0, format!("Start completed with {hr:#x}"));
+            check("find-counts-matches", count == 3, format!("{count} matches"));
+            let bar = find_bar(app);
+            log(&format!("INFO find bar windows: {bar:?}; app window at {:?} size {:?}", app.window.outer_position(), app.window.outer_size()));
+            check("find-bar-opens", !bar.is_empty(), "no new browser-process window");
+            if let Some((_, r)) = bar.first() {
+                remember("bar-x", i64::from(r[0]));
+                remember("bar-y", i64::from(r[1]));
+            }
+            capture(app, "18-find");
+            // Window move: does the bar follow?
+            if let Ok(p) = app.window.outer_position() {
+                app.window.set_outer_position(tao::dpi::PhysicalPosition::new(p.x + 80, p.y + 50));
+            }
+        }
+        133 => {
+            let bar = find_bar(app);
+            let moved = bar.first().map(|(_, r)| (i64::from(r[0]) - recall("bar-x"), i64::from(r[1]) - recall("bar-y")));
+            log(&format!(
+                "INFO find bar after the window moved by (80, 50) px to {:?}: {bar:?}, bar moved by {moved:?}",
+                app.window.outer_position()
+            ));
+            app.window.set_outer_position(tao::dpi::PhysicalPosition::new(recall("win-x") as i32, recall("win-y") as i32));
+            app.handle(UserEvent::Shortcut(Shortcut::NextTab));
+        }
+        134 => {
+            let bar = find_bar(app);
+            log(&format!("INFO find bar after switching to another tab: {bar:?}"));
+            app.handle(UserEvent::Shortcut(Shortcut::NextTab));
+        }
+        135 => {
+            let bar = find_bar(app);
+            log(&format!("INFO find bar after switching back to the searched tab: {bar:?}"));
+            FIND.with(|c| {
+                if let Some(f) = c.borrow_mut().take() {
+                    unsafe {
+                        let _ = f.Stop();
+                    }
+                }
+            });
+        }
+        136 => {
+            let bar = find_bar(app);
+            check("find-stop-closes-bar", bar.is_empty(), format!("{bar:?}"));
+            close_extra_tabs(app);
+            app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
+        }
+        137 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -2027,6 +2606,332 @@ pub fn step(app: &mut App, n: u32) {
         }
         _ => {}
     }
+}
+
+/// A key-down with the live Esc state, as the native hook reads it
+/// (`Shortcut::from_key_in` with `esc_exits_fullscreen`).
+fn press_live(app: &mut App, key: u32, mods: Mods) -> Option<Shortcut> {
+    let sc = Shortcut::from_key_in(key, mods, crate::page_tools::esc_exits_fullscreen())?;
+    app.handle(UserEvent::Shortcut(sc));
+    Some(sc)
+}
+
+/// WebView2's zoom factor of tab `id` (NaN without a view).
+fn native_zoom(app: &App, id: TabId) -> f64 {
+    app.view(id).and_then(crate::native::zoom_factor).unwrap_or(f64::NAN)
+}
+
+/// (DevTools, browser accelerator keys, zoom control) of a webview's settings.
+fn settings_of(v: &wry::WebView) -> (bool, bool, bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows::core::{BOOL, Interface};
+    let (mut dev, mut keys, mut zoom) = (BOOL(1), BOOL(0), BOOL(0));
+    unsafe {
+        if let Ok(s) = v.webview().Settings() {
+            let _ = s.AreDevToolsEnabled(&mut dev);
+            let _ = s.IsZoomControlEnabled(&mut zoom);
+            if let Ok(s3) = s.cast::<ICoreWebView2Settings3>() {
+                let _ = s3.AreBrowserAcceleratorKeysEnabled(&mut keys);
+            }
+        }
+    }
+    (dev.as_bool(), keys.as_bool(), zoom.as_bool())
+}
+
+/// The address bar's zoom indicator: shown, text, inside the address box,
+/// topmost at its centre, accessible name.
+const ZOOM_UI_JS: &str = "(() => { const b = document.getElementById('zoom'), r = b.getBoundingClientRect(), \
+  a = document.getElementById('address-box').getBoundingClientRect(); \
+  const hit = r.width > 0 ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null; \
+  return `hidden=${b.hidden};text=${b.textContent.trim()};w=${r.width};inside=${r.left >= a.left && r.right <= a.right};\
+top=${!!hit && b.contains(hit)};label=${b.getAttribute('aria-label')}`; })()";
+
+/// A requestFullscreen button (top left, 300x200) and some text to find.
+const FULLSCREEN_HTML: &str = r#"<!doctype html><title>Fullscreen</title>
+<style>html,body{margin:0}#go{position:absolute;left:0;top:0;width:300px;height:200px}#stage{margin-top:220px;background:#246;color:#fff}</style>
+<button id="go" onclick="document.getElementById('stage').requestFullscreen().then(() => { window.__fs = 'on'; }, (e) => { window.__fs = e.name + ': ' + e.message; })">go</button>
+<div id="stage">needle one, needle two, needle three</div>"#;
+
+/// The fullscreen element and its size against the screen (CSS px).
+const FS_PAGE_JS: &str = "(() => { const e = document.fullscreenElement, r = e ? e.getBoundingClientRect() : { width: 0, height: 0 }; \
+  return `fs=${e && e.id};ew=${r.width};eh=${r.height};sw=${screen.width};sh=${screen.height};req=${window.__fs}`; })()";
+
+/// The F11 notice text, and the page notice's text after the site name.
+const F11_NOTICE: &str = "Tam ekran — çıkmak için F11 ya da Esc";
+const PAGE_NOTICE: &str = " tam ekran — çıkmak için Esc";
+
+/// The fullscreen notice as the UI draws it: hidden, its two texts, shown
+/// (computed style), covering the UI viewport, topmost at its centre, and the
+/// strip under it inert.
+const NOTICE_UI_JS: &str = "(() => { const n = document.getElementById('fs-notice'), s = getComputedStyle(n), r = n.getBoundingClientRect(); \
+  const hit = document.elementFromPoint(innerWidth / 2, innerHeight / 2); \
+  return `hidden=${n.hidden};site=${document.getElementById('fs-notice-site').textContent};\
+text=${document.getElementById('fs-notice-text').textContent};\
+shown=${s.display !== 'none' && s.visibility === 'visible' && s.opacity === '1'};\
+covers=${r.left <= 0 && r.top <= 0 && r.right >= innerWidth && r.bottom >= innerHeight && innerWidth > 0};\
+hit=${!!hit && n.contains(hit)};inert=${document.getElementById('strip').inert}`; })()";
+
+/// The notice up over the page, from both sides: the UI webview shown as the
+/// notice band, the page under it over the whole window, and the band the
+/// topmost of the window's children at its centre (what a click there hits).
+fn notice_on_top(app: &App) -> Result<String, String> {
+    use windows::Win32::Foundation::{HWND, POINT};
+    use windows::Win32::UI::WindowsAndMessaging::{CWP_SKIPINVISIBLE, ChildWindowFromPointEx};
+    use tao::platform::windows::WindowExtWindows;
+    let v = app.tabs.active().and_then(|id| app.view(id)).ok_or("no active view")?;
+    let (w, h) = logical_size(app);
+    let want = crate::app::notice_rect(LogicalSize::new(w, h));
+    let scale = app.window.scale_factor();
+    let (wp, ws) = (want.position.to_logical::<f64>(scale), want.size.to_logical::<f64>(scale));
+    let (x, y, bw, bh) = bounds_of(app, &app.ui);
+    let (cx, cy, cw, ch) = bounds_of(app, v);
+    let mut host = HWND::default();
+    let hit = unsafe {
+        let _ = app.ui.controller().ParentWindow(&mut host);
+        let pt = POINT { x: ((x + bw / 2.0) * scale) as i32, y: ((y + bh / 2.0) * scale) as i32 };
+        ChildWindowFromPointEx(HWND(app.window.hwnd() as _), pt, CWP_SKIPINVISIBLE)
+    };
+    let info = format!(
+        "notice up {}, ui visible {}, band ({x}, {y}) {bw}x{bh} want ({}, {}) {}x{}, content ({cx}, {cy}) {cw}x{ch} of {w}x{h}, \
+         child at band centre {:?}, ui host {:?}",
+        app.fullscreen.notice_up(),
+        visible(&app.ui),
+        wp.x,
+        wp.y,
+        ws.width,
+        ws.height,
+        hit.0,
+        host.0
+    );
+    let ok = app.fullscreen.notice_up()
+        && visible(&app.ui)
+        && visible(v)
+        && (x - wp.x).abs() <= 1.0
+        && (y - wp.y).abs() <= 1.0
+        && (bw - ws.width).abs() <= 1.0
+        && (bh - ws.height).abs() <= 1.0
+        && cx.abs() <= 1.0
+        && cy.abs() <= 1.0
+        && (cw - w).abs() <= 1.0
+        && (ch - h).abs() <= 1.0
+        && !host.is_invalid()
+        && hit == host;
+    if ok { Ok(info) } else { Err(info) }
+}
+
+/// The notice checks: `names` = [over the page (native), drawn with `site`
+/// and `text` (UI), keyboard focus left with the page].
+fn check_notice(app: &App, names: [&'static str; 3], site: &'static str, text: &'static str) {
+    check_layout(names[0], notice_on_top(app));
+    let name = names[1];
+    ui_eval(app, name, NOTICE_UI_JS, move |r| {
+        check(
+            name,
+            field(&r, "hidden") == "false"
+                && field(&r, "site") == site
+                && field(&r, "text") == text
+                && field(&r, "shown") == "true"
+                && field(&r, "covers") == "true"
+                && field(&r, "hit") == "true"
+                && field(&r, "inert") == "true",
+            &r,
+        );
+    });
+    let name = names[2];
+    page_eval(app, name, "`focus=${document.hasFocus()}`", move |r| {
+        check(name, field(&r, "focus") == "true", &r);
+    });
+}
+
+/// Replaces the active tab's document (a fresh https://example.com/ page)
+/// with `FULLSCREEN_HTML`: a real origin, so the notice has a site to name.
+fn write_fullscreen_page(app: &App) {
+    let mut lit = String::new();
+    crate::tabs::push_json_str(&mut lit, FULLSCREEN_HTML);
+    page_js(app, &format!("document.open(); document.write({lit}); document.close();"));
+}
+
+/// Keyboard Lock probes, in the top frame and with the method borrowed from
+/// a fresh `about:blank` iframe's realm (one no injected script runs in):
+/// `window.__kl` / `window.__kl2` become `missing`, `resolved` or
+/// `rejected:<name>`.
+const KEYBOARD_LOCK_JS: &str = "window.__kl = window.__kl2 = 'pending'; \
+  const kl = async (lock) => { if (typeof lock !== 'function') return 'missing'; \
+    try { await lock.call(navigator.keyboard, ['Escape', 'F11']); navigator.keyboard.unlock(); return 'resolved'; } \
+    catch (e) { return 'rejected:' + e.name; } }; \
+  (async () => { const k = navigator.keyboard; window.__kl = await kl(k && k.lock); \
+    const f = document.createElement('iframe'); document.body.appendChild(f); \
+    const K = f.contentWindow.Keyboard; window.__kl2 = await kl(K && K.prototype.lock); f.remove(); })()";
+
+fn check_layout(name: &str, r: Result<String, String>) {
+    match r {
+        Ok(info) => {
+            log(&format!("INFO {name}: {info}"));
+            check(name, true, "");
+        }
+        Err(detail) => check(name, false, detail),
+    }
+}
+
+/// Logical (x, y, w, h) of a webview's bounds.
+fn bounds_of(app: &App, v: &wry::WebView) -> (f64, f64, f64, f64) {
+    let scale = app.window.scale_factor();
+    let Ok(b) = v.bounds() else { return (f64::NAN, f64::NAN, f64::NAN, f64::NAN) };
+    let (p, s) = (b.position.to_logical::<f64>(scale), b.size.to_logical::<f64>(scale));
+    (p.x, p.y, s.width, s.height)
+}
+
+/// The window fullscreen on its monitor, the strip hidden (the UI webview
+/// shown only as the notice band while the notice is up), the active page
+/// over the whole window.
+fn fullscreen_layout(app: &App) -> Result<String, String> {
+    let v = app.tabs.active().and_then(|id| app.view(id)).ok_or("no active view")?;
+    let m = app.window.current_monitor().ok_or("no monitor")?;
+    let (ms, mp) = (m.size(), m.position());
+    let is = app.window.inner_size();
+    let ip = app.window.inner_position().map_err(|e| e.to_string())?;
+    let (w, h) = logical_size(app);
+    let (x, y, cw, ch) = bounds_of(app, v);
+    let (ux, uy, uw, uh) = bounds_of(app, &app.ui);
+    let band = crate::app::notice_rect(LogicalSize::new(w, h));
+    let scale = app.window.scale_factor();
+    let (bp, bs) = (band.position.to_logical::<f64>(scale), band.size.to_logical::<f64>(scale));
+    let info = format!(
+        "fullscreen {:?}, ui visible {} at ({ux}, {uy}) {uw}x{uh}, notice up {}, monitor {ms:?} at {mp:?}, window {is:?} at {ip:?}, \
+         content ({x}, {y}) {cw}x{ch} of {w}x{h}",
+        app.window.fullscreen().is_some(),
+        visible(&app.ui),
+        app.fullscreen.notice_up()
+    );
+    let ui_ok = if app.fullscreen.notice_up() {
+        visible(&app.ui)
+            && (ux - bp.x).abs() <= 1.0
+            && (uy - bp.y).abs() <= 1.0
+            && (uw - bs.width).abs() <= 1.0
+            && (uh - bs.height).abs() <= 1.0
+    } else {
+        !visible(&app.ui)
+    };
+    let ok = app.window.fullscreen().is_some()
+        && ui_ok
+        && visible(v)
+        && is.width.abs_diff(ms.width) <= 1
+        && is.height.abs_diff(ms.height) <= 1
+        && (ip.x - mp.x).abs() <= 1
+        && (ip.y - mp.y).abs() <= 1
+        && x.abs() <= 1.0
+        && y.abs() <= 1.0
+        && (cw - w).abs() <= 1.0
+        && (ch - h).abs() <= 1.0;
+    if ok { Ok(info) } else { Err(info) }
+}
+
+/// Not fullscreen, the strip shown, the active page below it; 1200x800
+/// unless `maximized`.
+fn normal_layout(app: &App, maximized: bool) -> Result<String, String> {
+    let v = app.tabs.active().and_then(|id| app.view(id)).ok_or("no active view")?;
+    let (w, h) = logical_size(app);
+    let (x, y, cw, ch) = bounds_of(app, v);
+    let ui_h = crate::app::UI_HEIGHT;
+    let info = format!(
+        "fullscreen {}, maximized {}, ui visible {}, window {w}x{h}, content ({x}, {y}) {cw}x{ch}",
+        app.window.fullscreen().is_some(),
+        app.window.is_maximized(),
+        visible(&app.ui)
+    );
+    let size_ok = if maximized { app.window.is_maximized() } else { !app.window.is_maximized() && (w - 1200.0).abs() <= 1.0 && (h - 800.0).abs() <= 1.0 };
+    let ok = app.window.fullscreen().is_none()
+        && visible(&app.ui)
+        && visible(v)
+        && size_ok
+        && x.abs() <= 1.0
+        && (y - ui_h).abs() <= 1.0
+        && (cw - w).abs() <= 1.0
+        && (ch - (h - ui_h)).abs() <= 1.0;
+    if ok { Ok(info) } else { Err(info) }
+}
+
+thread_local! {
+    /// The find session of the find-bar probe.
+    static FIND: std::cell::RefCell<Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Find>> =
+        const { std::cell::RefCell::new(None) };
+    /// Browser-process windows before the find bar opened.
+    static BASE_WINDOWS: std::cell::RefCell<Vec<isize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// HRESULT `ICoreWebView2Find::Start` completed with (1 = not yet).
+static FIND_START: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
+
+/// Starts WebView2's find (ICoreWebView2_28::Find) for `term` with its own
+/// find bar shown: what Ctrl+F does, opened without any key input.
+fn find_start(v: &wry::WebView, term: &str) -> windows::core::Result<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Find> {
+    use webview2_com::FindStartCompletedHandler;
+    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2_28, ICoreWebView2Environment15};
+    use windows::core::{HSTRING, Interface};
+    unsafe {
+        let find = v.webview().cast::<ICoreWebView2_28>()?.Find()?;
+        let options = v.environment().cast::<ICoreWebView2Environment15>()?.CreateFindOptions()?;
+        options.SetFindTerm(&HSTRING::from(term))?;
+        options.SetSuppressDefaultFindDialog(false)?;
+        find.Start(
+            &options,
+            &FindStartCompletedHandler::create(Box::new(|hr| {
+                FIND_START.store(hr.err().map_or(0, |e| e.code().0), Ordering::Relaxed);
+                Ok(())
+            })),
+        )?;
+        Ok(find)
+    }
+}
+
+/// Visible top-level windows of WebView2's browser process: (HWND, screen
+/// rect [left, top, right, bottom]).
+fn browser_windows(app: &App) -> Vec<(isize, [i32; 4])> {
+    let Some(v) = app.tabs.active().and_then(|id| app.view(id)) else { return Vec::new() };
+    let mut pid = 0;
+    unsafe {
+        if v.webview().BrowserProcessId(&mut pid).is_err() {
+            return Vec::new();
+        }
+    }
+    windows_of(pid)
+}
+
+/// Visible top-level windows of process `pid` (0: none).
+fn windows_of(pid: u32) -> Vec<(isize, [i32; 4])> {
+    use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible};
+    use windows::core::BOOL;
+    struct Ctx {
+        pid: u32,
+        out: Vec<(isize, [i32; 4])>,
+    }
+    unsafe extern "system" fn each(h: HWND, l: LPARAM) -> BOOL {
+        // SAFETY: `l` is the `Ctx` passed to EnumWindows below, alive for the call.
+        let ctx = unsafe { &mut *(l.0 as *mut Ctx) };
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        if pid == ctx.pid && unsafe { IsWindowVisible(h) }.as_bool() {
+            let mut r = RECT::default();
+            let _ = unsafe { GetWindowRect(h, &mut r) };
+            ctx.out.push((h.0 as isize, [r.left, r.top, r.right, r.bottom]));
+        }
+        BOOL(1)
+    }
+    if pid == 0 {
+        return Vec::new();
+    }
+    let mut ctx = Ctx { pid, out: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(&mut ctx as *mut Ctx as isize));
+    }
+    ctx.out
+}
+
+/// Browser-process windows that were not there before the find started.
+fn find_bar(app: &App) -> Vec<(isize, [i32; 4])> {
+    let base = BASE_WINDOWS.with(|b| b.borrow().clone());
+    browser_windows(app).into_iter().filter(|(h, _)| !base.contains(h)).collect()
 }
 
 fn cdp(v: &wry::WebView, method: &str, params: &str) {

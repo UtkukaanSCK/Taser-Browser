@@ -191,6 +191,14 @@ mod imp {
         if let Err(e) = crate::native::attach_audio(view, tab, proxy) {
             eprintln!("x-browser: tab {tab}: no audio events: {e}");
         }
+        // Zoom and page fullscreen too: without them the page just cannot
+        // zoom, or fills only its own area in fullscreen.
+        if let Err(e) = crate::native::attach_zoom(view, tab, proxy) {
+            eprintln!("x-browser: tab {tab}: no zoom events: {e}");
+        }
+        if let Err(e) = crate::native::attach_fullscreen(view, tab, proxy) {
+            eprintln!("x-browser: tab {tab}: no fullscreen events: {e}");
+        }
         let last_press = watch_presses(view);
         unsafe {
             // Fires for new documents *and* same-document changes (pushState,

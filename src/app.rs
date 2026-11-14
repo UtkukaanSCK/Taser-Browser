@@ -3,6 +3,7 @@
 
 use crate::commands::{Shortcut, TopEdge, UiCommand};
 use crate::native::{self, Proxy};
+use crate::page_tools::{self, Fullscreen};
 use crate::strip::{self, ClosedTabs};
 use crate::tabs::{Placement, TabId, Tabs};
 use crate::ui;
@@ -27,6 +28,8 @@ pub enum UserEvent {
     OpenTab { opener: TabId, url: String, background: bool },
     /// A WebView2 process died or hung. `tab` is `None` for the UI webview.
     ProcessFailed { tab: Option<TabId>, failure: Failure },
+    /// The fullscreen notice's timer ran out (see `page_tools`).
+    NoticeTimeout(u32),
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -43,6 +46,10 @@ pub enum PageEvent {
     /// None while a new document has none yet.
     Favicon(Option<String>),
     Audio { playing: bool, muted: bool },
+    /// The tab's zoom factor changed (keys, indicator, Ctrl+wheel).
+    Zoom(f64),
+    /// A page element entered (true) or left element fullscreen.
+    Fullscreen(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +112,8 @@ pub struct App {
     to_hide: Vec<TabId>,
     /// Keyboard focus follows a tab switch at the end of the pass (`flush`).
     focus_pending: bool,
+    /// F11 / page fullscreen (see `page_tools`).
+    pub fullscreen: Fullscreen,
     pub quit: bool,
 }
 
@@ -170,6 +179,7 @@ impl App {
             shown: None,
             to_hide: Vec::new(),
             focus_pending: false,
+            fullscreen: Fullscreen::default(),
             quit: false,
         })
     }
@@ -186,16 +196,26 @@ impl App {
         self.view(self.tabs.active()?)
     }
 
+    pub fn proxy(&self) -> &Proxy {
+        &self.proxy
+    }
+
+    /// Where the page goes: below the strip, or the whole window in fullscreen.
+    pub fn content_bounds(&self) -> Rect {
+        if self.fullscreen.on() { full_rect(self.size()) } else { content_rect(self.size()) }
+    }
+
     /// Creates a tab + webview. Returns the new id.
     pub fn open_tab(&mut self, url: &str, placement: Placement, activate: bool) -> wry::Result<TabId> {
         let id = self.tabs.add(url, placement);
         let p = self.proxy.clone();
-        let bounds = content_rect(self.size());
+        let bounds = self.content_bounds();
         // No `with_url`: the content settings below must be in place before
         // the first navigation starts, so `load_url` comes last.
         let builder = WebViewBuilder::new_with_web_context(&mut self.context)
             .with_bounds(bounds)
             .with_visible(false)
+            .with_initialization_script_for_main_only(page_tools::NO_KEYBOARD_LOCK, false)
             .with_document_title_changed_handler(move |title| {
                 let _ = p.send_event(UserEvent::Page(id, PageEvent::Title(title)));
             });
@@ -295,11 +315,16 @@ impl App {
         if want == self.shown {
             return;
         }
-        let rect = content_rect(self.size());
+        page_tools::on_switch(self, want);
+        let rect = self.content_bounds();
         if let Some(v) = want.and_then(|id| self.view(id)) {
             let _ = v.set_bounds(rect);
             native::raise(v);
             let _ = v.set_visible(true);
+        }
+        // The fullscreen notice stays above whichever page is shown.
+        if self.fullscreen.notice_up() {
+            native::raise(&self.ui);
         }
         if let Some(old) = self.shown {
             self.to_hide.push(old);
@@ -325,7 +350,8 @@ impl App {
             .active()
             .and_then(|id| self.tabs.get(id))
             .is_some_and(|t| t.url == url::BLANK);
-        if blank {
+        // In fullscreen the strip is hidden: focus stays with the page.
+        if blank && !self.fullscreen.on() {
             self.focus_address();
         } else if let Some(v) = self.active_view() {
             let _ = v.focus();
@@ -339,9 +365,12 @@ impl App {
 
     pub fn layout(&self) {
         let size = self.size();
-        let _ = self.ui.set_bounds(ui_rect(size));
+        // While fullscreen the UI webview is hidden, or shown only as the
+        // notice band.
+        let ui = if self.fullscreen.on() && self.fullscreen.notice_up() { notice_rect(size) } else { ui_rect(size) };
+        let _ = self.ui.set_bounds(ui);
         if let Some(v) = self.active_view() {
-            let _ = v.set_bounds(content_rect(size));
+            let _ = v.set_bounds(self.content_bounds());
         }
     }
 
@@ -408,12 +437,13 @@ impl App {
                 let _ = self.ui.reload();
             }
             // A dead page shows WebView2's error page; the tab stays, but
-            // must not keep spinning.
+            // must not keep spinning, nor keep the screen.
             (_, Some(id)) => {
                 if let Some(t) = self.tabs.get_mut(id) {
                     t.loading = false;
                     self.dirty = true;
                 }
+                page_tools::on_page_failed(self, id);
             }
         }
     }
@@ -433,6 +463,7 @@ impl App {
                 }
             }
             UserEvent::ProcessFailed { tab, failure } => self.on_process_failed(tab, failure),
+            UserEvent::NoticeTimeout(generation) => page_tools::on_notice_timeout(self, generation),
             #[cfg(feature = "selftest")]
             UserEvent::Test(step) => crate::selftest::step(self, step),
         }
@@ -449,7 +480,7 @@ impl App {
                 if crate::timing::quit_when_ready() {
                     self.quit = true;
                 }
-                if self.tabs.active().and_then(|id| self.tabs.get(id)).is_some_and(|t| t.url == url::BLANK) {
+                if !self.fullscreen.on() && self.tabs.active().and_then(|id| self.tabs.get(id)).is_some_and(|t| t.url == url::BLANK) {
                     self.focus_address();
                 }
             }
@@ -490,6 +521,7 @@ impl App {
                 }
             }
             UiCommand::Strip(cmd) => strip::on_command(self, cmd),
+            UiCommand::Page(cmd) => page_tools::on_command(self, cmd),
         }
     }
 
@@ -501,7 +533,13 @@ impl App {
                     self.close_tab(id, true);
                 }
             }
-            Shortcut::FocusAddress => self.focus_address(),
+            Shortcut::FocusAddress => {
+                // The address bar is in the strip: fullscreen gives way first.
+                if self.fullscreen.on() {
+                    page_tools::leave_fullscreen(self);
+                }
+                self.focus_address();
+            }
             Shortcut::Reload => self.with_active(|v| v.reload()),
             Shortcut::NextTab | Shortcut::PrevTab => {
                 let step = if sc == Shortcut::NextTab { 1 } else { -1 };
@@ -512,6 +550,7 @@ impl App {
             Shortcut::Back => self.with_active(|v| v.go_back()),
             Shortcut::Forward => self.with_active(|v| v.go_forward()),
             Shortcut::Tab(key) => strip::on_key(self, key),
+            Shortcut::Page(key) => page_tools::on_key(self, key),
         }
     }
 
@@ -521,15 +560,20 @@ impl App {
             self.close_tab(id, false);
             return;
         }
-        if let PageEvent::Favicon(icon) = ev {
-            if self.tabs.set_favicon(id, icon) {
-                self.dirty = true;
+        match ev {
+            PageEvent::Favicon(icon) => {
+                if self.tabs.set_favicon(id, icon) {
+                    self.dirty = true;
+                }
+                return;
             }
-            return;
+            PageEvent::Zoom(factor) => return page_tools::on_zoom(self, id, factor),
+            PageEvent::Fullscreen(on) => return page_tools::on_page_fullscreen(self, id, on),
+            _ => {}
         }
         let Some(tab) = self.tabs.get_mut(id) else { return };
         match ev {
-            PageEvent::CloseRequested | PageEvent::Favicon(_) => {}
+            PageEvent::CloseRequested | PageEvent::Favicon(_) | PageEvent::Zoom(_) | PageEvent::Fullscreen(_) => {}
             PageEvent::Audio { playing, muted } => {
                 tab.audible = playing;
                 tab.muted = muted;
@@ -545,7 +589,12 @@ impl App {
         self.dirty = true;
     }
 
+    /// Ctrl+T, the strip's "+": a blank tab with the address bar focused, so
+    /// fullscreen gives way first (as Chrome shows its toolbar).
     fn new_blank_tab(&mut self) {
+        if self.fullscreen.on() {
+            page_tools::leave_fullscreen(self);
+        }
         if self.open_tab(url::BLANK, Placement::End, true).is_ok() {
             self.focus_address();
         }
@@ -602,10 +651,39 @@ pub fn content_rect(size: LogicalSize<f64>) -> Rect {
     }
 }
 
+/// The whole window: the page in fullscreen, the strip hidden.
+pub fn full_rect(size: LogicalSize<f64>) -> Rect {
+    Rect { position: LogicalPosition::new(0.0, 0.0).into(), size: size.into() }
+}
+
+/// Width, height and top margin of the fullscreen notice band (logical px).
+pub const NOTICE_SIZE: (f64, f64, f64) = (600.0, 40.0, 16.0);
+
+/// The fullscreen notice: a band centred at the top of the window.
+pub fn notice_rect(size: LogicalSize<f64>) -> Rect {
+    let (w, h, top) = NOTICE_SIZE;
+    let w = w.min(size.width);
+    Rect {
+        position: LogicalPosition::new(((size.width - w) / 2.0).max(0.0), top.min((size.height - h).max(0.0))).into(),
+        size: LogicalSize::new(w, h.min(size.height)).into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn notice_band_is_centred_at_the_top() {
+        let r = notice_rect(LogicalSize::new(1920.0, 1080.0));
+        let (p, s) = (r.position.to_logical::<f64>(1.0), r.size.to_logical::<f64>(1.0));
+        assert_eq!((p.x, p.y, s.width, s.height), (660.0, 16.0, 600.0, 40.0));
+        // Never wider than the window.
+        let r = notice_rect(LogicalSize::new(480.0, 240.0));
+        let (p, s) = (r.position.to_logical::<f64>(1.0), r.size.to_logical::<f64>(1.0));
+        assert_eq!((p.x, s.width), (0.0, 480.0));
+    }
 
     #[test]
     fn ui_reload_gives_up_on_third_failure_within_ten_seconds() {
