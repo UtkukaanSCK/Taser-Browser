@@ -256,7 +256,7 @@ pub fn on_key(app: &mut App, key: PageKey) {
 /// Sets tab `id`'s zoom. WebView2 raises no ZoomFactorChanged for a factor
 /// the host sets (only for Ctrl+wheel and per-site zoom on navigation), so
 /// the tab's state follows here, from the factor WebView2 actually took.
-fn set_zoom(app: &mut App, id: TabId, factor: f64) {
+pub fn set_zoom(app: &mut App, id: TabId, factor: f64) {
     let Some(v) = app.view(id) else { return };
     native::set_zoom_factor(v, factor);
     let now = native::zoom_factor(v).unwrap_or(factor);

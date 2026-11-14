@@ -30,6 +30,9 @@ pub enum UserEvent {
     ProcessFailed { tab: Option<TabId>, failure: Failure },
     /// The fullscreen notice's timer ran out (see `page_tools`).
     NoticeTimeout(u32),
+    /// X-Browser was started again (see `instance`): open this checked web
+    /// address in a new tab, or with None just come to the front.
+    OpenFromOtherInstance(Option<String>),
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -114,6 +117,10 @@ pub struct App {
     focus_pending: bool,
     /// F11 / page fullscreen (see `page_tools`).
     pub fullscreen: Fullscreen,
+    /// session.json / window.json (see `session`).
+    pub persist: crate::session::Persist,
+    /// Addresses from other starts, to drop a late duplicate.
+    handovers: crate::instance::Repeats,
     pub quit: bool,
 }
 
@@ -125,14 +132,9 @@ pub fn background(theme: Theme) -> (u8, u8, u8, u8) {
     }
 }
 
-fn data_dir() -> Option<std::path::PathBuf> {
-    // Keep profile data out of the exe folder (which may be read-only).
-    std::env::var_os("LOCALAPPDATA").map(|d| std::path::Path::new(&d).join("X-Browser"))
-}
-
 impl App {
     pub fn new(window: Window, proxy: Proxy) -> wry::Result<Self> {
-        let mut context = WebContext::new(data_dir());
+        let mut context = WebContext::new(crate::store::data_dir());
         let size = window.inner_size().to_logical::<f64>(window.scale_factor());
         let build = |context: &mut WebContext| {
             ui::build(&window, context, &proxy, ui_rect(size), background(window.theme()))
@@ -179,7 +181,9 @@ impl App {
             shown: None,
             to_hide: Vec::new(),
             focus_pending: false,
+            handovers: crate::instance::Repeats::default(),
             fullscreen: Fullscreen::default(),
+            persist: Default::default(),
             quit: false,
         })
     }
@@ -208,6 +212,24 @@ impl App {
     /// Creates a tab + webview. Returns the new id.
     pub fn open_tab(&mut self, url: &str, placement: Placement, activate: bool) -> wry::Result<TabId> {
         let id = self.tabs.add(url, placement);
+        if let Err(e) = self.create_view(id) {
+            self.tabs.close(id);
+            return Err(e);
+        }
+        if activate {
+            self.tabs.activate(id);
+        }
+        self.sync_visibility();
+        self.dirty = true;
+        Ok(id)
+    }
+
+    /// Builds tab `id`'s webview and starts loading the tab's URL at its
+    /// zoom. Tabs restored from the last session get theirs here on first
+    /// activation (`sync_visibility`).
+    fn create_view(&mut self, id: TabId) -> wry::Result<()> {
+        let Some((url, zoom)) = self.tabs.get(id).map(|t| (t.url.clone(), t.zoom)) else { return Ok(()) };
+        let url = url.as_str();
         let p = self.proxy.clone();
         let bounds = self.content_bounds();
         // No `with_url`: the content settings below must be in place before
@@ -234,13 +256,7 @@ impl App {
                 let _ = p.send_event(UserEvent::Page(id, PageEvent::Url(url)));
             })
         };
-        let view = match builder.build_as_child(&self.window) {
-            Ok(v) => v,
-            Err(e) => {
-                self.tabs.close(id);
-                return Err(e);
-            }
-        };
+        let view = builder.build_as_child(&self.window)?;
         let setup = |view: &WebView| -> wry::Result<()> {
             #[cfg(windows)]
             {
@@ -250,19 +266,19 @@ impl App {
             }
             view.load_url(url)
         };
-        if let Err(e) = setup(&view) {
-            // No half-wired tab: without its events it would never update.
-            drop(view);
-            self.tabs.close(id);
-            return Err(e);
-        }
+        // No half-wired tab: without its events it would never update.
+        setup(&view)?;
         self.views.push((id, view));
-        if activate {
-            self.tabs.activate(id);
+        if zoom != 100 {
+            page_tools::set_zoom(self, id, f64::from(zoom) / 100.0);
         }
+        Ok(())
+    }
+
+    /// Shows the active tab (creating its webview if it has none yet).
+    pub fn show_active(&mut self) {
         self.sync_visibility();
         self.dirty = true;
-        Ok(id)
     }
 
     /// Closes tab `id`. `remember`: whether Ctrl+Shift+T may bring it back,
@@ -272,6 +288,10 @@ impl App {
         let was_active = self.tabs.active();
         if remember {
             self.closed.remember(&self.tabs, id);
+        }
+        if self.tabs.len() == 1 && self.tabs.get(id).is_some() {
+            // Closing the last tab quits: the next start brings that tab back.
+            crate::session::save(self);
         }
         if !self.tabs.close(id) {
             return;
@@ -316,6 +336,21 @@ impl App {
             return;
         }
         page_tools::on_switch(self, want);
+        // A restored tab comes alive on first activation. If its webview
+        // cannot be made, it is treated like a tab whose renderer failed: it
+        // stays in the strip with its saved title and address, not loading,
+        // over empty content (not closed, so nothing saved is lost). Leaving
+        // the tab and coming back tries again.
+        if let Some(id) = want
+            && self.view(id).is_none()
+            && let Err(e) = self.create_view(id)
+        {
+            eprintln!("x-browser: cannot create the webview of tab {id}: {e}");
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.loading = false;
+            }
+            self.dirty = true;
+        }
         let rect = self.content_bounds();
         if let Some(v) = want.and_then(|id| self.view(id)) {
             let _ = v.set_bounds(rect);
@@ -385,6 +420,9 @@ impl App {
     pub fn flush(&mut self) {
         if self.dirty {
             self.update_title();
+            // Whatever the strip shows may be session state; identical
+            // saves are skipped (see `store`).
+            self.persist.changed();
         }
         if self.dirty && self.ui_ready {
             self.dirty = false;
@@ -397,6 +435,7 @@ impl App {
             self.focus_after_switch();
         }
         self.hide_stale();
+        crate::session::save_if_due(self);
     }
 
     /// Window caption (taskbar, Alt+Tab) follows the active tab.
@@ -464,6 +503,21 @@ impl App {
             }
             UserEvent::ProcessFailed { tab, failure } => self.on_process_failed(tab, failure),
             UserEvent::NoticeTimeout(generation) => page_tools::on_notice_timeout(self, generation),
+            UserEvent::OpenFromOtherInstance(url) => {
+                if let Some(url) = url
+                    && crate::url::is_tab_url(&url)
+                    && self.handovers.fresh(&url, std::time::Instant::now())
+                {
+                    // The strip (and the new tab in it) must be on screen.
+                    if self.fullscreen.on() {
+                        page_tools::leave_fullscreen(self);
+                    }
+                    if self.open_tab(&url, Placement::End, true).is_ok() {
+                        self.focus_pending = true;
+                    }
+                }
+                crate::instance::bring_forward(&self.window);
+            }
             #[cfg(feature = "selftest")]
             UserEvent::Test(step) => crate::selftest::step(self, step),
         }
@@ -490,7 +544,7 @@ impl App {
             UiCommand::Navigate(text) => self.navigate(&text),
             UiCommand::Back => self.with_active(|v| v.go_back()),
             UiCommand::Forward => self.with_active(|v| v.go_forward()),
-            UiCommand::Reload => self.with_active(|v| v.reload()),
+            UiCommand::Reload => self.reload_active(),
             UiCommand::Stop => {
                 if let Some(v) = self.active_view() {
                     native::stop(v);
@@ -540,7 +594,7 @@ impl App {
                 }
                 self.focus_address();
             }
-            Shortcut::Reload => self.with_active(|v| v.reload()),
+            Shortcut::Reload => self.reload_active(),
             Shortcut::NextTab | Shortcut::PrevTab => {
                 let step = if sc == Shortcut::NextTab { 1 } else { -1 };
                 if let Some(id) = self.tabs.cycle(step) {
@@ -608,6 +662,15 @@ impl App {
             }
             Resolved::Url(u) => {
                 let Some(id) = self.tabs.active() else { return };
+                if self.view(id).is_none() {
+                    // A tab whose webview could not be made: try again, at
+                    // the new address.
+                    if let Some(t) = self.tabs.get_mut(id) {
+                        t.url = u;
+                    }
+                    self.revive(id);
+                    return;
+                }
                 let Some(v) = self.view(id) else { return };
                 // WebView2 rejects some URLs outright (E_INVALIDARG); then the
                 // tab keeps what it shows and the UI says so.
@@ -623,6 +686,41 @@ impl App {
                 self.dirty = true;
             }
         }
+    }
+
+    /// Reloads the active tab; one without a webview gets one (loading its
+    /// address), as its webview could not be made before.
+    fn reload_active(&mut self) {
+        let Some(id) = self.tabs.active() else { return };
+        match self.view(id) {
+            Some(v) => {
+                let _ = v.reload();
+            }
+            None => self.revive(id),
+        }
+    }
+
+    /// Makes tab `id`'s missing webview (it failed before) and, for the
+    /// active tab, shows and focuses it. On failure the tab stays as it was.
+    fn revive(&mut self, id: TabId) {
+        if let Err(e) = self.create_view(id) {
+            eprintln!("x-browser: cannot create the webview of tab {id}: {e}");
+            self.dirty = true;
+            return;
+        }
+        if let Some(t) = self.tabs.get_mut(id) {
+            t.loading = true;
+        }
+        let rect = self.content_bounds();
+        if self.tabs.active() == Some(id)
+            && let Some(v) = self.view(id)
+        {
+            let _ = v.set_bounds(rect);
+            native::raise(v);
+            let _ = v.set_visible(true);
+            let _ = v.focus();
+        }
+        self.dirty = true;
     }
 
     fn with_active(&self, f: impl FnOnce(&WebView) -> wry::Result<()>) {

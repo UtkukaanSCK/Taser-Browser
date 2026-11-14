@@ -2,8 +2,9 @@
 name = "x-browser"
 version = "0.1.0"
 edition = "2024"
-# Let chains (src/) and the newest dependencies (icu_*, time) need 1.88.
-rust-version = "1.88"
+# Let chains (src/) and the newest dependencies (icu_*, time) need 1.88;
+# `usize::is_multiple_of` (build.rs, src/instance.rs) needs 1.90.
+rust-version = "1.90"
 description = "A light, fast, minimalist desktop web browser on the system WebView"
 license = "MIT"
 
@@ -12,6 +13,10 @@ license = "MIT"
 tao = "0.37.2"
 # System WebView (WebView2 on Windows) with multi-webview support (`build_as_child`).
 wry = "0.57.2"
+# session.json / window.json (src/store.rs). The only crates added for
+# persistence; serde itself was already in the build graph (a wry build dep).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Windows-only glue for WebView2 events wry does not expose (SourceChanged,
 # HistoryChanged, NavigationStarting/Completed, AcceleratorKeyPressed, Stop).
@@ -21,7 +26,12 @@ wry = "0.57.2"
 webview2-com = "0.39.1"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Authorization",
   "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",

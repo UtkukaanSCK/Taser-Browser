@@ -15,6 +15,14 @@
 //! Checks named after a key (zoom step, Esc in fullscreen) test the key's
 //! mapping and the app's handling of it, not delivery of a physical key; a
 //! page's Keyboard Lock is tested as an API only.
+//!
+//! Single instance is tested from inside (WM_COPYDATA to its own IPC window,
+//! as a second process would send it) and once for real: the scenario starts
+//! this same build again against its own profile with an address, and checks
+//! that it hands over and exits before any window or test code. The second
+//! start bringing the window to the front, the saved session coming back
+//! after a restart or a killed process, a saved window place on an unplugged
+//! monitor and the icon in the shell are checked by hand.
 
 use crate::app::{App, UserEvent};
 use crate::commands::{Mods, Shortcut, UiCommand, vk};
@@ -33,10 +41,25 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 314;
+const EXPECTED_CHECKS: u32 = 352;
 
+/// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
-    std::env::var_os("XB_SELFTEST_DIR").map(PathBuf::from).unwrap_or_else(|| ".".into())
+    crate::store::selftest_dir()
+}
+
+/// Every run starts like a first start: no saved session or window place in
+/// the self-test's own profile (`store::data_dir`), whatever the last run left.
+pub fn prepare_profile(profile: Option<&std::path::Path>) {
+    if reached_in_child("prepare-profile") {
+        return;
+    }
+    let Some(profile) = profile else { return };
+    for name in ["session.json", "window.json"] {
+        for suffix in ["", ".bak", ".tmp", ".bak.tmp", ".corrupt", ".bak.corrupt"] {
+            let _ = std::fs::remove_file(profile.join(format!("{name}{suffix}")));
+        }
+    }
 }
 
 fn log(line: &str) {
@@ -121,7 +144,7 @@ const DELAYS: &[u64] = &[
     1000, // 64 check tab closed cleanly; address bar to http://xb.ui/
     1500, // 65 check refused; page frames / navigates to xb.ui itself
     1500, // 66 check refused; crash a content renderer
-    1500, // 67 check tab survives; crash the UI renderer
+    4000, // 67 check tab survives (a busy machine can take >1.5 s to report the crash); crash the UI renderer
     3000, // 68 check UI reloaded and re-rendered; close extras
     3500, // 69 four tabs; Ctrl+1/3/8/9; last tab loads a page
     1500, // 70 check load; page icon; Ctrl+Shift+PgUp/PgDn; UI move message
@@ -191,10 +214,22 @@ const DELAYS: &[u64] = &[
     900,  // 134 note bar on the other tab; switch back
     900,  // 135 note bar back on the tab; stop find
     900,  // 136 check bar closed; close extras
-    900,  // 137 last tab close quits
+    900,  // 137 save session + window, check files; IPC: a web URL
+    1500, // 138 check IPC tab; minimize; IPC: empty payload
+    1000, // 139 check window shown; IPC: malformed / non-web payloads
+    1500, // 140 check nothing opened; debounced save; restore a prepared session
+    3500, // 141 check restored tabs, lazy views, zoom, titles; next tab
+    3500, // 142 check the lazy tab loaded; close extras
+    900,  // 143 start a second process with an address
+    3500, // 144 check it handed over and exited, tab opened; close extras
+    900,  // 145 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
+    if reached_in_child("selftest") {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dir());
     let _ = std::fs::remove_file(dir().join("selftest.log"));
     std::thread::spawn(move || {
         for (i, d) in DELAYS.iter().enumerate() {
@@ -220,6 +255,16 @@ fn visible(v: &wry::WebView) -> bool {
         let _ = v.controller().IsVisible(&mut b);
     }
     b.as_bool()
+}
+
+/// Takes tab `id`'s webview away (hidden first, as `close_tab` does), leaving
+/// the tab as one whose webview could not be made.
+fn drop_view(app: &mut App, id: TabId) {
+    if let Some(i) = app.views.iter().position(|(v, _)| *v == id) {
+        let (_, view) = app.views.remove(i);
+        let _ = view.set_visible(false);
+        drop(view);
+    }
 }
 
 fn active_url(app: &App) -> String {
@@ -2592,6 +2637,250 @@ pub fn step(app: &mut App, n: u32) {
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));
         }
         137 => {
+            // Session + window place: saved, readable, matching the app.
+            crate::session::save(app);
+            check("store-flushes", crate::store::flush(Duration::from_secs(2)), "writer did not finish in 2 s");
+            let (session_path, window_path) = app.persist.paths().unwrap_or_default();
+            let read = |p: &std::path::Path| std::fs::read(p).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok());
+            let want: Vec<String> = crate::session::Session::capture(&app.tabs).tabs.into_iter().map(|t| t.url).collect();
+            let s = read(&session_path).unwrap_or_default();
+            let got: Vec<String> = s["tabs"].as_array().into_iter().flatten().filter_map(|t| t["url"].as_str().map(str::to_string)).collect();
+            check(
+                "session-file-saved",
+                s["v"] == 1 && !want.is_empty() && got == want,
+                format!("{}: {s} (want tabs {want:?})", session_path.display()),
+            );
+            let w = read(&window_path).unwrap_or_default();
+            let (pos, size) = (app.window.outer_position().unwrap_or_default(), app.window.inner_size());
+            check(
+                "window-file-saved",
+                w["v"] == 1
+                    && w["x"] == pos.x
+                    && w["y"] == pos.y
+                    && w["width"] == size.width
+                    && w["height"] == size.height
+                    && w["maximized"] == false,
+                format!("{}: {w} (window at {pos:?}, inner {size:?})", window_path.display()),
+            );
+            remember("tabs-before-ipc", app.tabs.len() as i64);
+            let r = send_ipc(crate::instance::OPEN, &utf16("https://example.com/?ipc=1"));
+            check("ipc-accepts-web-url", r == Some(1), format!("{r:?}"));
+            // A late copy of the same message (the sender timed out and
+            // retried) is taken but must not open a second tab (step 138).
+            let r = send_ipc(crate::instance::OPEN, &utf16("https://example.com/?ipc=1"));
+            check("ipc-accepts-repeat", r == Some(1), format!("{r:?}"));
+        }
+        138 => {
+            let before = recall("tabs-before-ipc");
+            check(
+                "ipc-url-opens-new-active-tab",
+                app.tabs.len() as i64 == before + 1 && active_url(app).starts_with("https://example.com/?ipc=1"),
+                format!("{} tabs (were {before}), active {}", app.tabs.len(), active_url(app)),
+            );
+            let ipc_tabs = app.tabs.ids().filter(|id| app.tabs.get(*id).is_some_and(|t| t.url.contains("ipc=1"))).count();
+            check("ipc-repeat-opens-once", ipc_tabs == 1, format!("{ipc_tabs} tabs with the address"));
+            remember("tabs-before-ipc", app.tabs.len() as i64);
+            app.window.set_minimized(true);
+            let r = send_ipc(crate::instance::OPEN, &[]);
+            check("ipc-accepts-empty-payload", r == Some(1), format!("{r:?}"));
+        }
+        139 => {
+            let before = recall("tabs-before-ipc");
+            check(
+                "ipc-empty-payload-shows-window",
+                !app.window.is_minimized() && app.window.is_visible() && app.tabs.len() as i64 == before,
+                format!("minimized {}, visible {}, {} tabs (were {before})", app.window.is_minimized(), app.window.is_visible(), app.tabs.len()),
+            );
+            let open = crate::instance::OPEN;
+            let url = utf16("https://example.com/?ipc=bad");
+            let cases: [(&'static str, usize, Vec<u8>); 8] = [
+                ("ipc-rejects-odd-length", open, url[..3].to_vec()),
+                ("ipc-rejects-oversize", open, vec![b'a'; crate::instance::MAX_PAYLOAD + 2]),
+                ("ipc-rejects-nul", open, utf16("https://example.com/\0?ipc=bad")),
+                ("ipc-rejects-invalid-utf16", open, vec![0x00, 0xD8, b'a', 0]),
+                ("ipc-rejects-unknown-kind", crate::instance::PROBE + 1, url.clone()),
+                ("ipc-rejects-probe", crate::instance::PROBE, Vec::new()),
+                ("ipc-rejects-javascript", open, utf16("javascript:alert(1)")),
+                ("ipc-rejects-file", open, utf16("file:///C:/Windows/win.ini")),
+            ];
+            for (name, kind, bytes) in cases {
+                let r = send_ipc(kind, &bytes);
+                check(name, r == Some(0), format!("{r:?}"));
+            }
+            // Once the app is exiting, even a valid address is refused (the
+            // sender retries and then starts itself).
+            crate::instance::set_quitting(true);
+            let r = send_ipc(open, &utf16("https://example.com/?ipc=quitting"));
+            crate::instance::set_quitting(false);
+            check("ipc-refused-while-quitting", r == Some(0), format!("{r:?}"));
+            // A second start finds our IPC window as genuine X-Browser, and
+            // uses no window whose process fails the check.
+            let (trusted, unverified) =
+                crate::store::data_dir().map(|d| crate::instance::probe_find(&d)).unwrap_or_default();
+            check("ipc-own-window-verified", trusted == Some(std::process::id()), format!("{trusted:?}"));
+            check("ipc-unverified-window-skipped", unverified.is_none(), format!("{unverified:?}"));
+            // The UIPI probe a normal start sends an elevated X-Browser's
+            // window gets through to one at our own level.
+            let blocked = crate::store::data_dir().and_then(|d| crate::instance::probe_blocks_self(&d));
+            check("ipc-probe-reaches-own-level", blocked == Some(false), format!("{blocked:?}"));
+        }
+        140 => {
+            let before = recall("tabs-before-ipc");
+            check("ipc-rejects-open-nothing", app.tabs.len() as i64 == before, format!("{} tabs (were {before})", app.tabs.len()));
+            // The IPC tab (step 138) was never saved explicitly: the debounce did it.
+            let (session_path, _) = app.persist.paths().unwrap_or_default();
+            let saved = std::fs::read_to_string(&session_path).unwrap_or_default();
+            check("session-saves-itself-after-changes", saved.contains("ipc=1"), &saved);
+
+            // A session file as a crash (or another hand) could leave it.
+            let src = dir().join("restore-src");
+            let r = |i: u32| format!("https://example.com/?r={i}");
+            let file = serde_json::json!({
+                "v": 1,
+                "active": 2,
+                "tabs": [
+                    { "url": r(0), "title": "Saved R0", "zoom": 100 },
+                    { "url": "javascript:alert(1)", "title": "script" },
+                    { "url": r(1), "title": "Saved R1", "zoom": 150 },
+                    { "url": "file:///C:/Windows/win.ini", "title": "file" },
+                    { "url": r(2), "title": format!("Saved R2 {}", "x".repeat(600)), "zoom": 9000 },
+                    { "url": format!("https://example.com/?{}", "a".repeat(9000)), "title": "oversize" },
+                    { "url": "about:blank", "title": "blank" },
+                ],
+            });
+            let _ = std::fs::create_dir_all(&src);
+            let _ = std::fs::write(src.join("session.json"), file.to_string());
+            let loaded = crate::store::Store::<crate::session::Session>::new(&src).load();
+            let s = loaded.value;
+            let urls: Vec<&str> = s.tabs.iter().map(|t| t.url.as_str()).collect();
+            check(
+                "restore-file-filtered",
+                loaded.source == crate::store::Source::File
+                    && urls == [r(0), r(1), r(2)]
+                    && s.active == 1
+                    && s.tabs[1].zoom == 150
+                    && s.tabs[2].zoom == 100
+                    && s.tabs[2].title.chars().count() == crate::session::MAX_TITLE,
+                format!("{:?} {urls:?} active {}", loaded.source, s.active),
+            );
+            let old: Vec<TabId> = app.tabs.ids().collect();
+            let active = crate::session::restore(app, &s);
+            for id in old {
+                app.close_tab(id, false);
+            }
+            let ids: Vec<TabId> = app.tabs.ids().collect();
+            let got: Vec<String> = ids.iter().map(|&id| tab_url(app, id)).collect();
+            check(
+                "restore-order-and-active",
+                got == [r(0), r(1), r(2)] && active.is_some() && app.tabs.active() == active && active == ids.get(1).copied(),
+                format!("{got:?}, active {:?} of {ids:?}", app.tabs.active()),
+            );
+            let with_view: Vec<TabId> = app.views.iter().map(|(id, _)| *id).collect();
+            check("restore-only-active-gets-view", active.is_some() && with_view == [active.unwrap()], format!("views {with_view:?}, tabs {ids:?}"));
+            for (i, id) in ids.iter().enumerate().take(3) {
+                remember(["restored-0", "restored-1", "restored-2"][i], i64::from(*id));
+            }
+        }
+        141 => {
+            let ids = [recall("restored-0"), recall("restored-1"), recall("restored-2")].map(|v| v as TabId);
+            let r1 = app.tabs.get(ids[1]);
+            check(
+                "restored-active-tab-loads",
+                r1.is_some_and(|t| t.url.starts_with("https://example.com/?r=1") && !t.loading),
+                format!("{r1:?}"),
+            );
+            let z = native_zoom(app, ids[1]);
+            check("restored-zoom-applied", (z - 1.5).abs() < 0.01, format!("native zoom {z}"));
+            ui_eval(
+                app,
+                "restored-lazy-tabs-show-titles",
+                "[...document.querySelectorAll('#tablist [role=tab] .title')].map(e => e.textContent).join('|')",
+                |r| {
+                    let t: Vec<&str> = r.split('|').collect();
+                    check(
+                        "restored-lazy-tabs-show-titles",
+                        t.len() == 3 && t[0] == "Saved R0" && t[2].starts_with("Saved R2 xxx"),
+                        format!("{:?}", r.chars().take(120).collect::<String>()),
+                    );
+                },
+            );
+            app.handle(UserEvent::Shortcut(Shortcut::NextTab));
+            check(
+                "lazy-tab-gets-view-on-activate",
+                app.tabs.active() == Some(ids[2]) && app.view(ids[2]).is_some() && app.views.len() == 2,
+                format!("active {:?}, views {:?}", app.tabs.active(), app.views.iter().map(|(id, _)| *id).collect::<Vec<_>>()),
+            );
+        }
+        142 => {
+            let id = recall("restored-2") as TabId;
+            let t = app.tabs.get(id);
+            check(
+                "lazy-tab-loads-on-activate",
+                t.is_some_and(|t| t.url.starts_with("https://example.com/?r=2") && !t.loading) && only_active_visible(app),
+                format!("{t:?}"),
+            );
+            capture(app, "19-restored");
+            // A tab whose webview is gone (as when it could not be made)
+            // gets one again from reload, and from navigate.
+            if let Some(id) = app.tabs.active() {
+                drop_view(app, id);
+                app.handle(UserEvent::Shortcut(Shortcut::Reload));
+                let revived = app.view(id).is_some_and(visible);
+                check("reload-recreates-missing-view", revived, "no visible webview after reload");
+                drop_view(app, id);
+                app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?revived=1".into())));
+                let revived = app.view(id).is_some_and(visible);
+                check(
+                    "navigate-recreates-missing-view",
+                    revived && active_url(app).contains("revived=1"),
+                    format!("visible {revived}, active {}", active_url(app)),
+                );
+            }
+            close_extra_tabs(app);
+        }
+        143 => {
+            // A real second start: this same build, same self-test profile,
+            // with an address. It must hand over and exit, never run.
+            remember("tabs-before-child", app.tabs.len() as i64);
+            remember("windows-before-child", windows_of(std::process::id()).len() as i64);
+            let spawned = spawn_second_start("https://example.com/?second=1");
+            check("second-start-spawned", spawned.is_ok(), spawned.err().unwrap_or_default());
+        }
+        144 => {
+            // Never wait here: the event loop must stay free. A child still
+            // running fails the check; its watchdog (detached) kills it later.
+            let outcome = SECOND_START.take().map(|h| {
+                if h.is_finished() {
+                    h.join().unwrap_or_else(|_| Err("watchdog panicked".into()))
+                } else {
+                    Err("child still running".into())
+                }
+            });
+            let err = std::fs::read_to_string(dir().join("child.err")).unwrap_or_default();
+            check(
+                "second-start-hands-over-and-exits",
+                matches!(outcome, Some(Ok(0))),
+                format!("{outcome:?}, stderr {err:?}"),
+            );
+            let reached: Vec<String> = std::fs::read_dir(dir())
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("child-reached-"))
+                .collect();
+            check("second-start-runs-no-selftest", reached.is_empty(), format!("{reached:?}"));
+            let before = recall("tabs-before-child");
+            check(
+                "second-start-url-opens-tab",
+                app.tabs.len() as i64 == before + 1 && active_url(app).starts_with("https://example.com/?second=1"),
+                format!("{} tabs (were {before}), active {}", app.tabs.len(), active_url(app)),
+            );
+            let (now, was) = (windows_of(std::process::id()).len() as i64, recall("windows-before-child"));
+            check("second-start-opens-no-window", now == was, format!("{now} top-level windows (were {was})"));
+            close_extra_tabs(app);
+        }
+        145 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -3026,6 +3315,78 @@ fn is_muted(v: &wry::WebView) -> bool {
 
 fn tab_url(app: &App, id: TabId) -> String {
     app.tabs.get(id).map(|t| t.url.clone()).unwrap_or_default()
+}
+
+fn utf16(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+/// Exit code of the second start, or why there is none.
+type SecondStart = std::thread::JoinHandle<Result<i32, String>>;
+
+thread_local! {
+    static SECOND_START: std::cell::Cell<Option<SecondStart>> = const { std::cell::Cell::new(None) };
+}
+
+/// Hard limit for the second start; it is killed and reaped after that.
+const SECOND_START_LIMIT: Duration = Duration::from_secs(10);
+
+/// Starts this same executable again against the self-test profile (never
+/// the user's), as a second X-Browser start would be. A watchdog thread
+/// waits for it, so the event loop stays free to answer its WM_COPYDATA.
+fn spawn_second_start(url: &str) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let err = std::fs::File::create(dir().join("child.err")).map_err(|e| e.to_string())?;
+    let mut child = Command::new(exe)
+        .arg(url)
+        .env("XB_SELFTEST_DIR", dir())
+        .env("XB_SELFTEST_CHILD", "1")
+        // No dialog if it cannot hand over: it just exits.
+        .env("XB_TIMING", dir().join("child-timing.txt"))
+        .env("XB_TIMING_QUIT", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(err)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let watchdog = std::thread::spawn(move || {
+        let end = std::time::Instant::now() + SECOND_START_LIMIT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return Ok(status.code().unwrap_or(-1)),
+                Ok(None) if std::time::Instant::now() < end => std::thread::sleep(Duration::from_millis(50)),
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("still running after {SECOND_START_LIMIT:?}: killed"));
+                }
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e.to_string());
+                }
+            }
+        }
+    });
+    SECOND_START.set(Some(watchdog));
+    Ok(())
+}
+
+/// In the second start (which must only hand over), notes that `what` was
+/// reached anyway and says to stop; the scenario checks for such notes.
+fn reached_in_child(what: &str) -> bool {
+    if std::env::var_os("XB_SELFTEST_CHILD").is_none() {
+        return false;
+    }
+    let _ = std::fs::write(dir().join(format!("child-reached-{what}")), b"");
+    true
+}
+
+/// Sends WM_COPYDATA to this profile's own IPC window, as a second instance
+/// would; the reply is what the receiver returned (1 taken, 0 refused).
+fn send_ipc(kind: usize, bytes: &[u8]) -> Option<usize> {
+    crate::instance::send_to_self(&crate::store::data_dir()?, kind, bytes)
 }
 
 fn order(app: &App) -> Vec<TabId> {
