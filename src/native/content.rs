@@ -184,6 +184,7 @@ mod imp {
         let wv = view.webview();
         let mut token = 0i64;
         attach_process_failed(view, Some(tab), proxy)?;
+        crate::native::attach_policy(view, tab, proxy)?;
         // Icons and the sound mark are extras: a tab without them still works.
         if let Err(e) = crate::native::attach_favicon(view, tab, proxy) {
             eprintln!("x-browser: tab {tab}: no favicon events: {e}");
@@ -246,7 +247,7 @@ mod imp {
                         let _ = p.send_event(UserEvent::Page(tab, PageEvent::Navigating { nav, user: user.as_bool() }));
                     }
                     if let Some(args) = &args
-                        && is_ui_url(&nav_uri(args)?)
+                        && crate::policy::refuses_navigation(&nav_uri(args)?)
                     {
                         args.SetCancel(true)?;
                         // The address bar may already show the refused URL,

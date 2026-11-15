@@ -23,6 +23,7 @@ const OVERLAY_JS: &str = include_str!("../ui/js/overlay.js");
 const BOOKMARKS_JS: &str = include_str!("../ui/js/bookmarks.js");
 const MENU_JS: &str = include_str!("../ui/js/menu.js");
 const SETTINGS_JS: &str = include_str!("../ui/js/settings.js");
+const SECURITY_JS: &str = include_str!("../ui/js/security.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -78,6 +79,7 @@ fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/js/bookmarks.js" => (BOOKMARKS_JS, "text/javascript; charset=utf-8"),
         "/js/menu.js" => (MENU_JS, "text/javascript; charset=utf-8"),
         "/js/settings.js" => (SETTINGS_JS, "text/javascript; charset=utf-8"),
+        "/js/security.js" => (SECURITY_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })

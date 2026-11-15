@@ -22,6 +22,7 @@ mod content;
 mod download;
 mod favicon;
 mod fullscreen;
+mod policy;
 mod tools;
 mod zoom;
 pub use audio::*;
@@ -29,6 +30,7 @@ pub use content::*;
 pub use download::*;
 pub use favicon::*;
 pub use fullscreen::*;
+pub use policy::*;
 pub use tools::*;
 pub use zoom::*;
 

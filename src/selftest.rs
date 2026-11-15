@@ -29,6 +29,7 @@ use crate::commands::{Mods, Shortcut, UiCommand, vk};
 use crate::native::Proxy;
 use crate::overlay::Mode;
 use crate::page_tools::PageKey;
+use crate::policy::{Event, Refused};
 use crate::tabs::TabId;
 use std::io::Write;
 use std::path::PathBuf;
@@ -42,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 475;
+const EXPECTED_CHECKS: u32 = 507;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -290,7 +291,26 @@ const DELAYS: &[u64] = &[
     2500, // 209 check; hostile file; Esc
     900,  // 210 check closed; Print
     1500, // 211 check Print; ShowPrintUI
-    900,  // 212 last tab close quits
+    900,  // 212 close the menu block's tab; policy: recording launcher; open an http page (served here)
+    2000, // 213 check "not secure"; open an https page
+    2000, // 214 check the lock; ask permission states; put a mailto link on the page
+    700,  // 215 check permissions still ask; click the link (a user gesture)
+    1000, // 216 check the launch waits, cancelled; a wrong answer; click again
+    1000, // 217 the right answer reaches the recorder once; click again
+    1000, // 218 a tab switch drops the request; blank tab has no mark
+    900,  // 219 a page opens mailto by itself (no gesture)
+    1500, // 220 check it was dropped unseen; navigate to a file: address
+    1000, // 221 check the file never loaded; a certificate error on example.com
+    2000, // 222 check the certificate mark; another host
+    2000, // 223 check that host is clean; an address with a Unicode host
+    2500, // 224 check the address box shows it in ASCII; a page to crash
+    2000, // 225 crash its renderer
+    1500, // 226 check the crashed mark; reload with its button
+    2500, // 227 check the page is back
+    900,  // 228 crash again
+    1500, // 229 reload with Ctrl+R
+    2500, // 230 check the page is back
+    900,  // 231 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -3272,7 +3292,7 @@ pub fn step(app: &mut App, n: u32) {
                 format!("flushed {flushed}, script {:?}, click {:?}", kind("?by=script"), kind("?by=click")),
             );
         }
-        // ---- bookmarks (task 6): one contiguous block, last before the quit ----
+        // ---- bookmarks (task 6): one contiguous block ----
         165 => {
             app.bookmarks.ensure_loaded();
             check("bm-file-starts-empty", app.bookmarks.items().is_empty(), format!("{:?}", app.bookmarks.items()));
@@ -3833,9 +3853,222 @@ pub fn step(app: &mut App, n: u32) {
             let shown = app.active_view().is_some_and(crate::native::print);
             check("print-preview-opens", shown, "ShowPrintUI failed");
         }
+        // Security indicators and policy (src/policy.rs). No application is
+        // ever started here: launches go to a recorder.
         212 => {
-            // The block opened a second tab (Ctrl+T); the last close quits.
+            // The menu block opened a second tab (Ctrl+T, the print preview
+            // is up in it): back to one tab.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
+            LAUNCHED.lock().unwrap().clear();
+            app.policy.launch.set_launcher(record_launch);
+            // Served from this process: WebView2 moves a public http address
+            // to https by itself when the site has it (example.com does).
+            let port = serve_http_page();
+            check("policy-http-server-started", port.is_ok(), format!("{port:?}"));
+            app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{}/policy", port.unwrap_or(0)))));
+        }
+        213 => {
+            check("policy-http-page-loaded", active_url(app).starts_with("http://127.0.0.1:") && active_title(app) == "Plain", active_url(app));
+            ui_eval(app, "indicator-http-says-not-secure", SECURITY_JS, |r| {
+                check(
+                    "indicator-http-says-not-secure",
+                    field(&r, "state") == "insecure" && field(&r, "text") == "Güvenli değil" && field(&r, "hidden") == "false" && num(&r, "w") > 0.0,
+                    &r,
+                );
+                check("indicator-http-has-a-name", field(&r, "role") == "img" && field(&r, "name").contains("HTTP"), &r);
+            });
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?policy".into())));
+        }
+        214 => {
+            check("policy-https-page-loaded", active_url(app).starts_with("https://example.com/"), active_url(app));
+            ui_eval(app, "indicator-https-shows-lock", SECURITY_JS, |r| {
+                check(
+                    "indicator-https-shows-lock",
+                    field(&r, "state") == "secure" && field(&r, "lock") == "block" && field(&r, "text").is_empty() && num(&r, "w") > 0.0,
+                    &r,
+                );
+                check("indicator-https-has-a-name", field(&r, "role") == "img" && field(&r, "name").contains("HTTPS"), &r);
+            });
+            page_js(
+                app,
+                &format!(
+                    "Promise.all(['camera', 'microphone', 'geolocation', 'notifications'].map((name) => navigator.permissions.query({{ name }}))) \
+                     .then((r) => {{ window.__perm = r.map((s) => s.state).join(','); }}, (e) => {{ window.__perm = 'error ' + e; }}); \
+                     document.body.innerHTML = '<a id=\"m\" href=\"{MAIL_URI}\" style=\"position:fixed;inset:0\">mail</a>';"
+                ),
+            );
+        }
+        215 => {
+            // Nothing grants these without WebView2's own question.
+            page_eval(app, "permissions-are-never-pre-granted", "`perm=${window.__perm}`", |r| {
+                check("permissions-are-never-pre-granted", field(&r, "perm") == "prompt,prompt,prompt,prompt", &r);
+            });
+            click_page(app);
+        }
+        216 => {
+            let now = std::time::Instant::now();
+            let id = app.tabs.active().unwrap();
+            let p = app.policy.launch.pending(now).cloned();
+            check(
+                "external-launch-with-gesture-waits",
+                p.as_ref().is_some_and(|p| p.tab == id && p.scheme == "mailto" && p.uri == MAIL_URI && p.origin.starts_with("https://example.com")),
+                format!("{p:?}"),
+            );
+            let loading = app.tabs.get(id).is_some_and(|t| t.loading);
+            check(
+                "external-launch-is-cancelled",
+                launched().is_empty() && !loading && active_url(app).starts_with("https://example.com/"),
+                format!("launched {:?}, loading {loading}, url {}", launched(), active_url(app)),
+            );
+            let r = app.policy.launch.confirm(id, "mailto:someone-else@example.invalid", now);
+            check(
+                "external-launch-wrong-uri-refused",
+                r == Err(Refused::Mismatch) && launched().is_empty() && app.policy.launch.pending(now).is_none(),
+                format!("{r:?}, launched {:?}", launched()),
+            );
+            click_page(app);
+        }
+        217 => {
+            let now = std::time::Instant::now();
+            let id = app.tabs.active().unwrap();
+            let r = app.policy.launch.confirm(id, MAIL_URI, now);
+            check("external-launch-confirmed-goes-to-launcher", r == Ok(()) && launched() == [MAIL_URI], format!("{r:?}, launched {:?}", launched()));
+            let again = app.policy.launch.confirm(id, MAIL_URI, now);
+            check("external-launch-one-answer-only", again == Err(Refused::NoRequest) && launched().len() == 1, format!("{again:?}, launched {:?}", launched()));
+            click_page(app);
+        }
+        218 => {
+            let now = std::time::Instant::now();
+            let waited = app.policy.launch.pending(now).is_some();
+            press(app, vk::T, CTRL);
+            check(
+                "external-launch-dropped-on-tab-switch",
+                waited && app.policy.launch.pending(now).is_none() && app.tabs.len() == 2,
+                format!("waited {waited}, now {:?}, {} tabs", app.policy.launch.pending(now), app.tabs.len()),
+            );
+            app.flush();
+            ui_eval(app, "indicator-nothing-on-blank-tab", SECURITY_JS, |r| {
+                check("indicator-nothing-on-blank-tab", field(&r, "hidden") == "true" && field(&r, "state").is_empty() && num(&r, "w") == 0.0, &r);
+            });
+            close_extra_tabs(app);
+        }
+        219 => {
+            // The page's own load-time script: no user gesture. (A script
+            // run from the host would count as one.)
+            remember("silent-drops", i64::from(app.policy.silent_drops));
+            if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+                let _ = v.load_html(&format!("<!doctype html><title>Auto</title><body>auto<script>location.href = '{MAIL_URI}';</script></body>"));
+            }
+        }
+        220 => {
+            let now = std::time::Instant::now();
+            let (drops, before) = (i64::from(app.policy.silent_drops), recall("silent-drops"));
+            let loading = app.tabs.active().and_then(|id| app.tabs.get(id)).is_some_and(|t| t.loading);
+            check(
+                "external-launch-without-gesture-dropped",
+                drops == before + 1 && app.policy.launch.pending(now).is_none() && launched().len() == 1 && !loading,
+                format!("drops {drops} (were {before}), waiting {:?}, launched {:?}, loading {loading}", app.policy.launch.pending(now), launched()),
+            );
+            if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+                let _ = v.load_url("file:///C:/Windows/win.ini");
+            }
+        }
+        221 => {
+            let id = app.tabs.active().unwrap();
+            let loading = app.tabs.get(id).is_some_and(|t| t.loading);
+            check("file-navigation-cancelled", !active_url(app).starts_with("file:") && !loading, format!("url {}, loading {loading}", active_url(app)));
+            page_eval(app, "file-navigation-leaves-page", "`title=${document.title};file=${location.protocol === 'file:'}`", |r| {
+                check("file-navigation-leaves-page", field(&r, "title") == "Auto" && field(&r, "file") == "false", &r);
+            });
+            // What WebView2 reports for a bad certificate, while its own
+            // warning page is up.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?policy-cert".into())));
+            app.handle(UserEvent::Policy(id, Event::CertError("https://example.com/?policy-cert".into())));
+        }
+        222 => {
+            check("policy-cert-page-loaded", active_url(app).starts_with("https://example.com/?policy-cert"), active_url(app));
+            ui_eval(app, "indicator-certificate-error", SECURITY_JS, |r| {
+                check(
+                    "indicator-certificate-error",
+                    field(&r, "state") == "cert" && field(&r, "text") == "Sertifika hatası" && field(&r, "role") == "img" && field(&r, "name").contains("Sertifika"),
+                    &r,
+                );
+            });
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?policy".into())));
+        }
+        223 => {
+            ui_eval(app, "indicator-certificate-error-is-per-host", SECURITY_JS, |r| {
+                check("indicator-certificate-error-is-per-host", field(&r, "state") == "secure" && field(&r, "addr").starts_with("https://example.org/"), &r);
+            });
+            // A host that cannot load: the address box shows what was typed.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://bücher.example/yol".into())));
+            app.flush();
+            log(&format!("INFO unicode host, right after typing: tab url {:?}", active_url(app)));
+            ui_eval(app, "address-box-unicode-host-typed", SECURITY_JS, |r| {
+                check("address-box-unicode-host-typed", field(&r, "addr").is_ascii() && field(&r, "addr").contains("xn--bcher-kva.example"), &r);
+            });
+        }
+        224 => {
+            log(&format!("INFO unicode host, after the load failed: tab url {:?}", active_url(app)));
+            ui_eval(app, "address-box-unicode-host-reported", SECURITY_JS, |r| {
+                check("address-box-unicode-host-reported", field(&r, "addr").is_ascii() && field(&r, "addr").contains("xn--bcher-kva.example"), &r);
+            });
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?policy-crash".into())));
+        }
+        225 => {
+            let id = app.tabs.active().unwrap();
+            check(
+                "policy-crash-page-loaded",
+                active_url(app).starts_with("https://example.org/?policy-crash") && !app.policy.is_crashed(id),
+                active_url(app),
+            );
+            if let Some(v) = app.view(id) {
+                cdp(v, "Page.crash", "{}");
+            }
+        }
+        226 => {
+            let id = app.tabs.active().unwrap();
+            check("crashed-tab-is-marked", app.policy.is_crashed(id) && app.tabs.get(id).is_some_and(|t| !t.loading), app.tabs.to_json());
+            ui_eval(app, "indicator-crashed-is-a-reload-button", SECURITY_JS, |r| {
+                check(
+                    "indicator-crashed-is-a-reload-button",
+                    field(&r, "state") == "crashed" && field(&r, "role").is_empty() && !field(&r, "text").is_empty() && field(&r, "name").contains("Ctrl+R") && num(&r, "w") > 0.0,
+                    &r,
+                );
+            });
+            ui_js(app, "document.getElementById('security').click()");
+        }
+        227 => {
+            let id = app.tabs.active().unwrap();
+            check("crashed-tab-button-reloads", !app.policy.is_crashed(id) && active_url(app).starts_with("https://example.org/?policy-crash"), active_url(app));
+            page_eval(app, "crashed-tab-page-is-back", "`href=${location.href};state=${document.readyState}`", |r| {
+                check("crashed-tab-page-is-back", field(&r, "href").starts_with("https://example.org/?policy-crash"), &r);
+            });
+            ui_eval(app, "indicator-after-reload", SECURITY_JS, |r| {
+                check("indicator-after-reload", field(&r, "state") == "secure", &r);
+            });
+        }
+        228 => {
+            // In a step of its own: a crash right behind a script would take
+            // the script's answer with it.
+            if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+                cdp(v, "Page.crash", "{}");
+            }
+        }
+        229 => {
+            let id = app.tabs.active().unwrap();
+            let crashed = app.policy.is_crashed(id);
+            let sc = press(app, vk::R, CTRL);
+            check("crashed-tab-marked-again", crashed && sc == Some(Shortcut::Reload), format!("crashed {crashed}, {sc:?}"));
+        }
+        230 => {
+            let id = app.tabs.active().unwrap();
+            check("crashed-tab-shortcut-reloads", !app.policy.is_crashed(id), app.tabs.to_json());
+            page_eval(app, "crashed-tab-page-is-back-again", "`href=${location.href}`", |r| {
+                check("crashed-tab-page-is-back-again", field(&r, "href").starts_with("https://example.org/?policy-crash"), &r);
+            });
+        }
+        231 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -3908,6 +4141,56 @@ fn overlay_click(app: &App, selector: &str) {
 fn tab_zoom(app: &App) -> u16 {
     app.tabs.active().and_then(|id| app.tabs.get(id)).map_or(0, |t| t.zoom)
 }
+
+/// What the policy steps ask to open. Never opened: `record_launch` stands
+/// in for the launcher, and the address is not a real one.
+const MAIL_URI: &str = "mailto:selftest@example.invalid?subject=x-browser-selftest";
+
+static LAUNCHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn record_launch(uri: &str) -> bool {
+    LAUNCHED.lock().unwrap().push(uri.to_string());
+    true
+}
+
+fn launched() -> Vec<String> {
+    LAUNCHED.lock().unwrap().clone()
+}
+
+/// Serves one plain page over http on a free loopback port, until the
+/// process ends. Returns the port.
+fn serve_http_page() -> std::io::Result<u16> {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.read(&mut [0u8; 2048]);
+            let body = "<!doctype html><title>Plain</title><body>plain http</body>";
+            let _ = write!(stream, "HTTP/1.1 200 OK
+Content-Type: text/html
+Content-Length: {}
+Connection: close
+
+{body}", body.len());
+        }
+    });
+    Ok(port)
+}
+
+/// A real (CDP) click in the middle of the active page: a user gesture.
+fn click_page(app: &App) {
+    if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+        cdp_click(v, 200.0, 200.0);
+    }
+}
+
+/// The address box's connection mark and text, as drawn.
+const SECURITY_JS: &str = "(() => { const m = document.getElementById('security'), r = m.getBoundingClientRect(); \
+  return [`hidden=${m.hidden}`, `state=${m.dataset.state || ''}`, `role=${m.getAttribute('role') || ''}`, \
+  `text=${m.hidden ? '' : document.getElementById('security-text').textContent}`, `name=${m.getAttribute('aria-label') || ''}`, \
+  `w=${r.width}`, `lock=${getComputedStyle(m.querySelector('svg')).display}`, \
+  `addr=${document.getElementById('address').value}`].join(';'); })()";
 
 /// A key-down with the live Esc state, as the native hook reads it
 /// (`Shortcut::from_key_in` with `esc_exits_fullscreen`).

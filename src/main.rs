@@ -11,6 +11,7 @@ mod menu;
 mod native;
 mod overlay;
 mod page_tools;
+mod policy;
 #[cfg(feature = "selftest")]
 mod selftest;
 mod session;

@@ -30,6 +30,8 @@ pub enum UserEvent {
     ProcessFailed { tab: Option<TabId>, failure: Failure },
     /// The fullscreen notice's timer ran out (see `page_tools`).
     NoticeTimeout(u32),
+    /// From a content webview's policy hooks (see `policy`). Untrusted.
+    Policy(TabId, crate::policy::Event),
     /// X-Browser was started again (see `instance`): open this checked web
     /// address in a new tab, or with None just come to the front.
     OpenFromOtherInstance(Option<String>),
@@ -138,6 +140,8 @@ pub struct App {
     pub settings: crate::settings::State,
     /// Downloads of this session (see `downloads`).
     pub downloads: crate::downloads::Downloads,
+    /// Certificate errors, crashed tabs, external launches (see `policy`).
+    pub policy: crate::policy::State,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -208,6 +212,7 @@ impl App {
             settings: Default::default(),
             downloads: Default::default(),
             overlay: Default::default(),
+            policy: Default::default(),
             quit: false,
         })
     }
@@ -379,6 +384,7 @@ impl App {
         }
         page_tools::on_switch(self, want);
         crate::overlay::close(self);
+        crate::policy::on_switch(self);
         // A restored tab comes alive on first activation. If its webview
         // cannot be made, it is treated like a tab whose renderer failed: it
         // stays in the strip with its saved title and address, not loading,
@@ -469,7 +475,7 @@ impl App {
         }
         if self.dirty && self.ui_ready {
             self.dirty = false;
-            let js = format!("xb.render({},{})", self.tabs.render_json(), self.window.is_maximized());
+            let js = format!("xb.render({},{});{}", self.tabs.render_json(), self.window.is_maximized(), crate::policy::render_js(self));
             if self.ui.evaluate_script(&js).is_ok() {
                 self.tabs.icons_sent();
             }
@@ -534,6 +540,7 @@ impl App {
                     self.dirty = true;
                 }
                 page_tools::on_page_failed(self, id);
+                crate::policy::on_page_failed(self, id, failure);
             }
         }
     }
@@ -558,6 +565,7 @@ impl App {
             // load and redraws what it changes.
             UserEvent::HistoryLoaded => {}
             UserEvent::Download(ev) => crate::downloads::on_event(self, ev),
+            UserEvent::Policy(tab, ev) => crate::policy::on_event(self, tab, ev),
             UserEvent::OpenFromOtherInstance(url) => {
                 if let Some(url) = url
                     && crate::url::is_tab_url(&url)
@@ -684,6 +692,7 @@ impl App {
     }
 
     fn on_page(&mut self, id: TabId, ev: PageEvent) {
+        crate::policy::on_page(self, id, &ev);
         if let PageEvent::CloseRequested = ev {
             // The page's own window.close(): not something to reopen.
             self.close_tab(id, false);

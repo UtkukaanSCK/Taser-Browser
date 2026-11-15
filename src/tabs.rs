@@ -238,7 +238,7 @@ impl Tabs {
             s.push_str("{\"id\":");
             s.push_str(&t.id.to_string());
             s.push_str(",\"url\":");
-            push_json_str(&mut s, display_url(&t.url));
+            push_json_str(&mut s, &display_url(&t.url));
             s.push_str(",\"title\":");
             push_json_str(&mut s, &t.title);
             s.push_str(",\"loading\":");
