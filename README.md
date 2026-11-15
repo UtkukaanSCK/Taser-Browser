@@ -141,6 +141,34 @@ to it, which proves it runs at a higher integrity level.
 X-Browser is not meant to run elevated (as administrator): the `.tmp`/`.bak`
 writes above rely on `%LOCALAPPDATA%` being writable by the current user only.
 
+## History, suggestions and clearing data
+
+Every page that finishes loading is recorded in `history.jsonl` (same folder
+as above): one `{"u": address, "t": title, "ts": unix seconds}` line per
+visit, appended in the background at most every 2 s and when the app closes.
+Only `http`/`https` addresses up to 8 KiB are kept, titles cut to 512
+characters; the browser's own pages never are. The file is read as untrusted:
+bad or torn lines are skipped (and dropped at the next rewrite), and at most
+its last 16 MiB are read. Past 50,000 visits it is compacted to the newest
+40,000, written to a temporary file and renamed over the old one.
+
+Typing in the address bar lists up to 8 matching pages under it, by address or
+title; addresses that start with the text, and pages visited often and
+recently, come first. Only visits the user started count as "often": typed or
+picked addresses and link clicks (as WebView2 reports them); a page's own
+script navigations only refresh "recently". ↑/↓ choose one (its address goes into the box), Enter
+opens it, Esc closes the list and restores what was typed. The list never
+takes focus from the address bar, and closes when focus or the window moves,
+the window is resized, the tab changes or a page starts loading.
+
+Ctrl+H opens the history list (one row per address, newest first, with a
+search box). × then "Sil?" removes every visit to that address; "Tüm geçmişi
+sil" removes all history. "Tarama verilerini temizle" removes history plus
+WebView2's cookies and all site data (local storage, IndexedDB, cache
+storage, service workers…), its disk cache and its own browsing history.
+Saved passwords, autofill and the download list are kept. Both also forget
+the recently closed tabs (Ctrl+Shift+T), and both ask for confirmation first.
+
 ## Icon
 
 `assets/x-browser.ico` (16, 24, 32, 48 and 256 px) is drawn by

@@ -23,6 +23,14 @@ pub struct Tab {
     pub muted: bool,
     /// Page zoom in whole percent (100 = none), as WebView2 last reported it.
     pub zoom: u16,
+    /// The next navigation to start was asked for by the user (address
+    /// bar, a picked suggestion); taken by that navigation (see `history`).
+    pub user_nav_next: bool,
+    /// The navigation in progress, if the user started it (its id).
+    pub user_nav: Option<u64>,
+    /// The address the page last committed (`url` may already show a typed
+    /// one): where its title changes go in history.
+    pub page_url: String,
 }
 
 #[derive(Debug, Default)]
@@ -114,6 +122,9 @@ impl Tabs {
             audible: false,
             muted: false,
             zoom: 100,
+            user_nav_next: false,
+            user_nav: None,
+            page_url: String::new(),
         };
         let at = match placement {
             Placement::End => self.tabs.len(),

@@ -3,8 +3,10 @@
 
 mod app;
 mod commands;
+mod history;
 mod instance;
 mod native;
+mod overlay;
 mod page_tools;
 #[cfg(feature = "selftest")]
 mod selftest;
@@ -137,6 +139,8 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
 
     let mut app = App::new(window, event_loop.create_proxy())?;
     app.persist = persist;
+    // Nothing read yet: that waits until the UI is up (see `history`).
+    app.history = history::History::new(dir);
     session::track_window(&mut app);
     timing::mark("ui-webview-created");
 
@@ -165,11 +169,16 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
             Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => app.quit = true,
                 WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                    overlay::on_window_changed(&mut app);
                     app.layout();
                     app.mark_dirty(); // maximize state may have changed
                     session::track_window(&mut app);
                 }
-                WindowEvent::Moved(_) => session::track_window(&mut app),
+                WindowEvent::Moved(_) => {
+                    overlay::on_window_changed(&mut app);
+                    session::track_window(&mut app);
+                }
+                WindowEvent::Focused(false) => overlay::on_window_unfocused(&mut app),
                 WindowEvent::ThemeChanged(theme) => app.on_theme(theme),
                 _ => {}
             },
@@ -187,9 +196,12 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
         if app.quit {
             // Last save, while every tab is still there.
             session::save_at_exit(&mut app);
+            if !app.history.flush_now(std::time::Duration::from_secs(2)) {
+                eprintln!("x-browser: history not fully written at exit");
+            }
             *flow = ControlFlow::Exit;
-        } else if let Some(due) = app.persist.due {
-            // Wake up for the pending save even if nothing else happens.
+        } else if let Some(due) = [app.persist.due, app.history.due].into_iter().flatten().min() {
+            // Wake up for the pending saves even if nothing else happens.
             *flow = ControlFlow::WaitUntil(due);
         }
     });

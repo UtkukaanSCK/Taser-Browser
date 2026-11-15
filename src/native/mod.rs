@@ -184,6 +184,51 @@ mod imp {
         }
     }
 
+    /// Whether `window` is the foreground window (not some other program's).
+    pub fn is_foreground(window: &tao::window::Window) -> bool {
+        use tao::platform::windows::WindowExtWindows;
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        unsafe { GetForegroundWindow().0 as isize == window.hwnd() }
+    }
+
+    /// Clears the profile's cookies and site data (ALL_SITE: cookies, DOM
+    /// storage, IndexedDB, cache storage, file systems), the disk cache and
+    /// WebView2's own browsing history; `done(true)` once that succeeded,
+    /// `done(false)` if it failed or could not start. Passwords, autofill and
+    /// download history are kept.
+    pub fn clear_browsing_data(view: &WebView, done: impl FnOnce(bool) + 'static) {
+        use std::{cell::Cell, rc::Rc};
+        use windows::core::Interface;
+        let kinds = COREWEBVIEW2_BROWSING_DATA_KINDS(
+            COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE.0
+                | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE.0
+                | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY.0,
+        );
+        let done = Rc::new(Cell::new(Some(done)));
+        let later = done.clone();
+        let started = unsafe {
+            view.webview().cast::<ICoreWebView2_13>().and_then(|w| w.Profile()).and_then(|p| p.cast::<ICoreWebView2Profile2>()).and_then(
+                |p| {
+                    p.ClearBrowsingData(
+                        kinds,
+                        &ClearBrowsingDataCompletedHandler::create(Box::new(move |r| {
+                            if let Some(done) = later.take() {
+                                done(r.is_ok());
+                            }
+                            Ok(())
+                        })),
+                    )
+                },
+            )
+        };
+        if let Err(e) = started {
+            eprintln!("x-browser: cannot clear browsing data: {e}");
+            if let Some(done) = done.take() {
+                done(false);
+            }
+        }
+    }
+
     /// Saves a PNG of what the webview currently shows (self-test only).
     #[cfg(feature = "selftest")]
     pub fn capture_png(view: &WebView, path: &std::path::Path) -> windows::core::Result<()> {
@@ -232,6 +277,12 @@ mod imp {
     pub fn fatal(_: &str) {}
     pub fn process_uptime() -> Option<std::time::Duration> {
         None
+    }
+    pub fn is_foreground(_: &tao::window::Window) -> bool {
+        true
+    }
+    pub fn clear_browsing_data(_: &WebView, done: impl FnOnce(bool) + 'static) {
+        done(false);
     }
     #[cfg(feature = "selftest")]
     pub fn capture_png(_: &WebView, _: &std::path::Path) -> Result<(), ()> {

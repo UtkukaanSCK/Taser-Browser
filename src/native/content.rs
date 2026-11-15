@@ -235,8 +235,18 @@ mod imp {
             let p = proxy.clone();
             wv.add_NavigationStarting(
                 &NavigationStartingEventHandler::create(Box::new(move |wv, args| {
-                    if let Some(args) = args
-                        && is_ui_url(&nav_uri(&args)?)
+                    // Who started it decides whether the visit counts toward
+                    // the address's frequency (see `history`). Sent first, so
+                    // a navigation refused below still uses up the address
+                    // bar's "the user asked" mark.
+                    if let Some(args) = &args {
+                        let (mut user, mut nav) = (BOOL(0), 0u64);
+                        let _ = args.IsUserInitiated(&mut user);
+                        let _ = args.NavigationId(&mut nav);
+                        let _ = p.send_event(UserEvent::Page(tab, PageEvent::Navigating { nav, user: user.as_bool() }));
+                    }
+                    if let Some(args) = &args
+                        && is_ui_url(&nav_uri(args)?)
                     {
                         args.SetCancel(true)?;
                         // The address bar may already show the refused URL,
@@ -279,7 +289,22 @@ mod imp {
 
             let p = proxy.clone();
             wv.add_NavigationCompleted(
-                &NavigationCompletedEventHandler::create(Box::new(move |_, _| {
+                &NavigationCompletedEventHandler::create(Box::new(move |wv, args| {
+                    // A page that really loaded goes into history (checked
+                    // there: web addresses only); its title so far comes along.
+                    let mut ok = BOOL(0);
+                    if let Some(args) = args
+                        && args.IsSuccess(&mut ok).is_ok()
+                        && ok.as_bool()
+                        && let Some(wv) = wv
+                        && let Some(url) = source(&wv)
+                    {
+                        let mut title = PWSTR::null();
+                        let title = if wv.DocumentTitle(&mut title).is_ok() { take_pwstr(title) } else { String::new() };
+                        let mut nav = 0u64;
+                        let _ = args.NavigationId(&mut nav);
+                        let _ = p.send_event(UserEvent::Page(tab, PageEvent::Visited { url, title, nav }));
+                    }
                     let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(false)));
                     Ok(())
                 })),

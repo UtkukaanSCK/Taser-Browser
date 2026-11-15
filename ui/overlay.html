@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>X-Browser</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/js/overlay.js" defer></script>
+</head>
+<body class="bg-surface text-ink font-sans text-[13px] leading-none border border-line">
+<!-- Address-bar suggestions: 30px rows (ROW_H in overlay.rs), 4px padding. -->
+<ul id="suggest" role="listbox" aria-label="Öneriler" class="py-1" hidden></ul>
+
+<section id="history" aria-label="Geçmiş" class="flex h-full flex-col" hidden>
+  <header class="flex items-center gap-2 border-b border-line px-3 py-2">
+    <h1 class="text-[14px] font-semibold">Geçmiş</h1>
+    <input id="h-search" type="search" maxlength="128" spellcheck="false" autocomplete="off"
+      placeholder="Geçmişte ara" aria-label="Geçmişte ara"
+      class="ml-auto h-7 w-56 min-w-0 rounded-md border border-line bg-surface px-2 outline-none focus:border-accent">
+  </header>
+  <ul id="h-list" aria-label="Ziyaret edilen sayfalar" class="min-h-0 flex-1 overflow-y-auto py-1"></ul>
+  <p id="h-empty" class="flex-1 px-3 py-6 text-center text-muted" hidden>Geçmiş boş</p>
+  <p id="h-more" class="border-t border-line px-3 py-1.5 text-muted" hidden></p>
+  <footer class="flex flex-col gap-2 border-t border-line px-3 py-2">
+    <div id="h-actions" class="flex flex-wrap gap-2">
+      <button id="h-delete-all" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Tüm geçmişi sil</button>
+      <button id="h-clear" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Tarama verilerini temizle</button>
+    </div>
+    <div id="h-confirm" class="flex flex-wrap items-center gap-2" hidden>
+      <span id="h-confirm-text" class="mr-auto leading-snug"></span>
+      <button id="h-yes" type="button" class="h-7 rounded-md border border-danger px-3 text-danger hover:bg-hover">Sil</button>
+      <button id="h-no" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Vazgeç</button>
+    </div>
+    <p id="h-status" role="status" class="leading-snug text-muted empty:hidden"></p>
+  </footer>
+</section>
+</body>
+</html>

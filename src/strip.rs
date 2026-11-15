@@ -135,6 +135,18 @@ impl ClosedTabs {
         self.0.pop_back()
     }
 
+    /// Forgets every closed tab (history deleted or browsing data cleared).
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    /// Forgets the closed tabs at `url` (compared as history stores it:
+    /// without `#fragment` or credentials), as that address left history.
+    pub fn forget(&mut self, url: &str) {
+        let url = crate::history::normalize(url);
+        self.0.retain(|(u, _)| crate::history::normalize(u) != url);
+    }
+
     #[cfg(any(test, feature = "selftest"))]
     pub fn len(&self) -> usize {
         self.0.len()
@@ -309,5 +321,16 @@ mod tests {
         assert_eq!(c.len(), 0, "a URL cut for display is refused too");
         c.push(&at_cap, 2);
         assert_eq!(c.pop(), Some((at_cap, 2)), "exactly at the cap, kept whole");
+    }
+
+    #[test]
+    fn closed_stack_forgets_a_deleted_address() {
+        let mut c = ClosedTabs::default();
+        c.push("https://a.test/page#part", 0);
+        c.push("https://b.test/", 1);
+        c.push("https://a.test/page", 2);
+        c.forget("https://a.test/page");
+        assert_eq!(c.len(), 1, "every tab at that address, fragment or not");
+        assert_eq!(c.pop(), Some(("https://b.test/".to_string(), 1)));
     }
 }

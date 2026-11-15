@@ -11,10 +11,15 @@ use wry::{Rect, WebContext, WebView, WebViewBuilder};
 
 const PROTOCOL: &str = "xb";
 pub const START_URL: &str = "xb://ui/index.html";
+/// The popup surface's page (see `overlay`).
+pub const OVERLAY_URL: &str = "xb://ui/overlay.html";
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 const CORE_JS: &str = include_str!("../ui/js/core.js");
 const STRIP_JS: &str = include_str!("../ui/js/strip.js");
+const SUGGEST_JS: &str = include_str!("../ui/js/suggest.js");
+const OVERLAY_HTML: &str = include_str!("../ui/overlay.html");
+const OVERLAY_JS: &str = include_str!("../ui/js/overlay.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -64,6 +69,9 @@ fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/" | "/index.html" => (INDEX_HTML, "text/html; charset=utf-8"),
         "/js/core.js" => (CORE_JS, "text/javascript; charset=utf-8"),
         "/js/strip.js" => (STRIP_JS, "text/javascript; charset=utf-8"),
+        "/js/suggest.js" => (SUGGEST_JS, "text/javascript; charset=utf-8"),
+        "/overlay.html" => (OVERLAY_HTML, "text/html; charset=utf-8"),
+        "/js/overlay.js" => (OVERLAY_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })
@@ -84,22 +92,24 @@ fn serve(req: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     .unwrap_or_else(|_| Response::new(Cow::Borrowed(&b""[..])))
 }
 
-pub fn build(
-    window: &Window,
-    context: &mut WebContext,
+/// What the UI and overlay webviews share: our assets on the `xb` protocol,
+/// the one IPC handler, and no way off the UI origin.
+fn ui_builder<'a>(
+    context: &'a mut WebContext,
     proxy: &Proxy,
+    url: &str,
     bounds: Rect,
     background: (u8, u8, u8, u8),
-) -> wry::Result<WebView> {
+) -> WebViewBuilder<'a> {
     let p = proxy.clone();
     let builder = WebViewBuilder::new_with_web_context(context)
         .with_custom_protocol(PROTOCOL.into(), |_, req| serve(req))
-        .with_url(START_URL)
+        .with_url(url)
         .with_bounds(bounds)
         .with_background_color(background)
         .with_ipc_handler(move |req: Request<String>| {
-            // The handler is only installed on this webview; also require the
-            // message to come from our own page, in case it was navigated.
+            // The handler is only installed on our own webviews; also require
+            // the message to come from our own page, in case it was navigated.
             if !is_ui_origin(&req.uri().to_string()) {
                 return;
             }
@@ -116,12 +126,44 @@ pub fn build(
         use wry::WebViewBuilderExtWindows;
         // F5/Ctrl+R etc. must never reload the UI itself; our accelerator
         // handler still sees every key.
-        builder
-            .with_browser_accelerator_keys(false)
-            .with_default_context_menus(cfg!(debug_assertions))
-            // This builder creates the environment (content tabs reuse it), so
-            // its arguments are the ones every webview runs with.
-            .with_additional_browser_args(BROWSER_ARGS)
+        builder.with_browser_accelerator_keys(false).with_default_context_menus(cfg!(debug_assertions))
+    };
+    builder
+}
+
+pub fn build(
+    window: &Window,
+    context: &mut WebContext,
+    proxy: &Proxy,
+    bounds: Rect,
+    background: (u8, u8, u8, u8),
+) -> wry::Result<WebView> {
+    let builder = ui_builder(context, proxy, START_URL, bounds, background);
+    #[cfg(windows)]
+    let builder = {
+        use wry::WebViewBuilderExtWindows;
+        // This builder creates the environment (content tabs reuse it), so
+        // its arguments are the ones every webview runs with.
+        builder.with_additional_browser_args(BROWSER_ARGS)
+    };
+    builder.build_as_child(window)
+}
+
+/// The overlay webview: the UI's settings on its own page, created hidden
+/// and without taking focus (it is shown by `overlay`).
+pub fn build_overlay(
+    window: &Window,
+    context: &mut WebContext,
+    #[cfg(windows)] environment: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
+    proxy: &Proxy,
+    bounds: Rect,
+    background: (u8, u8, u8, u8),
+) -> wry::Result<WebView> {
+    let builder = ui_builder(context, proxy, OVERLAY_URL, bounds, background).with_visible(false).with_focused(false);
+    #[cfg(windows)]
+    let builder = {
+        use wry::WebViewBuilderExtWindows;
+        builder.with_environment(environment.clone())
     };
     builder.build_as_child(window)
 }
@@ -180,6 +222,11 @@ mod tests {
         assert!(r.headers()[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"));
         assert_eq!(get("/js/core.js").status(), 200);
         assert_eq!(get("/js/strip.js").status(), 200);
+        assert_eq!(get("/js/suggest.js").status(), 200);
+        assert_eq!(get("/js/overlay.js").status(), 200);
+        let r = get("/overlay.html");
+        assert_eq!(r.status(), 200);
+        assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], CSP);
         assert_eq!(get("/app.js").status(), 404);
         assert_eq!(get("/app.css").status(), 200);
         assert_eq!(get("/../Cargo.toml").status(), 404);
@@ -198,18 +245,29 @@ mod tests {
 
     #[test]
     fn html_has_no_inline_script_or_handlers() {
-        assert!(!INDEX_HTML.contains("<script>"), "no inline script");
-        assert!(!INDEX_HTML.contains("<style"), "no inline style blocks");
-        assert!(!INDEX_HTML.contains("style="), "no inline styles");
-        // No inline event handlers: an attribute ` on<letters>=`.
-        let lower = INDEX_HTML.to_ascii_lowercase();
-        for (i, _) in lower.match_indices(" on") {
-            let rest = &lower[i + 3..];
-            let name_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
-            assert!(
-                name_len == 0 || !rest[name_len..].trim_start().starts_with('='),
-                "inline event handler near byte {i}"
-            );
+        for html in [INDEX_HTML, OVERLAY_HTML] {
+            assert!(!html.contains("<script>"), "no inline script");
+            assert!(!html.contains("<style"), "no inline style blocks");
+            assert!(!html.contains("style="), "no inline styles");
+            // No inline event handlers: an attribute ` on<letters>=`.
+            let lower = html.to_ascii_lowercase();
+            for (i, _) in lower.match_indices(" on") {
+                let rest = &lower[i + 3..];
+                let name_len = rest.bytes().take_while(u8::is_ascii_alphabetic).count();
+                assert!(
+                    name_len == 0 || !rest[name_len..].trim_start().starts_with('='),
+                    "inline event handler near byte {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scripts_never_write_html() {
+        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS] {
+            for bad in [".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval("] {
+                assert!(!js.contains(bad), "{bad}");
+            }
         }
     }
 }

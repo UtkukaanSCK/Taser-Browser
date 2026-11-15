@@ -33,6 +33,8 @@ pub enum UserEvent {
     /// X-Browser was started again (see `instance`): open this checked web
     /// address in a new tab, or with None just come to the front.
     OpenFromOtherInstance(Option<String>),
+    /// The history file has been read in the background (see `history`).
+    HistoryLoaded,
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -53,6 +55,11 @@ pub enum PageEvent {
     Zoom(f64),
     /// A page element entered (true) or left element fullscreen.
     Fullscreen(bool),
+    /// A navigation started; `user`: WebView2 says the user started it
+    /// (a link click), as opposed to a script or redirect.
+    Navigating { nav: u64, user: bool },
+    /// Navigation `nav` completed successfully: a history entry (checked there).
+    Visited { url: String, title: String, nav: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,9 +98,11 @@ pub struct App {
     /// Content webviews, same order as nothing in particular; looked up by id.
     pub views: Vec<(TabId, WebView)>,
     pub ui: WebView,
+    /// Suggestions and the history list (see `overlay`), made on first use.
+    pub overlay: crate::overlay::Overlay,
     #[cfg(windows)]
-    environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
-    context: WebContext,
+    pub(crate) environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
+    pub(crate) context: WebContext,
     pub window: Window,
     pub tabs: Tabs,
     /// Ctrl+Shift+T stack (see `strip`).
@@ -119,6 +128,8 @@ pub struct App {
     pub fullscreen: Fullscreen,
     /// session.json / window.json (see `session`).
     pub persist: crate::session::Persist,
+    /// history.jsonl (see `history`).
+    pub history: crate::history::History,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -184,6 +195,8 @@ impl App {
             handovers: crate::instance::Repeats::default(),
             fullscreen: Fullscreen::default(),
             persist: Default::default(),
+            history: Default::default(),
+            overlay: Default::default(),
             quit: false,
         })
     }
@@ -256,7 +269,23 @@ impl App {
                 let _ = p.send_event(UserEvent::Page(id, PageEvent::Url(url)));
             })
         };
-        let view = builder.build_as_child(&self.window)?;
+        // A new webview numbers its navigations afresh: an old id would pass
+        // for a redirect. And if it cannot be made, no navigation of it
+        // takes the address bar's "the user asked" mark later.
+        let fresh = |tabs: &mut crate::tabs::Tabs, asked: bool| {
+            if let Some(t) = tabs.get_mut(id) {
+                t.user_nav = None;
+                t.user_nav_next &= asked;
+            }
+        };
+        let view = match builder.build_as_child(&self.window) {
+            Ok(view) => view,
+            Err(e) => {
+                fresh(&mut self.tabs, false);
+                return Err(e);
+            }
+        };
+        fresh(&mut self.tabs, true);
         let setup = |view: &WebView| -> wry::Result<()> {
             #[cfg(windows)]
             {
@@ -336,6 +365,7 @@ impl App {
             return;
         }
         page_tools::on_switch(self, want);
+        crate::overlay::close(self);
         // A restored tab comes alive on first activation. If its webview
         // cannot be made, it is treated like a tab whose renderer failed: it
         // stays in the strip with its saved title and address, not loading,
@@ -379,7 +409,7 @@ impl App {
         }
     }
 
-    fn focus_after_switch(&self) {
+    pub fn focus_after_switch(&self) {
         let blank = self
             .tabs
             .active()
@@ -436,6 +466,12 @@ impl App {
         }
         self.hide_stale();
         crate::session::save_if_due(self);
+        self.history.flush_if_due(std::time::Instant::now());
+        // However the load got merged (`HistoryLoaded`, or a flush that
+        // polled first), a list or suggestions shown meanwhile lacked the file.
+        if self.history.take_merged() {
+            crate::overlay::refresh(self);
+        }
     }
 
     /// Window caption (taskbar, Alt+Tab) follows the active tab.
@@ -473,6 +509,7 @@ impl App {
                 }
                 self.ui_ready = false;
                 self.dirty = true;
+                crate::overlay::on_ui_failed(self);
                 let _ = self.ui.reload();
             }
             // A dead page shows WebView2's error page; the tab stays, but
@@ -503,6 +540,9 @@ impl App {
             }
             UserEvent::ProcessFailed { tab, failure } => self.on_process_failed(tab, failure),
             UserEvent::NoticeTimeout(generation) => page_tools::on_notice_timeout(self, generation),
+            // Only a wake-up: `flush`, at the end of this pass, merges the
+            // load and redraws what it changes.
+            UserEvent::HistoryLoaded => {}
             UserEvent::OpenFromOtherInstance(url) => {
                 if let Some(url) = url
                     && crate::url::is_tab_url(&url)
@@ -527,6 +567,12 @@ impl App {
         match cmd {
             UiCommand::Ready => {
                 self.ui_ready = true;
+                // Read in the background, ready before the first suggestion.
+                let proxy = self.proxy.clone();
+                self.history.on_loaded(move || {
+                    let _ = proxy.send_event(UserEvent::HistoryLoaded);
+                });
+                self.history.preload();
                 self.dirty = true;
                 // A (re)loaded UI has no icons yet.
                 self.tabs.resend_icons();
@@ -576,6 +622,7 @@ impl App {
             }
             UiCommand::Strip(cmd) => strip::on_command(self, cmd),
             UiCommand::Page(cmd) => page_tools::on_command(self, cmd),
+            UiCommand::Overlay(cmd) => crate::overlay::on_command(self, cmd),
         }
     }
 
@@ -605,6 +652,7 @@ impl App {
             Shortcut::Forward => self.with_active(|v| v.go_forward()),
             Shortcut::Tab(key) => strip::on_key(self, key),
             Shortcut::Page(key) => page_tools::on_key(self, key),
+            Shortcut::History => crate::overlay::toggle_history(self),
         }
     }
 
@@ -623,17 +671,51 @@ impl App {
             }
             PageEvent::Zoom(factor) => return page_tools::on_zoom(self, id, factor),
             PageEvent::Fullscreen(on) => return page_tools::on_page_fullscreen(self, id, on),
+            PageEvent::Navigating { nav, user } => {
+                if let Some(tab) = self.tabs.get_mut(id) {
+                    // Address bar and suggestions go through `load_url`, which
+                    // WebView2 never calls user-initiated: `user_nav_next` says so.
+                    let asked = std::mem::take(&mut tab.user_nav_next);
+                    if user || asked {
+                        tab.user_nav = Some(nav);
+                    } else if tab.user_nav != Some(nav) {
+                        // A redirect keeps its id (and who started it).
+                        tab.user_nav = None;
+                    }
+                }
+                return;
+            }
+            PageEvent::Visited { url, title, nav } => {
+                let Some(tab) = self.tabs.get_mut(id) else { return };
+                let user = tab.user_nav == Some(nav);
+                tab.page_url = crate::url::cap_url(&url);
+                return self.history.record(&url, &title, user);
+            }
+            PageEvent::Loading(true) if self.tabs.active() == Some(id) => crate::overlay::dismiss(self),
             _ => {}
         }
         let Some(tab) = self.tabs.get_mut(id) else { return };
         match ev {
-            PageEvent::CloseRequested | PageEvent::Favicon(_) | PageEvent::Zoom(_) | PageEvent::Fullscreen(_) => {}
+            PageEvent::CloseRequested
+            | PageEvent::Favicon(_)
+            | PageEvent::Zoom(_)
+            | PageEvent::Fullscreen(_)
+            | PageEvent::Navigating { .. }
+            | PageEvent::Visited { .. } => {}
             PageEvent::Audio { playing, muted } => {
                 tab.audible = playing;
                 tab.muted = muted;
             }
-            PageEvent::Title(t) => tab.title = t.chars().take(512).collect(),
-            PageEvent::Url(u) => tab.url = crate::url::cap_url(&u),
+            PageEvent::Title(t) => {
+                tab.title = t.chars().take(512).collect();
+                // Not `tab.url`: a typed address shows there before it
+                // commits, while the old page may still retitle itself.
+                self.history.retitle(&tab.page_url, &tab.title);
+            }
+            PageEvent::Url(u) => {
+                tab.url = crate::url::cap_url(&u);
+                tab.page_url.clone_from(&tab.url);
+            }
             PageEvent::Loading(l) => tab.loading = l,
             PageEvent::History { back, forward } => {
                 tab.can_back = back;
@@ -654,7 +736,8 @@ impl App {
         }
     }
 
-    fn navigate(&mut self, text: &str) {
+    pub fn navigate(&mut self, text: &str) {
+        crate::overlay::close(self);
         match url::resolve_input(text) {
             Resolved::Empty => {}
             Resolved::Blocked => {
@@ -667,6 +750,7 @@ impl App {
                     // the new address.
                     if let Some(t) = self.tabs.get_mut(id) {
                         t.url = u;
+                        t.user_nav_next = true;
                     }
                     self.revive(id);
                     return;
@@ -682,6 +766,7 @@ impl App {
                 if let Some(t) = self.tabs.get_mut(id) {
                     t.url = u;
                     t.loading = true;
+                    t.user_nav_next = true;
                 }
                 self.dirty = true;
             }

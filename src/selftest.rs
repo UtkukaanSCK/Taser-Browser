@@ -27,6 +27,7 @@
 use crate::app::{App, UserEvent};
 use crate::commands::{Mods, Shortcut, UiCommand, vk};
 use crate::native::Proxy;
+use crate::overlay::Mode;
 use crate::page_tools::PageKey;
 use crate::tabs::TabId;
 use std::io::Write;
@@ -41,7 +42,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 352;
+const EXPECTED_CHECKS: u32 = 386;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -55,7 +56,7 @@ pub fn prepare_profile(profile: Option<&std::path::Path>) {
         return;
     }
     let Some(profile) = profile else { return };
-    for name in ["session.json", "window.json"] {
+    for name in ["session.json", "window.json", "history.jsonl"] {
         for suffix in ["", ".bak", ".tmp", ".bak.tmp", ".corrupt", ".bak.corrupt"] {
             let _ = std::fs::remove_file(profile.join(format!("{name}{suffix}")));
         }
@@ -222,7 +223,27 @@ const DELAYS: &[u64] = &[
     3500, // 142 check the lazy tab loaded; close extras
     900,  // 143 start a second process with an address
     3500, // 144 check it handed over and exited, tab opened; close extras
-    900,  // 145 last tab close quits
+    900,  // 145 history: visit https://example.com/?h=1
+    3500, // 146 visit ?h=2
+    3500, // 147 check visits recorded, on disk, bad lines skipped; type a prefix
+    2000, // 148 check suggestions (first overlay show), focus stays; ↓
+    900,  // 149 check ↓ filled the address; Enter
+    3500, // 150 check Enter navigated, list closed; type
+    900,  // 151 Esc
+    900,  // 152 check Esc closed it; type
+    900,  // 153 Ctrl+T closes it; close the tab
+    900,  // 154 type
+    900,  // 155 navigation closes it
+    3500, // 156 type
+    900,  // 157 resize
+    900,  // 158 check the resize closed it; size back; F11
+    900,  // 159 Ctrl+H (leaves F11)
+    900,  // 160 check the history list; delete one
+    900,  // 161 check delete one; set a cookie; delete all
+    900,  // 162 check delete all, cookie set; clear browsing data
+    1500, // 163 check cleared; Esc; reload the page
+    3500, // 164 check closed, cookie gone
+    900,  // 165 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -289,6 +310,52 @@ fn page_js(app: &App, js: &str) {
 fn only_active_visible(app: &App) -> bool {
     let active = app.tabs.active();
     app.views.iter().all(|(id, v)| visible(v) == (Some(*id) == active))
+}
+
+/// Types `text` into the focused address bar as an edit (an `input` event),
+/// which asks for suggestions.
+fn suggest_type(app: &App, text: &str) {
+    let _ = app.ui.focus();
+    type_in_focused_address(app, text);
+}
+
+/// `suggest_type` for an address bar that already has focus. No
+/// `WebView::focus`: called right after a queued read, it blurred the address
+/// (and the window) before that read ran, and the blur puts the page's URL
+/// back in the field.
+fn type_in_focused_address(app: &App, text: &str) {
+    let mut lit = String::new();
+    crate::tabs::push_json_str(&mut lit, text);
+    ui_js(
+        app,
+        &format!(
+            "(() => {{ const a = document.getElementById('address'); a.focus(); a.value = {lit}; \
+             a.dispatchEvent(new Event('input', {{ bubbles: true }})); }})()"
+        ),
+    );
+}
+
+/// A key-down on the address input (as the page sees a real key).
+fn address_key(app: &App, key: &str) {
+    ui_js(
+        app,
+        &format!(
+            "document.getElementById('address').dispatchEvent(new KeyboardEvent('keydown', {{ key: '{key}', bubbles: true, cancelable: true }}))"
+        ),
+    );
+}
+
+fn overlay_js(app: &App, js: &str) {
+    if let Some(v) = app.overlay.view() {
+        let _ = v.evaluate_script(js);
+    } else {
+        check("overlay-exists", false, "no overlay webview");
+    }
+}
+
+/// The overlay is hidden, as a mode and as a webview.
+fn overlay_closed(app: &App) -> bool {
+    app.overlay.mode == Mode::Hidden && !app.overlay.view().is_some_and(visible)
 }
 
 fn type_in_address(app: &App, text: &str) {
@@ -2881,6 +2948,271 @@ pub fn step(app: &mut App, n: u32) {
             close_extra_tabs(app);
         }
         145 => {
+            // History and suggestions (task 5). Two visits of our own first.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?h=1".into())));
+        }
+        146 => {
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?h=2".into())));
+        }
+        147 => {
+            let (rows, _) = app.history.list("example.com/?h=");
+            let has = |q: &str| rows.iter().any(|e| e.u.starts_with(q) && e.t == "Example Domain");
+            check(
+                "history-visit-recorded",
+                has("https://example.com/?h=1") && has("https://example.com/?h=2"),
+                format!("{:?}", rows.iter().map(|e| (&e.u, &e.t)).collect::<Vec<_>>()),
+            );
+            let flushed = app.history.flush_now(Duration::from_secs(2));
+            let file = app.history.reload();
+            let kept = |q: &str| file.iter().any(|v| v.u.starts_with(q) && v.ts > 0);
+            check(
+                "history-survives-reload",
+                flushed && kept("https://example.com/?h=1") && kept("https://example.com/?h=2"),
+                format!("flushed {flushed}, {} visits in {:?}", file.len(), app.history.path()),
+            );
+            // Typed in the address bar: WebView2 calls it host-initiated, but
+            // it is the user's, so it counts toward frequency.
+            let typed: Vec<u8> = file.iter().filter(|v| v.u.starts_with("https://example.com/?h=")).map(|v| v.k).collect();
+            check(
+                "history-typed-visit-counts",
+                !typed.is_empty() && typed.iter().all(|&k| k == crate::history::VISIT_USER),
+                format!("kinds {typed:?}"),
+            );
+            let bad = dir().join("history-bad");
+            let _ = std::fs::create_dir_all(&bad);
+            let lines = "{\"u\":\"https://example.com/good\",\"t\":\"Good\",\"ts\":1700000000}\n\
+                         not json at all\n\
+                         {\"u\":\"javascript:alert(1)\",\"t\":\"x\",\"ts\":1700000000}\n\
+                         {\"u\":\"http://xb.ui/index.html\",\"t\":\"x\",\"ts\":1700000000}\n\
+                         {\"u\":\"https://example.com/torn\",\"t\":\"To";
+            let written = std::fs::write(bad.join("history.jsonl"), lines);
+            let (visits, skipped) = crate::history::load_file(&bad.join("history.jsonl"));
+            check(
+                "history-bad-lines-skipped",
+                written.is_ok() && visits.len() == 1 && visits[0].u == "https://example.com/good" && skipped >= 3,
+                format!("{written:?}, kept {:?}, skipped {skipped}", visits.iter().map(|v| &v.u).collect::<Vec<_>>()),
+            );
+            suggest_type(app, "example.com/?h=1");
+        }
+        148 => {
+            let o = &app.overlay;
+            let shown = o.mode == Mode::Suggest && o.view().is_some_and(visible);
+            check("suggest-shows-for-prefix", shown, format!("mode {:?}", o.mode));
+            match o.first_show {
+                Some(t) => log(&format!("INFO overlay first show {} ms (build to visible)", t.as_millis())),
+                None => check("overlay-first-show-timed", false, "no first show"),
+            }
+            if let Some(v) = o.view() {
+                let (x, y, w, h) = bounds_of(app, v);
+                check(
+                    "suggest-sits-under-address",
+                    (y - (crate::app::UI_HEIGHT - 4.0)).abs() < 1.5 && (h - 40.0).abs() < 1.5 && w >= 359.0 && x >= 0.0,
+                    format!("({x},{y},{w},{h})"),
+                );
+                let s = settings_of(v);
+                check("overlay-no-devtools-keys-zoom", s == (false, false, false), format!("{s:?}"));
+            }
+            eval(
+                app.overlay.view(),
+                "suggest-rows-and-no-focus",
+                "(() => { const s = document.querySelector('#suggest li span'); \
+                 return `rows=${document.querySelectorAll('#suggest li').length};focus=${document.hasFocus()};first=${s ? s.textContent : ''}`; })()",
+                |r| {
+                    check(
+                        "suggest-rows-and-no-focus",
+                        field(&r, "rows") == "1" && field(&r, "focus") == "false" && field(&r, "first").starts_with("https://example.com/?h=1"),
+                        &r,
+                    );
+                },
+            );
+            ui_eval(app, "suggest-address-keeps-focus", "`el=${document.activeElement.id};focus=${document.hasFocus()}`", |r| {
+                check("suggest-address-keeps-focus", field(&r, "el") == "address" && field(&r, "focus") == "true", &r);
+            });
+            address_key(app, "ArrowDown");
+        }
+        149 => {
+            ui_eval(app, "suggest-down-fills-address", "document.getElementById('address').value", |r| {
+                check("suggest-down-fills-address", r.starts_with("https://example.com/?h=1"), &r);
+            });
+            eval(app.overlay.view(), "suggest-down-marks-row", "`${document.querySelector('#suggest li').hasAttribute('data-sel')}`", |r| {
+                check("suggest-down-marks-row", r == "true", &r);
+            });
+            address_key(app, "Enter");
+        }
+        150 => {
+            check("suggest-enter-navigates", active_url(app).starts_with("https://example.com/?h=1"), active_url(app));
+            check("suggest-closed-after-pick", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            suggest_type(app, "example");
+        }
+        151 => {
+            check("suggest-open-for-esc", app.overlay.mode == Mode::Suggest, format!("mode {:?}", app.overlay.mode));
+            address_key(app, "Escape");
+        }
+        152 => {
+            check("suggest-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            ui_eval(
+                app,
+                "suggest-esc-keeps-text-and-focus",
+                "`v=${document.getElementById('address').value};el=${document.activeElement.id};focus=${document.hasFocus()}`",
+                |r| {
+                    check(
+                        "suggest-esc-keeps-text-and-focus",
+                        field(&r, "v") == "example" && field(&r, "el") == "address" && field(&r, "focus") == "true",
+                        &r,
+                    );
+                },
+            );
+            type_in_focused_address(app, "example");
+        }
+        153 => {
+            check("suggest-open-for-tab-switch", app.overlay.mode == Mode::Suggest, format!("mode {:?}", app.overlay.mode));
+            press(app, vk::T, CTRL);
+            check("suggest-closes-on-tab-switch", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            close_extra_tabs(app);
+        }
+        154 => {
+            // Typed a step later: the closed tab's focus moves settle first
+            // (focus leaving the address closes the list, as it should).
+            suggest_type(app, "example");
+        }
+        155 => {
+            check("suggest-open-for-navigation", app.overlay.mode == Mode::Suggest, format!("mode {:?}", app.overlay.mode));
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?h=3".into())));
+            check("suggest-closes-on-navigation", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+        }
+        156 => {
+            suggest_type(app, "example");
+        }
+        157 => {
+            check("suggest-open-for-resize", app.overlay.mode == Mode::Suggest, format!("mode {:?}", app.overlay.mode));
+            let (w, h) = logical_size(app);
+            remember("pre-resize-w", w as i64);
+            remember("pre-resize-h", h as i64);
+            app.window.set_inner_size(LogicalSize::new(w - 100.0, h));
+        }
+        158 => {
+            check("suggest-closes-on-resize", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            let (w, h) = (recall("pre-resize-w") as f64, recall("pre-resize-h") as f64);
+            app.window.set_inner_size(LogicalSize::new(w, h));
+            press(app, crate::page_tools::keys::F11, NONE);
+        }
+        159 => {
+            // From F11: leaving fullscreen resizes and moves the window, and
+            // those events (delivered after this handler) must not close it.
+            press(app, vk::H, CTRL);
+        }
+        160 => {
+            let o = &app.overlay;
+            check(
+                "ctrl-h-leaves-fullscreen-and-stays-open",
+                !app.fullscreen.on() && app.window.fullscreen().is_none() && o.mode == Mode::History,
+                format!("{:?} mode {:?}", app.fullscreen, o.mode),
+            );
+            check("ctrl-h-opens-history", o.mode == Mode::History && o.view().is_some_and(visible), format!("mode {:?}", o.mode));
+            if let Some(v) = o.view() {
+                let (x, y, w, h) = bounds_of(app, v);
+                let (ww, _) = logical_size(app);
+                check(
+                    "history-panel-place",
+                    (y - (crate::app::UI_HEIGHT + 4.0)).abs() < 1.5 && (x + w - (ww - 8.0)).abs() < 1.5 && h > 100.0,
+                    format!("({x},{y},{w},{h}) in width {ww}"),
+                );
+            }
+            eval(
+                app.overlay.view(),
+                "history-list-shown-and-focused",
+                "`rows=${document.querySelectorAll('#h-list li').length};el=${document.activeElement.id};focus=${document.hasFocus()}`",
+                |r| {
+                    check(
+                        "history-list-shown-and-focused",
+                        num(&r, "rows") >= 3.0 && field(&r, "el") == "h-search" && field(&r, "focus") == "true",
+                        &r,
+                    );
+                },
+            );
+            remember("history-pages", app.history.pages() as i64);
+            // × arms the delete, the second click deletes the newest address.
+            overlay_js(app, "(() => { const b = document.querySelector('#h-list li button:last-child'); b.click(); b.click(); })()");
+        }
+        161 => {
+            let (pages, was) = (app.history.pages() as i64, recall("history-pages"));
+            check(
+                "history-delete-one",
+                pages == was - 1 && app.overlay.mode == Mode::History,
+                format!("{pages} pages (were {was}), mode {:?}", app.overlay.mode),
+            );
+            page_js(app, "document.cookie = 'xbtest=1; max-age=3600; path=/'");
+            remember("closed-before-delete", app.closed.len() as i64);
+            overlay_js(app, "document.getElementById('h-delete-all').click(); document.getElementById('h-yes').click();");
+        }
+        162 => {
+            let flushed = app.history.flush_now(Duration::from_secs(2));
+            let file = app.history.reload();
+            check(
+                "history-delete-all",
+                flushed && app.history.pages() == 0 && file.is_empty(),
+                format!("flushed {flushed}, {} pages, {} visits on disk", app.history.pages(), file.len()),
+            );
+            let was = recall("closed-before-delete");
+            check(
+                "history-delete-all-forgets-closed-tabs",
+                was > 0 && app.closed.len() == 0,
+                format!("{} closed tabs remembered (were {was})", app.closed.len()),
+            );
+            page_eval(app, "clear-data-cookie-set-first", "document.cookie", |r| {
+                check("clear-data-cookie-set-first", r.contains("xbtest=1"), &r);
+            });
+            app.history.record("https://example.com/?dummy=1", "dummy", true);
+            overlay_js(app, "document.getElementById('h-clear').click(); document.getElementById('h-yes').click();");
+        }
+        163 => {
+            let flushed = app.history.flush_now(Duration::from_secs(2));
+            let file = app.history.reload();
+            check(
+                "clear-data-succeeds-and-empties-history",
+                app.overlay.cleared == Some(true) && flushed && app.history.pages() == 0 && file.is_empty(),
+                format!(
+                    "cleared {:?}, {} pages, {} on disk, mode {:?}, foreground {}",
+                    app.overlay.cleared,
+                    app.history.pages(),
+                    file.len(),
+                    app.overlay.mode,
+                    crate::native::is_foreground(&app.window)
+                ),
+            );
+            overlay_js(app, "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+            page_js(app, "location.reload()");
+        }
+        164 => {
+            check("history-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            page_eval(app, "clear-data-cookie-gone", "document.cookie", |r| {
+                check("clear-data-cookie-gone", !r.contains("xbtest"), &r);
+            });
+            // Who started a navigation, as WebView2 reports it. A real script
+            // navigation here would not do: the probe's SendInput keys give
+            // the page user activation, which WebView2 reports as the user's.
+            use crate::app::PageEvent;
+            use crate::history::{VISIT_AUTO, VISIT_USER};
+            if let Some(id) = app.tabs.active() {
+                let (script, redirected) = (u64::MAX - 2, u64::MAX - 1);
+                let visit = |nav, url: &str| PageEvent::Visited { url: url.into(), title: "T".into(), nav };
+                app.handle(UserEvent::Page(id, PageEvent::Navigating { nav: script, user: false }));
+                app.handle(UserEvent::Page(id, visit(script, "https://example.com/?by=script")));
+                // A link click whose redirect starts again under the same id.
+                app.handle(UserEvent::Page(id, PageEvent::Navigating { nav: redirected, user: true }));
+                app.handle(UserEvent::Page(id, PageEvent::Navigating { nav: redirected, user: false }));
+                app.handle(UserEvent::Page(id, visit(redirected, "https://example.com/?by=click")));
+            }
+            let flushed = app.history.flush_now(Duration::from_secs(2));
+            let file = app.history.reload();
+            let kind = |q: &str| file.iter().find(|v| v.u.ends_with(q)).map(|v| v.k);
+            check(
+                "history-who-started-decides-count",
+                flushed && kind("?by=script") == Some(VISIT_AUTO) && kind("?by=click") == Some(VISIT_USER),
+                format!("flushed {flushed}, script {:?}, click {:?}", kind("?by=script"), kind("?by=click")),
+            );
+        }
+        165 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);

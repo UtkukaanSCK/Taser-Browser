@@ -2,6 +2,9 @@
 @source "./index.html";
 @source "./js/core.js";
 @source "./js/strip.js";
+@source "./js/suggest.js";
+@source "./overlay.html";
+@source "./js/overlay.js";
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;

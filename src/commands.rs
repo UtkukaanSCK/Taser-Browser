@@ -4,6 +4,7 @@
 //!   native key event, so content pages cannot inject one and none carries
 //!   data (no URL, path or text).
 
+use crate::overlay::OverlayCmd;
 use crate::page_tools::{PageCmd, PageKey};
 use crate::strip::{StripCmd, TabKey};
 use crate::tabs::TabId;
@@ -33,6 +34,8 @@ pub enum UiCommand {
     Strip(StripCmd),
     /// Zoom reset (see `page_tools`).
     Page(PageCmd),
+    /// Suggestions and the history list (see `overlay`).
+    Overlay(OverlayCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +73,7 @@ impl UiCommand {
             ("focus-content", None) => Self::FocusContent,
             ("move" | "mute", Some(a)) => Self::Strip(StripCmd::parse(name, a)?),
             ("zoom-reset", Some(a)) => Self::Page(PageCmd::parse(name, a)?),
+            (n, a) if OverlayCmd::NAMES.contains(&n) => Self::Overlay(OverlayCmd::parse(n, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -90,6 +94,8 @@ pub enum Shortcut {
     Tab(TabKey),
     /// Zoom, F11 and Esc out of fullscreen (see `page_tools`).
     Page(PageKey),
+    /// Ctrl+H: the history list (see `overlay`).
+    History,
 }
 
 /// Windows virtual-key codes used below (identical values on every keyboard layout).
@@ -99,6 +105,7 @@ pub mod vk {
     pub const NEXT: u32 = 0x22; // Page Down
     pub const LEFT: u32 = 0x25;
     pub const RIGHT: u32 = 0x27;
+    pub const H: u32 = 0x48;
     pub const L: u32 = 0x4C;
     pub const R: u32 = 0x52;
     pub const T: u32 = 0x54;
@@ -135,6 +142,7 @@ impl Shortcut {
             T if ctrl_only && !m.shift => Self::NewTab,
             W if ctrl_only && !m.shift => Self::CloseTab,
             L if ctrl_only && !m.shift => Self::FocusAddress,
+            H if ctrl_only && !m.shift => Self::History,
             R if ctrl_only => Self::Reload,
             F5 if none || ctrl_only => Self::Reload,
             TAB if ctrl_only && m.shift => Self::PrevTab,
@@ -185,6 +193,11 @@ mod tests {
         assert_eq!(UiCommand::parse("move:4:2"), Some(UiCommand::Strip(StripCmd::Move { id: 4, to: 2 })));
         assert_eq!(UiCommand::parse("mute:4"), Some(UiCommand::Strip(StripCmd::ToggleMute(4))));
         assert_eq!(UiCommand::parse("zoom-reset:4"), Some(UiCommand::Page(PageCmd::ZoomReset(4))));
+        assert_eq!(
+            UiCommand::parse("suggest:12:300:exa:mple"),
+            Some(UiCommand::Overlay(OverlayCmd::Suggest { x: 12, w: 300, text: "exa:mple".into() }))
+        );
+        assert_eq!(UiCommand::parse("ov-delete-all"), Some(UiCommand::Overlay(OverlayCmd::DeleteAll)));
     }
 
     #[test]
@@ -193,6 +206,8 @@ mod tests {
             "", "nope", "close", "close:", "close:x", "close:-1", "activate:1.5", "new:1", "ready:x",
             "resize:s", "resize", "navigate", "Back", " back", "move", "move:4", "move:4:x", "mute", "mute:",
             "zoom-reset", "zoom-reset:", "zoom-reset:x", "zoom-reset:1:2", "zoom", "zoom:1", "fullscreen",
+            "suggest", "suggest:1", "suggest:x:1:a", "suggest-key:left", "ov-open:1", "ov-close:1", "ov-cleared:1",
+            "ov-data-cleared",
         ] {
             assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
         }
@@ -212,6 +227,9 @@ mod tests {
         assert_eq!(Shortcut::from_key(T, CTRL), Some(Shortcut::NewTab));
         assert_eq!(Shortcut::from_key(W, CTRL), Some(Shortcut::CloseTab));
         assert_eq!(Shortcut::from_key(L, CTRL), Some(Shortcut::FocusAddress));
+        assert_eq!(Shortcut::from_key(H, CTRL), Some(Shortcut::History));
+        assert_eq!(Shortcut::from_key(H, CTRL_SHIFT), None);
+        assert_eq!(Shortcut::from_key(H, NONE), None, "plain H types a letter");
         assert_eq!(Shortcut::from_key(R, CTRL), Some(Shortcut::Reload));
         assert_eq!(Shortcut::from_key(TAB, CTRL), Some(Shortcut::NextTab));
         assert_eq!(Shortcut::from_key(TAB, CTRL_SHIFT), Some(Shortcut::PrevTab));
