@@ -122,6 +122,8 @@ pub enum Mode {
     Hidden,
     Suggest,
     History,
+    /// The bookmark editor or list (see `bookmarks`).
+    Bookmarks,
 }
 
 #[derive(Default)]
@@ -162,7 +164,7 @@ impl Overlay {
 #[derive(Serialize)]
 struct SuggestView<'a> {
     serial: u32,
-    items: &'a [crate::history::Suggestion],
+    items: &'a [crate::bookmarks::Marked],
 }
 
 #[derive(Serialize)]
@@ -181,11 +183,11 @@ fn surface(theme: Theme) -> (u8, u8, u8, u8) {
     }
 }
 
-fn win_size(app: &App) -> LogicalSize<f64> {
+pub(crate) fn win_size(app: &App) -> LogicalSize<f64> {
     app.window.inner_size().to_logical(app.window.scale_factor())
 }
 
-fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
+pub(crate) fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     Rect { position: LogicalPosition::new(x, y).into(), size: LogicalSize::new(w.max(1.0), h.max(1.0)).into() }
 }
 
@@ -199,7 +201,7 @@ fn suggest_rect(size: LogicalSize<f64>, x: f64, w: f64, rows: usize) -> Rect {
 }
 
 /// The history panel: at the right, under the strip.
-fn panel_rect(size: LogicalSize<f64>) -> Rect {
+pub(crate) fn panel_rect(size: LogicalSize<f64>) -> Rect {
     let w = PANEL_W.min(size.width - 16.0);
     let y = UI_HEIGHT + 4.0;
     rect((size.width - w - 8.0).max(0.0), y, w, PANEL_H.min(size.height - y - 8.0))
@@ -245,7 +247,7 @@ fn place(app: &App) -> Place {
 }
 
 /// Draws `js` in the overlay at `bounds` in `mode` (once the page is ready).
-fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
+pub(crate) fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
     if !ensure_view(app) {
         return;
     }
@@ -271,7 +273,7 @@ fn present(o: &mut Overlay, was: Mode, js: &str, bounds: Rect) {
             crate::timing::mark("overlay-shown");
         }
     }
-    if o.mode == Mode::History && was != Mode::History {
+    if matches!(o.mode, Mode::History | Mode::Bookmarks) && was != o.mode {
         let _ = view.focus();
     }
 }
@@ -287,7 +289,7 @@ pub fn close(app: &mut App) {
         return;
     }
     if let Some(view) = &o.view {
-        let _ = view.evaluate_script("xbo.clear()");
+        let _ = view.evaluate_script("xbo.clear();xbBm.hide()");
         let _ = view.set_visible(false);
     }
     if was == Mode::Suggest {
@@ -300,7 +302,7 @@ pub fn close(app: &mut App) {
 /// keyboard, so it goes back where Esc would put it, as long as X-Browser is
 /// still the foreground window.
 pub fn dismiss(app: &mut App) {
-    let had_keyboard = app.overlay.mode == Mode::History;
+    let had_keyboard = matches!(app.overlay.mode, Mode::History | Mode::Bookmarks);
     close(app);
     if had_keyboard && native::is_foreground(&app.window) {
         app.focus_after_switch();
@@ -367,10 +369,10 @@ fn render_history(app: &mut App, keep: bool) {
 }
 
 fn suggest(app: &mut App, x: u16, w: u16, text: String) {
-    if app.fullscreen.on() || app.overlay.mode == Mode::History {
+    if app.fullscreen.on() || matches!(app.overlay.mode, Mode::History | Mode::Bookmarks) {
         return;
     }
-    let found = app.history.suggest(&text);
+    let found = crate::bookmarks::suggest(app, &text);
     app.overlay.anchor = (x, w);
     app.overlay.query = text;
     app.overlay.sel = None;
@@ -452,7 +454,7 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
             }
         }
         OverlayCmd::Close => {
-            if app.overlay.mode == Mode::History {
+            if matches!(app.overlay.mode, Mode::History | Mode::Bookmarks) {
                 close(app);
             }
         }
@@ -515,7 +517,8 @@ pub fn refresh(app: &mut App) {
             let text = app.overlay.query.clone();
             suggest(app, x, w, text);
         }
-        Mode::Suggest | Mode::Hidden => {}
+        // The list is redrawn by `bookmarks` itself on every change.
+        Mode::Suggest | Mode::Hidden | Mode::Bookmarks => {}
     }
 }
 

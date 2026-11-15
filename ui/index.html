@@ -7,6 +7,7 @@
 <script src="/js/core.js" defer></script>
 <script src="/js/strip.js" defer></script>
 <script src="/js/suggest.js" defer></script>
+<script src="/js/bookmarks.js" defer></script>
 </head>
 <body class="bg-strip text-ink font-sans text-[13px] leading-none">
 <div id="strip" class="relative flex h-10 items-center gap-1 border-b border-line pl-1.5">
@@ -38,6 +39,11 @@
             class="ml-1 flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-muted hover:bg-hover hover:text-ink">
       <svg class="size-3" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg>
       <span id="zoom-level"></span>
+    </button>
+    <!-- Bookmark star (bookmarks.js): filled while the page is bookmarked. -->
+    <button id="bm-star" type="button" disabled aria-label="Yer imi" aria-pressed="false" title="Bu sayfayı yer imlerine ekle (Ctrl+D)"
+            class="group ml-1 flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-35 disabled:hover:bg-transparent aria-pressed:text-accent">
+      <svg class="size-3.5 group-aria-pressed:fill-current" viewBox="0 0 16 16"><path d="M8 1.5l1.95 4.1 4.55.6-3.3 3.15.8 4.45L8 11.55 3.99 13.8l.8-4.45L1.5 6.2l4.55-.6z"/></svg>
     </button>
   </div>
 

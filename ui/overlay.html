@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>X-Browser</title>
 <link rel="stylesheet" href="/app.css">
+<script src="/js/bookmarks.js" defer></script>
 <script src="/js/overlay.js" defer></script>
 </head>
 <body class="bg-surface text-ink font-sans text-[13px] leading-none border border-line">
@@ -32,6 +33,31 @@
     </div>
     <p id="h-status" role="status" class="leading-snug text-muted empty:hidden"></p>
   </footer>
+</section>
+
+<!-- Bookmark editor (bookmarks.js; EDITOR_W/EDITOR_H in bookmarks.rs). -->
+<section id="bm-edit" aria-labelledby="bm-heading" class="flex h-full flex-col gap-2 px-3 py-3" hidden>
+  <h1 id="bm-heading" class="text-[14px] font-semibold"></h1>
+  <p id="bm-url" class="truncate text-[12px] text-muted"></p>
+  <input id="bm-title" type="text" maxlength="512" spellcheck="false" autocomplete="off" aria-label="Yer imi adı"
+    class="h-7 w-full min-w-0 rounded-md border border-line bg-surface px-2 outline-none select-text focus:border-accent">
+  <div class="mt-auto flex justify-end gap-2">
+    <button id="bm-remove" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent">Kaldır</button>
+    <button id="bm-done" type="button" class="h-7 rounded-md bg-accent px-3 text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">Bitti</button>
+  </div>
+</section>
+
+<!-- Bookmark list (Ctrl+Shift+O). -->
+<section id="bm-list" aria-label="Yer imleri" class="flex h-full flex-col" hidden>
+  <header class="flex items-center gap-2 border-b border-line px-3 py-2">
+    <h1 class="text-[14px] font-semibold">Yer imleri</h1>
+    <input id="bm-search" type="search" maxlength="128" spellcheck="false" autocomplete="off"
+      placeholder="Yer imlerinde ara" aria-label="Yer imlerinde ara"
+      class="ml-auto h-7 w-56 min-w-0 rounded-md border border-line bg-surface px-2 outline-none select-text focus:border-accent">
+  </header>
+  <ul id="bm-rows" aria-label="Yer imleri" class="min-h-0 flex-1 overflow-y-auto py-1"></ul>
+  <p id="bm-empty" class="flex-1 px-3 py-6 text-center text-muted" hidden>Yer imi yok</p>
+  <p id="bm-more" class="border-t border-line px-3 py-1.5 text-muted" hidden></p>
 </section>
 </body>
 </html>

@@ -4,6 +4,7 @@
 //!   native key event, so content pages cannot inject one and none carries
 //!   data (no URL, path or text).
 
+use crate::bookmarks::{BookmarkCmd, BookmarkKey};
 use crate::overlay::OverlayCmd;
 use crate::page_tools::{PageCmd, PageKey};
 use crate::strip::{StripCmd, TabKey};
@@ -36,6 +37,8 @@ pub enum UiCommand {
     Page(PageCmd),
     /// Suggestions and the history list (see `overlay`).
     Overlay(OverlayCmd),
+    /// The star, the editor and the list (see `bookmarks`).
+    Bookmark(BookmarkCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +77,7 @@ impl UiCommand {
             ("move" | "mute", Some(a)) => Self::Strip(StripCmd::parse(name, a)?),
             ("zoom-reset", Some(a)) => Self::Page(PageCmd::parse(name, a)?),
             (n, a) if OverlayCmd::NAMES.contains(&n) => Self::Overlay(OverlayCmd::parse(n, a)?),
+            (n, a) if BookmarkCmd::NAMES.contains(&n) => Self::Bookmark(BookmarkCmd::parse(n, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -96,6 +100,8 @@ pub enum Shortcut {
     Page(PageKey),
     /// Ctrl+H: the history list (see `overlay`).
     History,
+    /// Ctrl+D and Ctrl+Shift+O (see `bookmarks`).
+    Bookmark(BookmarkKey),
 }
 
 /// Windows virtual-key codes used below (identical values on every keyboard layout).
@@ -156,7 +162,8 @@ impl Shortcut {
             _ => {
                 return TabKey::from_key(vk, m)
                     .map(Self::Tab)
-                    .or_else(|| PageKey::from_key(vk, m, esc_exits).map(Self::Page));
+                    .or_else(|| PageKey::from_key(vk, m, esc_exits).map(Self::Page))
+                    .or_else(|| BookmarkKey::from_key(vk, m).map(Self::Bookmark));
             }
         })
     }

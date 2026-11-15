@@ -825,8 +825,14 @@ impl History {
     }
 
     /// Suggestions for typed text, best first, from what is loaded so far.
+    #[cfg(test)]
     pub fn suggest(&self, text: &str) -> Vec<Suggestion> {
         rank(text, &[&self.index], now_secs(), SUGGESTIONS)
+    }
+
+    /// `suggest` with one more source (the bookmarks) ranked alongside.
+    pub fn suggest_with(&self, text: &str, extra: &dyn SuggestSource) -> Vec<Suggestion> {
+        rank(text, &[&self.index, extra], now_secs(), SUGGESTIONS)
     }
 
     /// The history list: one row per address, newest first, those matching

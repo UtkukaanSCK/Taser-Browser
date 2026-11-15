@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod bookmarks;
 mod commands;
 mod history;
 mod instance;
@@ -141,6 +142,7 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
     app.persist = persist;
     // Nothing read yet: that waits until the UI is up (see `history`).
     app.history = history::History::new(dir);
+    app.bookmarks = bookmarks::Bookmarks::new(dir);
     session::track_window(&mut app);
     timing::mark("ui-webview-created");
 

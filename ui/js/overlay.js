@@ -52,6 +52,7 @@
         const title = str(it && it.t);
         row.append(el("span", "min-w-0 shrink truncate", url));
         if (title) row.append(el("span", "min-w-0 flex-1 truncate text-muted", "– " + title));
+        if (window.xbBm) xbBm.mark(row, it);
         // The address input keeps focus: a pick is reported on press.
         row.addEventListener("mousedown", (e) => {
           if (e.button !== 0) return;

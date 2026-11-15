@@ -5,6 +5,7 @@
 @source "./js/suggest.js";
 @source "./overlay.html";
 @source "./js/overlay.js";
+@source "./js/bookmarks.js";
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;

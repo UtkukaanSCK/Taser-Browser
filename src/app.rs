@@ -130,6 +130,8 @@ pub struct App {
     pub persist: crate::session::Persist,
     /// history.jsonl (see `history`).
     pub history: crate::history::History,
+    /// bookmarks.json (see `bookmarks`).
+    pub bookmarks: crate::bookmarks::Bookmarks,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -196,6 +198,7 @@ impl App {
             fullscreen: Fullscreen::default(),
             persist: Default::default(),
             history: Default::default(),
+            bookmarks: Default::default(),
             overlay: Default::default(),
             quit: false,
         })
@@ -472,6 +475,7 @@ impl App {
         if self.history.take_merged() {
             crate::overlay::refresh(self);
         }
+        crate::bookmarks::sync_star(self);
     }
 
     /// Window caption (taskbar, Alt+Tab) follows the active tab.
@@ -573,6 +577,7 @@ impl App {
                     let _ = proxy.send_event(UserEvent::HistoryLoaded);
                 });
                 self.history.preload();
+                crate::bookmarks::on_ui_ready(self);
                 self.dirty = true;
                 // A (re)loaded UI has no icons yet.
                 self.tabs.resend_icons();
@@ -623,6 +628,7 @@ impl App {
             UiCommand::Strip(cmd) => strip::on_command(self, cmd),
             UiCommand::Page(cmd) => page_tools::on_command(self, cmd),
             UiCommand::Overlay(cmd) => crate::overlay::on_command(self, cmd),
+            UiCommand::Bookmark(cmd) => crate::bookmarks::on_command(self, cmd),
         }
     }
 
@@ -653,6 +659,7 @@ impl App {
             Shortcut::Tab(key) => strip::on_key(self, key),
             Shortcut::Page(key) => page_tools::on_key(self, key),
             Shortcut::History => crate::overlay::toggle_history(self),
+            Shortcut::Bookmark(key) => crate::bookmarks::on_key(self, key),
         }
     }
 

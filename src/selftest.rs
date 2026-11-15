@@ -42,7 +42,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 386;
+const EXPECTED_CHECKS: u32 = 421;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -56,7 +56,7 @@ pub fn prepare_profile(profile: Option<&std::path::Path>) {
         return;
     }
     let Some(profile) = profile else { return };
-    for name in ["session.json", "window.json", "history.jsonl"] {
+    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json"] {
         for suffix in ["", ".bak", ".tmp", ".bak.tmp", ".corrupt", ".bak.corrupt"] {
             let _ = std::fs::remove_file(profile.join(format!("{name}{suffix}")));
         }
@@ -243,7 +243,26 @@ const DELAYS: &[u64] = &[
     900,  // 162 check delete all, cookie set; clear browsing data
     1500, // 163 check cleared; Esc; reload the page
     3500, // 164 check closed, cookie gone
-    900,  // 165 last tab close quits
+    900,  // 165 bookmarks: star state, Ctrl+D adds (editor opens)
+    900,  // 166 editor shown, star filled; rename + Enter
+    900,  // 167 rename on disk; Ctrl+D again
+    900,  // 168 Remove focused; remove
+    900,  // 169 removed, star empty; star click
+    900,  // 170 star adds + editor under the star; Esc
+    900,  // 171 Esc closed; Ctrl+Shift+O
+    900,  // 172 list; filter
+    900,  // 173 filter; Ctrl+click
+    3000, // 174 new tab; reopen list
+    900,  // 175 unfiltered; filter by title
+    900,  // 176 filter; click row
+    3000, // 177 opened in the tab; reopen list
+    900,  // 178 delete a row
+    900,  // 179 deleted, on disk; Esc
+    900,  // 180 closed; type for suggestions
+    900,  // 181 check the marked suggestion; Esc
+    900,  // 182 closed; hostile file; Ctrl+D, then the page tries bm-* IPC
+    900,  // 183 content page could not reach it; Esc
+    900,  // 184 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -408,6 +427,19 @@ const CTRL: Mods = Mods { ctrl: true, shift: false, alt: false };
 const CTRL_SHIFT: Mods = Mods { ctrl: true, shift: true, alt: false };
 const ALT: Mods = Mods { ctrl: false, shift: false, alt: true };
 const ALTGR: Mods = Mods { ctrl: true, shift: false, alt: true };
+/// Virtual-key codes of Ctrl+D and Ctrl+Shift+O (bookmarks).
+const BM_D: u32 = 0x44;
+const BM_O: u32 = 0x4F;
+
+/// The active tab's committed page address, as the star sees it.
+fn page_url(app: &App) -> String {
+    app.tabs.active().and_then(|id| app.tabs.get(id)).map(|t| crate::history::normalize(&t.page_url)).unwrap_or_default()
+}
+
+/// bookmarks.json as parsed from disk.
+fn bm_file(app: &App) -> Option<serde_json::Value> {
+    serde_json::from_str(&std::fs::read_to_string(app.bookmarks.path()?).ok()?).ok()
+}
 
 /// A key-down as the native hook sees it: key + modifiers -> `Shortcut::from_key`
 /// -> the app's event handler. Returns what the key mapped to.
@@ -3212,7 +3244,318 @@ pub fn step(app: &mut App, n: u32) {
                 format!("flushed {flushed}, script {:?}, click {:?}", kind("?by=script"), kind("?by=click")),
             );
         }
+        // ---- bookmarks (task 6): one contiguous block, last before the quit ----
         165 => {
+            app.bookmarks.ensure_loaded();
+            check("bm-file-starts-empty", app.bookmarks.items().is_empty(), format!("{:?}", app.bookmarks.items()));
+            ui_eval(
+                app,
+                "bm-star-enabled-and-labelled",
+                "(() => { const b = document.getElementById('bm-star'); \
+                 return `disabled=${b.disabled};pressed=${b.getAttribute('aria-pressed')};label=${b.getAttribute('aria-label')};tab=${b.tabIndex}`; })()",
+                |r| {
+                    check(
+                        "bm-star-enabled-and-labelled",
+                        field(&r, "disabled") == "false"
+                            && field(&r, "pressed") == "false"
+                            && field(&r, "label") == "Yer imi"
+                            && field(&r, "tab") == "0",
+                        &r,
+                    );
+                },
+            );
+            check("bm-altgr-d-is-no-shortcut", Shortcut::from_key(BM_D, ALTGR).is_none(), "AltGr+D mapped");
+            let page = page_url(app);
+            press(app, BM_D, CTRL);
+            check("bm-ctrl-d-adds-the-page", app.bookmarks.contains(&page), format!("{page} in {:?}", app.bookmarks.items()));
+            check("bm-ctrl-d-opens-editor", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
+        }
+        166 => {
+            let o = &app.overlay;
+            check("bm-editor-visible", o.view().is_some_and(visible), format!("mode {:?}", o.mode));
+            eval(
+                app.overlay.view(),
+                "bm-editor-shown-and-focused",
+                "(() => { const t = document.getElementById('bm-title'); \
+                 return `shown=${!document.getElementById('bm-edit').hidden};list=${!document.getElementById('bm-list').hidden};\
+                 el=${document.activeElement.id};focus=${document.hasFocus()};added=${document.getElementById('bm-heading').textContent.includes('eklendi')}`; })()",
+                |r| {
+                    check(
+                        "bm-editor-shown-and-focused",
+                        field(&r, "shown") == "true"
+                            && field(&r, "list") == "false"
+                            && field(&r, "el") == "bm-title"
+                            && field(&r, "focus") == "true"
+                            && field(&r, "added") == "true",
+                        &r,
+                    );
+                },
+            );
+            ui_eval(app, "bm-star-filled-after-add", "document.getElementById('bm-star').getAttribute('aria-pressed')", |r| {
+                check("bm-star-filled-after-add", r == "true", &r);
+            });
+            // Enter in the title field saves and closes.
+            overlay_js(
+                app,
+                "(() => { const t = document.getElementById('bm-title'); t.value = 'Zebra Corner'; \
+                 t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()",
+            );
+        }
+        167 => {
+            let page = page_url(app);
+            let title = app.bookmarks.items().iter().find(|b| b.url == page).map(|b| b.title.clone());
+            check(
+                "bm-editor-enter-renames-and-closes",
+                overlay_closed(app) && title.as_deref() == Some("Zebra Corner"),
+                format!("title {title:?}, mode {:?}", app.overlay.mode),
+            );
+            let flushed = crate::store::flush(Duration::from_secs(5));
+            let on_disk = bm_file(app);
+            let titled = on_disk
+                .as_ref()
+                .and_then(|v| v["items"].as_array())
+                .is_some_and(|a| a.iter().any(|i| i["url"] == page.as_str() && i["title"] == "Zebra Corner" && i["added"].is_u64()));
+            check(
+                "bm-rename-persists-in-file",
+                flushed && titled && on_disk.as_ref().is_some_and(|v| v["v"] == 1),
+                format!("flushed {flushed}, {on_disk:?}"),
+            );
+            press(app, BM_D, CTRL);
+        }
+        168 => {
+            check("bm-ctrl-d-on-bookmarked-opens-editor", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
+            eval(
+                app.overlay.view(),
+                "bm-ctrl-d-focuses-remove",
+                "`el=${document.activeElement.id};edit=${document.getElementById('bm-heading').textContent.includes('imini')};title=${document.getElementById('bm-title').value}`",
+                |r| {
+                    check(
+                        "bm-ctrl-d-focuses-remove",
+                        field(&r, "el") == "bm-remove" && field(&r, "edit") == "true" && field(&r, "title") == "Zebra Corner",
+                        &r,
+                    );
+                },
+            );
+            // Enter on the focused button is a click on it.
+            overlay_js(app, "document.getElementById('bm-remove').click()");
+        }
+        169 => {
+            let page = page_url(app);
+            check("bm-remove-in-editor", !app.bookmarks.contains(&page) && overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            ui_eval(app, "bm-star-empty-after-remove", "document.getElementById('bm-star').getAttribute('aria-pressed')", |r| {
+                check("bm-star-empty-after-remove", r == "false", &r);
+            });
+            ui_js(app, "document.getElementById('bm-star').click()");
+        }
+        170 => {
+            let page = page_url(app);
+            check(
+                "bm-star-click-adds-and-opens-editor",
+                app.bookmarks.contains(&page) && app.overlay.mode == Mode::Bookmarks,
+                format!("mode {:?}", app.overlay.mode),
+            );
+            if let Some(v) = app.overlay.view() {
+                let (x, y, w, h) = bounds_of(app, v);
+                check(
+                    "bm-editor-hangs-under-star",
+                    (y - (crate::app::UI_HEIGHT - 2.0)).abs() < 1.5 && w > 200.0 && h > 100.0,
+                    format!("({x},{y},{w},{h})"),
+                );
+                let right = x + w;
+                ui_eval(app, "bm-editor-right-edge-at-star", "Math.round(document.getElementById('bm-star').getBoundingClientRect().right)", move |r| {
+                    let star: f64 = r.parse().unwrap_or(f64::NAN);
+                    check("bm-editor-right-edge-at-star", (star - right).abs() < 2.0, format!("star right {r}, editor right {right}"));
+                });
+            }
+            app.bookmarks.add("https://example.com/?bm=zebra", "Zebra crossing");
+            app.bookmarks.add("https://example.com/?bm=alpha", "Alpha page");
+            overlay_js(app, "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+        }
+        171 => {
+            check("bm-esc-closes-editor", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            press(app, BM_O, CTRL_SHIFT);
+        }
+        172 => {
+            let o = &app.overlay;
+            check("bm-ctrl-shift-o-opens-list", o.mode == Mode::Bookmarks && o.view().is_some_and(visible), format!("mode {:?}", o.mode));
+            if let Some(v) = o.view() {
+                let (x, y, w, h) = bounds_of(app, v);
+                let (ww, _) = logical_size(app);
+                check(
+                    "bm-list-panel-place",
+                    (y - (crate::app::UI_HEIGHT + 4.0)).abs() < 1.5 && (x + w - (ww - 8.0)).abs() < 1.5 && h > 100.0,
+                    format!("({x},{y},{w},{h}) in width {ww}"),
+                );
+            }
+            eval(
+                app.overlay.view(),
+                "bm-list-shown-and-focused",
+                "`rows=${document.querySelectorAll('#bm-rows li').length};el=${document.activeElement.id};focus=${document.hasFocus()};edit=${document.getElementById('bm-edit').hidden}`",
+                |r| {
+                    check(
+                        "bm-list-shown-and-focused",
+                        num(&r, "rows") == 3.0 && field(&r, "el") == "bm-search" && field(&r, "focus") == "true" && field(&r, "edit") == "true",
+                        &r,
+                    );
+                },
+            );
+            overlay_js(
+                app,
+                "(() => { const s = document.getElementById('bm-search'); s.value = 'zebra'; \
+                 s.dispatchEvent(new Event('input', { bubbles: true })); })()",
+            );
+        }
+        173 => {
+            eval(
+                app.overlay.view(),
+                "bm-list-filter",
+                "(() => { const s = document.querySelector('#bm-rows li button span'); \
+                 return `rows=${document.querySelectorAll('#bm-rows li').length};first=${s ? s.textContent : ''};q=${document.getElementById('bm-search').value}`; })()",
+                |r| {
+                    check("bm-list-filter", num(&r, "rows") == 1.0 && field(&r, "first") == "Zebra crossing" && field(&r, "q") == "zebra", &r);
+                },
+            );
+            remember("bm-tabs", app.tabs.len() as i64);
+            // Ctrl+click: a new tab.
+            overlay_js(
+                app,
+                "document.querySelector('#bm-rows li button').dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))",
+            );
+        }
+        174 => {
+            check(
+                "bm-list-ctrl-click-opens-new-tab",
+                app.tabs.len() as i64 == recall("bm-tabs") + 1 && active_url(app).starts_with("https://example.com/?bm=zebra") && overlay_closed(app),
+                format!("{} tabs (were {}), {}, mode {:?}", app.tabs.len(), recall("bm-tabs"), active_url(app), app.overlay.mode),
+            );
+            press(app, BM_O, CTRL_SHIFT);
+        }
+        175 => {
+            eval(app.overlay.view(), "bm-list-reopens-unfiltered", "`rows=${document.querySelectorAll('#bm-rows li').length};q=${document.getElementById('bm-search').value}`", |r| {
+                check("bm-list-reopens-unfiltered", num(&r, "rows") == 3.0 && field(&r, "q").is_empty(), &r);
+            });
+            overlay_js(
+                app,
+                "(() => { const s = document.getElementById('bm-search'); s.value = 'alpha'; \
+                 s.dispatchEvent(new Event('input', { bubbles: true })); })()",
+            );
+        }
+        176 => {
+            eval(app.overlay.view(), "bm-list-filter-by-title", "`rows=${document.querySelectorAll('#bm-rows li').length}`", |r| {
+                check("bm-list-filter-by-title", r == "rows=1", &r);
+            });
+            // A plain click opens it in the active tab.
+            overlay_js(app, "document.querySelector('#bm-rows li button').click()");
+        }
+        177 => {
+            check(
+                "bm-list-click-opens-in-active-tab",
+                app.tabs.len() as i64 == recall("bm-tabs") + 1 && active_url(app).starts_with("https://example.com/?bm=alpha") && overlay_closed(app),
+                format!("{} tabs, {}, mode {:?}", app.tabs.len(), active_url(app), app.overlay.mode),
+            );
+            press(app, BM_O, CTRL_SHIFT);
+        }
+        178 => {
+            // × arms the delete, the second click deletes (alpha, by its address).
+            overlay_js(
+                app,
+                "(() => { const row = [...document.querySelectorAll('#bm-rows li')].find(li => li.querySelector('button').title.endsWith('?bm=alpha')); \
+                 const b = row.querySelector('button:last-child'); b.click(); b.click(); })()",
+            );
+        }
+        179 => {
+            check(
+                "bm-list-delete-keeps-list-open",
+                !app.bookmarks.contains("https://example.com/?bm=alpha") && app.bookmarks.contains("https://example.com/?bm=zebra") && app.overlay.mode == Mode::Bookmarks,
+                format!("mode {:?}, {:?}", app.overlay.mode, app.bookmarks.items().iter().map(|b| &b.url).collect::<Vec<_>>()),
+            );
+            eval(
+                app.overlay.view(),
+                "bm-list-after-delete-focus-and-rows",
+                "`rows=${document.querySelectorAll('#bm-rows li').length};el=${document.activeElement.id}`",
+                |r| {
+                    check("bm-list-after-delete-focus-and-rows", num(&r, "rows") == 2.0 && field(&r, "el") == "bm-search", &r);
+                },
+            );
+            let flushed = crate::store::flush(Duration::from_secs(5));
+            let urls: Vec<String> = bm_file(app)
+                .and_then(|v| v["items"].as_array().map(|a| a.iter().filter_map(|i| i["url"].as_str().map(String::from)).collect()))
+                .unwrap_or_default();
+            check(
+                "bm-delete-persists-in-file",
+                flushed && urls.len() == 2 && !urls.iter().any(|u| u.ends_with("?bm=alpha")) && urls.iter().any(|u| u.ends_with("?bm=zebra")),
+                format!("flushed {flushed}, {urls:?}"),
+            );
+            overlay_js(app, "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+        }
+        180 => {
+            check("bm-esc-closes-list", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            suggest_type(app, "zebra");
+        }
+        181 => {
+            check("bm-suggestion-opens", app.overlay.mode == Mode::Suggest, format!("mode {:?}", app.overlay.mode));
+            eval(
+                app.overlay.view(),
+                "bm-suggestion-is-one-marked-row",
+                "(() => { const s = document.querySelector('#suggest li span:not([role])'); \
+                 return `rows=${document.querySelectorAll('#suggest li').length};star=${document.querySelectorAll('#suggest li span[role=img]').length};\
+                 first=${s ? s.textContent : ''};label=${document.querySelector('#suggest li span[role=img]')?.getAttribute('aria-label')}`; })()",
+                |r| {
+                    check(
+                        "bm-suggestion-is-one-marked-row",
+                        field(&r, "rows") == "1" && field(&r, "star") == "1" && field(&r, "first").ends_with("?bm=zebra") && field(&r, "label") == "Yer imi",
+                        &r,
+                    );
+                },
+            );
+            address_key(app, "Escape");
+        }
+        182 => {
+            check("bm-suggestion-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            // A hostile file, loaded by a second store in its own folder.
+            let hostile = dir().join("bm-hostile");
+            let _ = std::fs::create_dir_all(&hostile);
+            let big = "T".repeat(100_000);
+            let file = serde_json::json!({"v": 1, "items": [
+                {"url": "https://ok.example/", "title": "ok", "added": 5},
+                {"url": "javascript:alert(document.cookie)", "title": "x", "added": 1},
+                {"url": "file:///C:/Windows/win.ini", "title": "x", "added": 1},
+                {"url": "https://big.example/", "title": big, "added": 1},
+                {"url": "https://ok.example/#again", "title": "duplicate", "added": 9},
+                {"url": 5, "title": "wrong type"},
+                null,
+                42,
+            ]});
+            let written = std::fs::write(hostile.join(crate::bookmarks::FILE), file.to_string());
+            let mut b = crate::bookmarks::Bookmarks::new(Some(&hostile));
+            b.ensure_loaded();
+            let urls: Vec<&str> = b.items().iter().map(|i| i.url.as_str()).collect();
+            check(
+                "bm-hostile-file-loads-sanitized",
+                written.is_ok()
+                    && urls == ["https://ok.example/", "https://big.example/"]
+                    && b.items()[1].title.chars().count() == crate::bookmarks::MAX_TITLE
+                    && !b.contains("javascript:alert(document.cookie)"),
+                format!("{written:?}, {urls:?}"),
+            );
+            // Ctrl+D on the (now unbookmarked) alpha page: an editor is open
+            // for it; the content page then tries the same commands.
+            press(app, BM_D, CTRL);
+            remember("bm-count", app.bookmarks.items().len() as i64);
+            page_js(app, "try { window.ipc.postMessage('bm-remove'); window.ipc.postMessage('bm-save:evil'); window.ipc.postMessage('bm-star:1:1'); } catch (e) {}");
+        }
+        183 => {
+            check(
+                "bm-content-page-cannot-reach-bookmarks",
+                app.overlay.mode == Mode::Bookmarks
+                    && app.bookmarks.items().len() as i64 == recall("bm-count")
+                    && !app.bookmarks.items().iter().any(|b| b.title == "evil"),
+                format!("mode {:?}, {} bookmarks (were {})", app.overlay.mode, app.bookmarks.items().len(), recall("bm-count")),
+            );
+            overlay_js(app, "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
+            close_extra_tabs(app);
+        }
+        184 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
