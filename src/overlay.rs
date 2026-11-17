@@ -1,5 +1,6 @@
 //! The overlay: a third child webview, made on first use, that floats over
-//! the page for the address-bar suggestions and the Ctrl+H history list
+//! the page for the address-bar suggestions, the Ctrl+H history list and the
+//! question before another application is started (`policy`)
 //! (design doc §1). Same origin, CSP and IPC as the UI webview.
 //!
 //! Suggestions never take focus: the address input keeps it and the UI
@@ -29,6 +30,13 @@ const LIST_PAD: f64 = 10.0;
 const SUGGEST_MIN_W: f64 = 360.0;
 const PANEL_W: f64 = 520.0;
 const PANEL_H: f64 = 560.0;
+/// The launch question's size.
+const LAUNCH_W: f64 = 440.0;
+const LAUNCH_H: f64 = 230.0;
+/// How far the launch question may be moved from the middle (sideways, each
+/// way) and down from under the strip, where the window has the room.
+const LAUNCH_SHIFT_X: f64 = 120.0;
+const LAUNCH_SHIFT_Y: f64 = 60.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -128,13 +136,16 @@ pub enum Mode {
     Menu,
     /// The settings page (see `settings`).
     Settings,
+    /// The question before another application is started (see `policy`).
+    Launch,
 }
 
 impl Mode {
     /// The list takes the keyboard (a search box, arrow keys), as opposed to
-    /// the suggestions, which the address bar keeps typing into.
+    /// the suggestions, which the address bar keeps typing into. The launch
+    /// question takes it too: no keystroke may reach it from elsewhere.
     fn owns_keyboard(self) -> bool {
-        matches!(self, Mode::History | Mode::Bookmarks | Mode::Menu | Mode::Settings)
+        matches!(self, Mode::History | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch)
     }
 }
 
@@ -268,11 +279,32 @@ pub(crate) fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
     app.overlay.placed = Some(place(app));
     let was = app.overlay.mode;
     app.overlay.mode = mode;
+    if was == Mode::Launch && mode != Mode::Launch {
+        // The question is no longer on screen: it is answered "no".
+        crate::policy::on_question_closed(app);
+    }
     if !app.overlay.ready {
         app.overlay.pending = Some((js, bounds));
         return;
     }
     present(&mut app.overlay, was, &js, bounds);
+    presented(app);
+}
+
+/// Something was just put on screen: the launch question's wait for an
+/// answer starts now (not when it was asked: the page may load long after).
+fn presented(app: &mut App) {
+    if app.overlay.mode == Mode::Launch {
+        crate::policy::on_question_shown(app);
+    }
+}
+
+/// Runs `js` in the overlay page while it shows the launch question
+/// (`policy`: the wait before "Aç" starts again, the launch failed).
+pub fn tell_launch(app: &App, js: &str) {
+    if let (Mode::Launch, true, Some(view)) = (app.overlay.mode, app.overlay.ready, &app.overlay.view) {
+        let _ = view.evaluate_script(js);
+    }
 }
 
 fn present(o: &mut Overlay, was: Mode, js: &str, bounds: Rect) {
@@ -304,6 +336,44 @@ pub(crate) fn run(app: &App, mode: Mode, js: &str) {
     }
 }
 
+/// The launch question (`policy`): under the strip, near the middle. `at`
+/// says where in the room around the middle (`LAUNCH_SHIFT_X`, `_Y`), each
+/// from 0 to 1.
+fn launch_rect(size: LogicalSize<f64>, at: (f64, f64)) -> Rect {
+    let w = LAUNCH_W.min(size.width - 16.0);
+    let top = UI_HEIGHT + 4.0;
+    let room = size.height - top - 8.0;
+    let h = LAUNCH_H.min(room);
+    let free_x = (size.width - w).max(0.0);
+    let span_x = free_x.min(2.0 * LAUNCH_SHIFT_X);
+    let span_y = (room - h).clamp(0.0, LAUNCH_SHIFT_Y);
+    let (ax, ay) = (at.0.clamp(0.0, 1.0), at.1.clamp(0.0, 1.0));
+    rect((free_x - span_x) / 2.0 + span_x * ax, top + span_y * ay, w, h)
+}
+
+/// A place for the launch question no page can know beforehand: SipHash
+/// with this process's secret random keys (`RandomState`), fresh each call.
+fn launch_spot() -> (f64, f64) {
+    use std::hash::BuildHasher;
+    let n = std::collections::hash_map::RandomState::new().hash_one(0u8);
+    ((n & 0xFFFF) as f64 / 65535.0, ((n >> 16) & 0xFFFF) as f64 / 65535.0)
+}
+
+/// Shows the launch question drawn by `js` (an `xbo.launch(..)` call) and
+/// gives it the keyboard. Whatever closes the overlay answers it "no".
+pub fn show_launch(app: &mut App, js: String) {
+    if app.overlay.mode != Mode::Launch {
+        close(app);
+    }
+    if app.fullscreen.on() {
+        crate::page_tools::leave_fullscreen(app);
+    }
+    // Somewhere new each time: a page that makes the user click one spot
+    // again and again cannot know that "Aç" will be there.
+    let bounds = launch_rect(win_size(app), launch_spot());
+    show(app, Mode::Launch, js, bounds);
+}
+
 /// Hides the overlay. Its last list stays known, so a pick that races the
 /// close (a click blurs the address input first) still lands.
 pub fn close(app: &mut App) {
@@ -332,6 +402,10 @@ fn reset(app: &mut App, hide: bool) {
     if was == Mode::Hidden {
         return;
     }
+    if was == Mode::Launch {
+        crate::policy::on_question_closed(app);
+    }
+    let o = &mut app.overlay;
     if let Some(view) = &o.view {
         let _ = view.evaluate_script("xbo.clear();xbBm.hide()");
         if hide {
@@ -415,6 +489,8 @@ fn render_history(app: &mut App, keep: bool) {
 }
 
 fn suggest(app: &mut App, x: u16, w: u16, text: String) {
+    // No page that holds the keyboard gives way to suggestions (the launch
+    // question would be answered by a keystroke).
     if app.fullscreen.on() || app.overlay.mode.owns_keyboard() {
         return;
     }
@@ -487,6 +563,7 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
             o.ready = true;
             if let Some((js, bounds)) = o.pending.take() {
                 present(o, Mode::Hidden, &js, bounds);
+                presented(app);
             }
         }
         OverlayCmd::Open { serial, i } => {
@@ -500,7 +577,9 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
             }
         }
         OverlayCmd::Close => {
-            if app.overlay.mode.owns_keyboard() {
+            // (The launch question answers its own blur: "launch-cancel",
+            // after a moment to see whether the keyboard comes back.)
+            if app.overlay.mode.owns_keyboard() && app.overlay.mode != Mode::Launch {
                 close(app);
             }
         }
@@ -567,7 +646,7 @@ pub fn refresh(app: &mut App) {
             suggest(app, x, w, text);
         }
         // The bookmark list is redrawn by `bookmarks` itself on every change.
-        Mode::Suggest | Mode::Hidden | Mode::Bookmarks | Mode::Menu | Mode::Settings => {}
+        Mode::Suggest | Mode::Hidden | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch => {}
     }
 }
 
@@ -591,7 +670,7 @@ mod tests {
         // Suggest keeps the keyboard in the address input: the page that
         // replaces it must take the focus itself.
         assert!(!Mode::Suggest.owns_keyboard() && !Mode::Hidden.owns_keyboard());
-        for m in [Mode::History, Mode::Bookmarks, Mode::Menu, Mode::Settings] {
+        for m in [Mode::History, Mode::Bookmarks, Mode::Menu, Mode::Settings, Mode::Launch] {
             assert!(m.owns_keyboard());
         }
     }
@@ -640,6 +719,23 @@ mod tests {
     fn history_panel_fits_the_window() {
         assert_eq!(parts(panel_rect(LogicalSize::new(1200.0, 800.0))), (672.0, 44.0, 520.0, 560.0));
         assert_eq!(parts(panel_rect(LogicalSize::new(480.0, 240.0))), (8.0, 44.0, 464.0, 188.0));
+    }
+
+    #[test]
+    fn launch_question_moves_but_stays_in_the_window() {
+        let size = LogicalSize::new(1200.0, 800.0);
+        assert_eq!(parts(launch_rect(size, (0.5, 0.0))), (380.0, 44.0, 440.0, 230.0), "the middle, under the strip");
+        assert_eq!(parts(launch_rect(size, (0.0, 0.0))), (260.0, 44.0, 440.0, 230.0));
+        assert_eq!(parts(launch_rect(size, (1.0, 1.0))), (500.0, 104.0, 440.0, 230.0));
+        assert_eq!(parts(launch_rect(size, (7.0, -3.0))), (500.0, 44.0, 440.0, 230.0), "out of range is clamped");
+        // A small window leaves less room, never a place outside it.
+        let small = LogicalSize::new(480.0, 240.0);
+        assert_eq!(parts(launch_rect(small, (0.0, 1.0))), (0.0, 44.0, 440.0, 188.0));
+        assert_eq!(parts(launch_rect(small, (1.0, 1.0))), (40.0, 44.0, 440.0, 188.0));
+        // A new place from one question to the next.
+        let spots: Vec<_> = (0..8).map(|_| launch_spot()).collect();
+        assert!(spots.iter().all(|&(x, y)| (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)));
+        assert!(spots.windows(2).any(|w| w[0] != w[1]));
     }
 }
 

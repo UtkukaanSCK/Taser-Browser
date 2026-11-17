@@ -651,6 +651,7 @@ impl App {
             UiCommand::Bookmark(cmd) => crate::bookmarks::on_command(self, cmd),
             UiCommand::Menu(cmd) => crate::menu::on_command(self, cmd),
             UiCommand::Settings(cmd) => crate::settings::on_command(self, cmd),
+            UiCommand::Launch(cmd) => crate::policy::on_command(self, cmd),
         }
     }
 

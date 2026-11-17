@@ -29,7 +29,7 @@ use crate::commands::{Mods, Shortcut, UiCommand, vk};
 use crate::native::Proxy;
 use crate::overlay::Mode;
 use crate::page_tools::PageKey;
-use crate::policy::{Event, Refused};
+use crate::policy::{Event, LaunchCmd, Refused};
 use crate::tabs::TabId;
 use std::io::Write;
 use std::path::PathBuf;
@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 507;
+const EXPECTED_CHECKS: u32 = 525;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -291,26 +291,36 @@ const DELAYS: &[u64] = &[
     2500, // 209 check; hostile file; Esc
     900,  // 210 check closed; Print
     1500, // 211 check Print; ShowPrintUI
-    900,  // 212 close the menu block's tab; policy: recording launcher; open an http page (served here)
-    2000, // 213 check "not secure"; open an https page
-    2000, // 214 check the lock; ask permission states; put a mailto link on the page
-    700,  // 215 check permissions still ask; click the link (a user gesture)
-    1000, // 216 check the launch waits, cancelled; a wrong answer; click again
-    1000, // 217 the right answer reaches the recorder once; click again
-    1000, // 218 a tab switch drops the request; blank tab has no mark
-    900,  // 219 a page opens mailto by itself (no gesture)
-    1500, // 220 check it was dropped unseen; navigate to a file: address
-    1000, // 221 check the file never loaded; a certificate error on example.com
-    2000, // 222 check the certificate mark; another host
-    2000, // 223 check that host is clean; an address with a Unicode host
-    2500, // 224 check the address box shows it in ASCII; a page to crash
-    2000, // 225 crash its renderer
-    1500, // 226 check the crashed mark; reload with its button
-    2500, // 227 check the page is back
-    900,  // 228 crash again
-    1500, // 229 reload with Ctrl+R
-    2500, // 230 check the page is back
-    900,  // 231 last tab close quits
+    900,  // 212 close the menu block's tab; policy: recording launcher; open an http page served here
+    2000, // 213 check this machine has no mark; open a public http page
+    4000, // 214 check "not secure"; open an https page
+    2000, // 215 check the lock; ask permission states; put a mailto link on the page
+    700,  // 216 check permissions still ask; click the link (a user gesture)
+    1500, // 217 check the question; a wrong answer; "open" with nothing waiting
+    800,  // 218 check nothing opened; click again
+    1200, // 219 the question again; answer "cancel"
+    800,  // 220 check nothing opened; click again
+    1200, // 221 answer "open"
+    800,  // 222 check the recorder got it once; ask and answer "open" at once
+    700,  // 223 the strip's page answers "open"
+    500,  // 224 check it was not heard; "open" with a launcher that fails
+    500,  // 225 check the question says so; a tab switch closes it; blank tab has no mark
+    900,  // 226 a page opens mailto by itself (no gesture)
+    1500, // 227 check it was dropped unseen; navigate to a file: address
+    1000, // 228 check the file never loaded; a certificate error on example.com
+    2000, // 229 check the certificate mark; another host
+    2000, // 230 check that host is clean; an address with a Unicode host
+    2500, // 231 check the address box shows it in ASCII; a page to crash
+    2000, // 232 crash its renderer
+    1500, // 233 check the crashed mark; reload with its button
+    2500, // 234 check the page is back
+    900,  // 235 crash again
+    1500, // 236 reload with Ctrl+R
+    2500, // 237 check the page is back
+    900,  // 238 crash a third time
+    1500, // 239 go to an address that cannot load
+    2500, // 240 check the crashed mark went with the navigation
+    900,  // 241 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -3868,18 +3878,32 @@ pub fn step(app: &mut App, n: u32) {
             app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{}/policy", port.unwrap_or(0)))));
         }
         213 => {
-            check("policy-http-page-loaded", active_url(app).starts_with("http://127.0.0.1:") && active_title(app) == "Plain", active_url(app));
+            check("policy-loopback-page-loaded", active_url(app).starts_with("http://127.0.0.1:") && active_title(app) == "Plain", active_url(app));
+            // http to this machine itself: no warning, and no lock either.
+            ui_eval(app, "indicator-loopback-http-is-neutral", SECURITY_JS, |r| {
+                check("indicator-loopback-http-is-neutral", field(&r, "hidden") == "true" && field(&r, "state").is_empty() && num(&r, "w") == 0.0, &r);
+            });
+            // A public address that has no https to be moved to.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("http://www.msftconnecttest.com/connecttest.txt".into())));
+        }
+        214 => {
+            check("policy-http-page-loaded", active_url(app).starts_with("http://www.msftconnecttest.com/"), active_url(app));
             ui_eval(app, "indicator-http-says-not-secure", SECURITY_JS, |r| {
                 check(
                     "indicator-http-says-not-secure",
                     field(&r, "state") == "insecure" && field(&r, "text") == "Güvenli değil" && field(&r, "hidden") == "false" && num(&r, "w") > 0.0,
                     &r,
                 );
-                check("indicator-http-has-a-name", field(&r, "role") == "img" && field(&r, "name").contains("HTTP"), &r);
+                // No control and no picture role: the meaning is the status text.
+                check(
+                    "indicator-http-has-a-name",
+                    field(&r, "tag") == "DIV" && field(&r, "role").is_empty() && field(&r, "live") == "polite" && field(&r, "name").contains("HTTP") && field(&r, "reload") == "false",
+                    &r,
+                );
             });
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?policy".into())));
         }
-        214 => {
+        215 => {
             check("policy-https-page-loaded", active_url(app).starts_with("https://example.com/"), active_url(app));
             ui_eval(app, "indicator-https-shows-lock", SECURITY_JS, |r| {
                 check(
@@ -3887,7 +3911,7 @@ pub fn step(app: &mut App, n: u32) {
                     field(&r, "state") == "secure" && field(&r, "lock") == "block" && field(&r, "text").is_empty() && num(&r, "w") > 0.0,
                     &r,
                 );
-                check("indicator-https-has-a-name", field(&r, "role") == "img" && field(&r, "name").contains("HTTPS"), &r);
+                check("indicator-https-has-a-name", field(&r, "role").is_empty() && field(&r, "name").contains("HTTPS"), &r);
             });
             page_js(
                 app,
@@ -3898,14 +3922,17 @@ pub fn step(app: &mut App, n: u32) {
                 ),
             );
         }
-        215 => {
+        216 => {
             // Nothing grants these without WebView2's own question.
             page_eval(app, "permissions-are-never-pre-granted", "`perm=${window.__perm}`", |r| {
                 check("permissions-are-never-pre-granted", field(&r, "perm") == "prompt,prompt,prompt,prompt", &r);
             });
             click_page(app);
         }
-        216 => {
+        217 => {
+            // The question closes when its window loses the keyboard: a run
+            // with another window in front fails here, and this says why.
+            log(&format!("INFO step 217: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             let now = std::time::Instant::now();
             let id = app.tabs.active().unwrap();
             let p = app.policy.launch.pending(now).cloned();
@@ -3920,39 +3947,128 @@ pub fn step(app: &mut App, n: u32) {
                 launched().is_empty() && !loading && active_url(app).starts_with("https://example.com/"),
                 format!("launched {:?}, loading {loading}, url {}", launched(), active_url(app)),
             );
+            let shown = app.overlay.view().is_some_and(visible);
+            check("launch-question-opens", app.overlay.mode == Mode::Launch && shown, format!("{:?}, visible {shown}", app.overlay.mode));
+            eval(app.overlay.view(), "launch-question-shows-the-request", LAUNCH_JS, |r| {
+                check(
+                    "launch-question-shows-the-request",
+                    field(&r, "hidden") == "false"
+                        && field(&r, "scheme") == "mailto"
+                        && field(&r, "origin").starts_with("https://example.com")
+                        && field(&r, "uri") == MAIL_URI
+                        && field(&r, "markup") == "0"
+                        && num(&r, "h") > 0.0,
+                    &r,
+                );
+                check("launch-question-starts-on-cancel", field(&r, "focus") == "l-cancel", &r);
+            });
+            // An answer for anything but the waiting request is refused, and
+            // "open" then finds nothing to open.
             let r = app.policy.launch.confirm(id, "mailto:someone-else@example.invalid", now);
             check(
                 "external-launch-wrong-uri-refused",
                 r == Err(Refused::Mismatch) && launched().is_empty() && app.policy.launch.pending(now).is_none(),
                 format!("{r:?}, launched {:?}", launched()),
             );
-            click_page(app);
-        }
-        217 => {
-            let now = std::time::Instant::now();
-            let id = app.tabs.active().unwrap();
-            let r = app.policy.launch.confirm(id, MAIL_URI, now);
-            check("external-launch-confirmed-goes-to-launcher", r == Ok(()) && launched() == [MAIL_URI], format!("{r:?}, launched {:?}", launched()));
-            let again = app.policy.launch.confirm(id, MAIL_URI, now);
-            check("external-launch-one-answer-only", again == Err(Refused::NoRequest) && launched().len() == 1, format!("{again:?}, launched {:?}", launched()));
-            click_page(app);
+            app.handle(UserEvent::Ui(UiCommand::Launch(LaunchCmd::Open)));
         }
         218 => {
+            check(
+                "launch-open-with-nothing-waiting-opens-nothing",
+                launched().is_empty() && overlay_closed(app),
+                format!("launched {:?}, {:?}", launched(), app.overlay.mode),
+            );
+            click_page(app);
+        }
+        219 => {
+            // The question closes when its window loses the keyboard: a run
+            // with another window in front fails here, and this says why.
+            log(&format!("INFO step 219: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            let waits = app.policy.launch.pending(std::time::Instant::now()).is_some();
+            check("launch-question-opens-again", app.overlay.mode == Mode::Launch && waits, format!("{:?}, waits {waits}", app.overlay.mode));
+            overlay_js(app, "document.getElementById('l-cancel').click()");
+        }
+        220 => {
+            let waits = app.policy.launch.pending(std::time::Instant::now()).is_some();
+            check(
+                "launch-cancel-opens-nothing",
+                launched().is_empty() && !waits && overlay_closed(app),
+                format!("launched {:?}, waits {waits}, {:?}", launched(), app.overlay.mode),
+            );
+            click_page(app);
+        }
+        221 => {
+            // The page names nothing: Rust opens the request it holds. The
+            // question has been up long enough for its button to work.
+            overlay_js(app, "document.getElementById('l-open').click()");
+        }
+        222 => {
+            // The question closes when its window loses the keyboard: a run
+            // with another window in front fails here, and this says why.
+            log(&format!("INFO step 222: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             let now = std::time::Instant::now();
-            let waited = app.policy.launch.pending(now).is_some();
+            let id = app.tabs.active().unwrap();
+            let waits = app.policy.launch.pending(now).is_some();
+            check(
+                "launch-open-reaches-the-launcher-once",
+                launched() == [MAIL_URI] && !waits && overlay_closed(app),
+                format!("launched {:?}, waits {waits}, {:?}", launched(), app.overlay.mode),
+            );
+            app.handle(UserEvent::Ui(UiCommand::Launch(LaunchCmd::Open)));
+            let again = app.policy.launch.confirm(id, MAIL_URI, now);
+            check("external-launch-one-answer-only", again == Err(Refused::NoRequest) && launched().len() == 1, format!("{again:?}, launched {:?}", launched()));
+            // "Open" right as the question appears is a click meant for the page.
+            app.handle(UserEvent::Policy(id, Event::ExternalLaunch { uri: MAIL_URI.into(), origin: String::new(), user: true }));
+            app.handle(UserEvent::Ui(UiCommand::Launch(LaunchCmd::Open)));
+            let waits = app.policy.launch.pending(std::time::Instant::now()).is_some();
+            check(
+                "launch-open-too-early-starts-the-wait-again",
+                launched().len() == 1 && waits && app.overlay.mode == Mode::Launch,
+                format!("launched {:?}, waits {waits}, {:?}", launched(), app.overlay.mode),
+            );
+            eval(app.overlay.view(), "launch-open-button-waits", LAUNCH_JS, |r| {
+                check("launch-open-button-waits", field(&r, "open") == "disabled" && field(&r, "native") == "false" && field(&r, "failed") == "false", &r);
+            });
+        }
+        223 => {
+            // The wait is over by now: only where the answer comes from
+            // keeps this one out.
+            ui_js(app, "ui.send('launch-open')");
+        }
+        224 => {
+            // The question closes when its window loses the keyboard: a run
+            // with another window in front fails here, and this says why.
+            log(&format!("INFO step 224: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            let waits = app.policy.launch.pending(std::time::Instant::now()).is_some();
+            check(
+                "launch-answer-from-the-strip-is-not-heard",
+                launched().len() == 1 && waits && app.overlay.mode == Mode::Launch,
+                format!("launched {:?}, waits {waits}, {:?}", launched(), app.overlay.mode),
+            );
+            app.policy.launch.set_launcher(|_| false);
+            app.handle(UserEvent::Ui(UiCommand::Launch(LaunchCmd::Open)));
+        }
+        225 => {
+            let now = std::time::Instant::now();
+            let waited = app.policy.launch.asking(now) && app.policy.launch.pending(now).is_none() && app.overlay.mode == Mode::Launch;
+            app.policy.launch.set_launcher(record_launch);
+            eval(app.overlay.view(), "launch-failure-is-said", LAUNCH_JS, |r| {
+                check("launch-failure-is-said", field(&r, "failed") == "true" && field(&r, "open") == "hidden" && field(&r, "cancel") == "Kapat" && field(&r, "focus") == "l-cancel", &r);
+                check("launch-question-unknown-page", field(&r, "origin") == "bilinmeyen sayfa" && field(&r, "uri") == MAIL_URI, &r);
+            });
             press(app, vk::T, CTRL);
             check(
-                "external-launch-dropped-on-tab-switch",
-                waited && app.policy.launch.pending(now).is_none() && app.tabs.len() == 2,
-                format!("waited {waited}, now {:?}, {} tabs", app.policy.launch.pending(now), app.tabs.len()),
+                "launch-question-closes-on-tab-switch",
+                waited && !app.policy.launch.asking(now) && overlay_closed(app) && launched().len() == 1 && app.tabs.len() == 2,
+                format!("waited {waited}, asking {}, {:?}, launched {:?}, {} tabs", app.policy.launch.asking(now), app.overlay.mode, launched(), app.tabs.len()),
             );
             app.flush();
             ui_eval(app, "indicator-nothing-on-blank-tab", SECURITY_JS, |r| {
-                check("indicator-nothing-on-blank-tab", field(&r, "hidden") == "true" && field(&r, "state").is_empty() && num(&r, "w") == 0.0, &r);
+                check("indicator-nothing-on-blank-tab", field(&r, "hidden") == "true" && field(&r, "state").is_empty() && field(&r, "name").is_empty() && num(&r, "w") == 0.0, &r);
             });
             close_extra_tabs(app);
         }
-        219 => {
+        226 => {
             // The page's own load-time script: no user gesture. (A script
             // run from the host would count as one.)
             remember("silent-drops", i64::from(app.policy.silent_drops));
@@ -3960,7 +4076,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.load_html(&format!("<!doctype html><title>Auto</title><body>auto<script>location.href = '{MAIL_URI}';</script></body>"));
             }
         }
-        220 => {
+        227 => {
             let now = std::time::Instant::now();
             let (drops, before) = (i64::from(app.policy.silent_drops), recall("silent-drops"));
             let loading = app.tabs.active().and_then(|id| app.tabs.get(id)).is_some_and(|t| t.loading);
@@ -3973,7 +4089,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.load_url("file:///C:/Windows/win.ini");
             }
         }
-        221 => {
+        228 => {
             let id = app.tabs.active().unwrap();
             let loading = app.tabs.get(id).is_some_and(|t| t.loading);
             check("file-navigation-cancelled", !active_url(app).starts_with("file:") && !loading, format!("url {}, loading {loading}", active_url(app)));
@@ -3983,20 +4099,25 @@ pub fn step(app: &mut App, n: u32) {
             // What WebView2 reports for a bad certificate, while its own
             // warning page is up.
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?policy-cert".into())));
-            app.handle(UserEvent::Policy(id, Event::CertError("https://example.com/?policy-cert".into())));
+            let uri = "https://example.com/?policy-cert";
+            app.handle(UserEvent::Policy(id, Event::CertError { uri: uri.into(), nav: uri.into() }));
         }
-        222 => {
+        229 => {
             check("policy-cert-page-loaded", active_url(app).starts_with("https://example.com/?policy-cert"), active_url(app));
             ui_eval(app, "indicator-certificate-error", SECURITY_JS, |r| {
                 check(
                     "indicator-certificate-error",
-                    field(&r, "state") == "cert" && field(&r, "text") == "Sertifika hatası" && field(&r, "role") == "img" && field(&r, "name").contains("Sertifika"),
+                    field(&r, "state") == "cert" && field(&r, "text") == "Sertifika hatası" && field(&r, "name").contains("Sertifika"),
                     &r,
                 );
             });
+            // Something the page loads from another server fails the same
+            // way: that says nothing about the other server's own pages.
+            let id = app.tabs.active().unwrap();
+            app.handle(UserEvent::Policy(id, Event::CertError { uri: "https://example.org/a.png".into(), nav: active_url(app) }));
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?policy".into())));
         }
-        223 => {
+        230 => {
             ui_eval(app, "indicator-certificate-error-is-per-host", SECURITY_JS, |r| {
                 check("indicator-certificate-error-is-per-host", field(&r, "state") == "secure" && field(&r, "addr").starts_with("https://example.org/"), &r);
             });
@@ -4006,16 +4127,19 @@ pub fn step(app: &mut App, n: u32) {
             log(&format!("INFO unicode host, right after typing: tab url {:?}", active_url(app)));
             ui_eval(app, "address-box-unicode-host-typed", SECURITY_JS, |r| {
                 check("address-box-unicode-host-typed", field(&r, "addr").is_ascii() && field(&r, "addr").contains("xn--bcher-kva.example"), &r);
+                // The lock on screen was example.org's, not this address's.
+                check("indicator-none-until-the-typed-address-loads", field(&r, "state").is_empty() && field(&r, "hidden") == "true", &r);
             });
         }
-        224 => {
+        231 => {
             log(&format!("INFO unicode host, after the load failed: tab url {:?}", active_url(app)));
             ui_eval(app, "address-box-unicode-host-reported", SECURITY_JS, |r| {
                 check("address-box-unicode-host-reported", field(&r, "addr").is_ascii() && field(&r, "addr").contains("xn--bcher-kva.example"), &r);
+                check("indicator-no-lock-on-an-error-page", field(&r, "state").is_empty() && field(&r, "hidden") == "true", &r);
             });
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?policy-crash".into())));
         }
-        225 => {
+        232 => {
             let id = app.tabs.active().unwrap();
             check(
                 "policy-crash-page-loaded",
@@ -4026,49 +4150,67 @@ pub fn step(app: &mut App, n: u32) {
                 cdp(v, "Page.crash", "{}");
             }
         }
-        226 => {
+        233 => {
             let id = app.tabs.active().unwrap();
             check("crashed-tab-is-marked", app.policy.is_crashed(id) && app.tabs.get(id).is_some_and(|t| !t.loading), app.tabs.to_json());
-            ui_eval(app, "indicator-crashed-is-a-reload-button", SECURITY_JS, |r| {
+            ui_eval(app, "indicator-crashed-has-a-reload-button", SECURITY_JS, |r| {
                 check(
-                    "indicator-crashed-is-a-reload-button",
-                    field(&r, "state") == "crashed" && field(&r, "role").is_empty() && !field(&r, "text").is_empty() && field(&r, "name").contains("Ctrl+R") && num(&r, "w") > 0.0,
+                    "indicator-crashed-has-a-reload-button",
+                    field(&r, "state") == "crashed" && field(&r, "reload") == "true" && !field(&r, "text").is_empty() && field(&r, "name").contains("Ctrl+R") && num(&r, "w") > 0.0,
                     &r,
                 );
             });
-            ui_js(app, "document.getElementById('security').click()");
+            ui_js(app, "document.getElementById('security-reload').click()");
         }
-        227 => {
+        234 => {
             let id = app.tabs.active().unwrap();
             check("crashed-tab-button-reloads", !app.policy.is_crashed(id) && active_url(app).starts_with("https://example.org/?policy-crash"), active_url(app));
             page_eval(app, "crashed-tab-page-is-back", "`href=${location.href};state=${document.readyState}`", |r| {
                 check("crashed-tab-page-is-back", field(&r, "href").starts_with("https://example.org/?policy-crash"), &r);
             });
             ui_eval(app, "indicator-after-reload", SECURITY_JS, |r| {
-                check("indicator-after-reload", field(&r, "state") == "secure", &r);
+                check("indicator-after-reload", field(&r, "state") == "secure" && field(&r, "reload") == "false", &r);
             });
         }
-        228 => {
+        235 => {
             // In a step of its own: a crash right behind a script would take
             // the script's answer with it.
             if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
                 cdp(v, "Page.crash", "{}");
             }
         }
-        229 => {
+        236 => {
             let id = app.tabs.active().unwrap();
             let crashed = app.policy.is_crashed(id);
             let sc = press(app, vk::R, CTRL);
             check("crashed-tab-marked-again", crashed && sc == Some(Shortcut::Reload), format!("crashed {crashed}, {sc:?}"));
         }
-        230 => {
+        237 => {
             let id = app.tabs.active().unwrap();
             check("crashed-tab-shortcut-reloads", !app.policy.is_crashed(id), app.tabs.to_json());
             page_eval(app, "crashed-tab-page-is-back-again", "`href=${location.href}`", |r| {
                 check("crashed-tab-page-is-back-again", field(&r, "href").starts_with("https://example.org/?policy-crash"), &r);
             });
         }
-        231 => {
+        238 => {
+            if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
+                cdp(v, "Page.crash", "{}");
+            }
+        }
+        239 => {
+            let id = app.tabs.active().unwrap();
+            check("crashed-tab-marked-a-third-time", app.policy.is_crashed(id), app.tabs.to_json());
+            // This load fails: no page comes back to end the mark.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://bücher.example/yol".into())));
+        }
+        240 => {
+            let id = app.tabs.active().unwrap();
+            check("crashed-mark-ends-with-the-next-navigation", !app.policy.is_crashed(id), active_url(app));
+            ui_eval(app, "indicator-after-crash-and-failed-load", SECURITY_JS, |r| {
+                check("indicator-after-crash-and-failed-load", field(&r, "state").is_empty() && field(&r, "reload") == "false" && field(&r, "name").is_empty(), &r);
+            });
+        }
+        241 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -4167,12 +4309,7 @@ fn serve_http_page() -> std::io::Result<u16> {
         for mut stream in listener.incoming().flatten() {
             let _ = stream.read(&mut [0u8; 2048]);
             let body = "<!doctype html><title>Plain</title><body>plain http</body>";
-            let _ = write!(stream, "HTTP/1.1 200 OK
-Content-Type: text/html
-Content-Length: {}
-Connection: close
-
-{body}", body.len());
+            let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
         }
     });
     Ok(port)
@@ -4185,12 +4322,25 @@ fn click_page(app: &App) {
     }
 }
 
-/// The address box's connection mark and text, as drawn.
-const SECURITY_JS: &str = "(() => { const m = document.getElementById('security'), r = m.getBoundingClientRect(); \
-  return [`hidden=${m.hidden}`, `state=${m.dataset.state || ''}`, `role=${m.getAttribute('role') || ''}`, \
-  `text=${m.hidden ? '' : document.getElementById('security-text').textContent}`, `name=${m.getAttribute('aria-label') || ''}`, \
-  `w=${r.width}`, `lock=${getComputedStyle(m.querySelector('svg')).display}`, \
-  `addr=${document.getElementById('address').value}`].join(';'); })()";
+/// The address box's connection mark as drawn, and as told to a screen
+/// reader (`name`); `reload`: its button is shown and reachable by Tab.
+const SECURITY_JS: &str = "(() => { const g = (id) => document.getElementById(id), m = g('security'), r = m.getBoundingClientRect(), \
+  s = g('security-status'), b = g('security-reload'); \
+  return [`hidden=${m.hidden}`, `state=${m.dataset.state || ''}`, `tag=${m.tagName}`, `role=${m.getAttribute('role') || ''}`, \
+  `text=${m.hidden ? '' : g('security-text').textContent}`, `name=${s.textContent}`, `live=${s.getAttribute('aria-live')}`, \
+  `reload=${!m.hidden && !b.hidden && b.tagName === 'BUTTON' && b.tabIndex === 0 && b.getBoundingClientRect().width > 0}`, \
+  `w=${r.width}`, `lock=${getComputedStyle(m.querySelector('svg')).display}`, `addr=${g('address').value}`].join(';'); })()";
+
+/// The launch question as the overlay page draws it. `open`: its "Aç" button
+/// is "hidden", "disabled" (shown as off, `aria-disabled`) or "on";
+/// `native`: it is a `disabled` button, which would swallow the presses that
+/// restart the wait; `failed`: the failure line is shown.
+const LAUNCH_JS: &str = "(() => { const g = (id) => document.getElementById(id), u = g('l-uri'), o = g('l-open'); \
+  return [`hidden=${g('launch').hidden}`, `scheme=${g('l-scheme').textContent}`, `origin=${g('l-origin').textContent}`, \
+  `markup=${u.children.length}`, `h=${u.getBoundingClientRect().height}`, \
+  `open=${o.hidden ? 'hidden' : o.getAttribute('aria-disabled') === 'true' ? 'disabled' : 'on'}`, `native=${o.disabled}`, \
+  `failed=${!g('l-failed').hidden}`, `cancel=${g('l-cancel').textContent}`, \
+  `focus=${document.activeElement ? document.activeElement.id : ''}`, `uri=${u.textContent}`].join(';'); })()";
 
 /// A key-down with the live Esc state, as the native hook reads it
 /// (`Shortcut::from_key_in` with `esc_exits_fullscreen`).

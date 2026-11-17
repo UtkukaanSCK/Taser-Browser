@@ -101,13 +101,16 @@ fn serve(req: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
 }
 
 /// What the UI and overlay webviews share: our assets on the `xb` protocol,
-/// the one IPC handler, and no way off the UI origin.
+/// the one IPC handler, and no way off the UI origin. `overlay` says which of
+/// the two this is: an answer to the launch question is taken from the
+/// overlay only, where the question is.
 fn ui_builder<'a>(
     context: &'a mut WebContext,
     proxy: &Proxy,
     url: &str,
     bounds: Rect,
     background: (u8, u8, u8, u8),
+    overlay: bool,
 ) -> WebViewBuilder<'a> {
     let p = proxy.clone();
     let builder = WebViewBuilder::new_with_web_context(context)
@@ -121,7 +124,7 @@ fn ui_builder<'a>(
             if !is_ui_origin(&req.uri().to_string()) {
                 return;
             }
-            if let Some(cmd) = UiCommand::parse(req.body()) {
+            if let Some(cmd) = UiCommand::parse(req.body()).filter(|cmd| overlay || !matches!(cmd, UiCommand::Launch(_))) {
                 let _ = p.send_event(UserEvent::Ui(cmd));
             }
         })
@@ -146,7 +149,7 @@ pub fn build(
     bounds: Rect,
     background: (u8, u8, u8, u8),
 ) -> wry::Result<WebView> {
-    let builder = ui_builder(context, proxy, START_URL, bounds, background);
+    let builder = ui_builder(context, proxy, START_URL, bounds, background, false);
     #[cfg(windows)]
     let builder = {
         use wry::WebViewBuilderExtWindows;
@@ -167,7 +170,7 @@ pub fn build_overlay(
     bounds: Rect,
     background: (u8, u8, u8, u8),
 ) -> wry::Result<WebView> {
-    let builder = ui_builder(context, proxy, OVERLAY_URL, bounds, background).with_visible(false).with_focused(false);
+    let builder = ui_builder(context, proxy, OVERLAY_URL, bounds, background, true).with_visible(false).with_focused(false);
     #[cfg(windows)]
     let builder = {
         use wry::WebViewBuilderExtWindows;
@@ -235,6 +238,7 @@ mod tests {
         assert_eq!(get("/js/overlay.js").status(), 200);
         assert_eq!(get("/js/menu.js").status(), 200);
         assert_eq!(get("/js/settings.js").status(), 200);
+        assert_eq!(get("/js/security.js").status(), 200);
         let r = get("/overlay.html");
         assert_eq!(r.status(), 200);
         assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], CSP);
@@ -275,7 +279,7 @@ mod tests {
 
     #[test]
     fn scripts_never_write_html() {
-        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS] {
+        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS, SECURITY_JS] {
             for bad in [".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval("] {
                 assert!(!js.contains(bad), "{bad}");
             }

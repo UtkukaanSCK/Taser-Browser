@@ -25,7 +25,6 @@ mod imp {
     use super::*;
     use crate::app::{PageEvent, UserEvent};
     use crate::native::attach_process_failed;
-    use crate::ui::is_ui_url;
     use crate::url::is_tab_url;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -246,8 +245,10 @@ mod imp {
                         let _ = args.NavigationId(&mut nav);
                         let _ = p.send_event(UserEvent::Page(tab, PageEvent::Navigating { nav, user: user.as_bool() }));
                     }
+                    // An address that cannot be read is refused like one
+                    // that may not be loaded.
                     if let Some(args) = &args
-                        && crate::policy::refuses_navigation(&nav_uri(args)?)
+                        && nav_uri(args).map_or(true, |uri| crate::policy::refuses_navigation(&uri))
                     {
                         args.SetCancel(true)?;
                         // The address bar may already show the refused URL,
@@ -266,8 +267,9 @@ mod imp {
             )?;
             wv.add_FrameNavigationStarting(
                 &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                    // Nor local files (`policy::refuses_navigation`).
                     if let Some(args) = args
-                        && is_ui_url(&nav_uri(&args)?)
+                        && nav_uri(&args).map_or(true, |uri| crate::policy::refuses_navigation(&uri))
                     {
                         args.SetCancel(true)?;
                     }
@@ -294,9 +296,15 @@ mod imp {
                     // A page that really loaded goes into history (checked
                     // there: web addresses only); its title so far comes along.
                     let mut ok = BOOL(0);
-                    if let Some(args) = args
-                        && args.IsSuccess(&mut ok).is_ok()
-                        && ok.as_bool()
+                    let ok = args.as_ref().is_some_and(|a| a.IsSuccess(&mut ok).is_ok()) && ok.as_bool();
+                    // A navigation that ended without a page of its own
+                    // (failed, cancelled, a download): the address bar goes
+                    // back from the address asked for to the page shown.
+                    if !ok && let Some(url) = wv.as_ref().and_then(source) {
+                        let _ = p.send_event(UserEvent::Page(tab, PageEvent::Url(url)));
+                    }
+                    if ok
+                        && let Some(args) = args
                         && let Some(wv) = wv
                         && let Some(url) = source(&wv)
                     {

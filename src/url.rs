@@ -304,7 +304,7 @@ pub fn host_of(url: &str) -> Option<String> {
 
 /// What the address bar shows for a URL (blank pages show nothing).
 pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
-    if url == BLANK { "".into() } else { crate::policy::ascii_host(url) }
+    if url == BLANK { "".into() } else { crate::policy::display(url) }
 }
 
 #[cfg(test)]

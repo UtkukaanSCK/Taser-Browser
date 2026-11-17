@@ -128,5 +128,28 @@
     <p id="s-status" role="status" class="min-h-4 leading-snug text-muted"></p>
   </footer>
 </section>
+
+<!-- The question before another application is started (policy.rs). The
+     address is the page's text: shown whole, it scrolls inside its box. -->
+<section id="launch" role="alertdialog" aria-labelledby="l-title" aria-describedby="l-desc l-uri"
+  class="flex h-full flex-col gap-2 p-3" hidden>
+  <h1 id="l-title" class="text-[14px] font-semibold">Başka bir uygulama açılsın mı?</h1>
+  <p id="l-desc" class="leading-snug">
+    <span id="l-origin" class="break-all font-semibold"></span> bu adresi tarayıcının dışında açmak istiyor
+    (tür: <span id="l-scheme" class="break-all font-semibold"></span>):
+  </p>
+  <p id="l-uri" tabindex="0" aria-label="Açılacak adres"
+    class="min-h-0 flex-1 select-text overflow-y-auto break-all rounded-md border border-line px-2 py-1.5 font-mono text-[12px] leading-snug outline-none focus-visible:border-accent"></p>
+  <div class="flex items-center justify-end gap-2">
+    <!-- Said only when the application could not be started. -->
+    <p id="l-failed" role="alert" class="mr-auto min-w-0 text-danger" hidden>Uygulama açılamadı.</p>
+    <!-- Off until a pause in pressing since the question came on screen
+         (overlay.js); Rust keeps the same wait and has the last word. Only
+         aria-disabled: a disabled button would swallow the presses that
+         must start the wait again. -->
+    <button id="l-open" type="button" aria-disabled="true" class="h-7 rounded-md border border-line px-3 hover:bg-hover aria-disabled:opacity-40 aria-disabled:hover:bg-transparent">Aç</button>
+    <button id="l-cancel" type="button" class="h-7 rounded-md border border-accent px-3 hover:bg-hover">İptal</button>
+  </div>
+</section>
 </body>
 </html>

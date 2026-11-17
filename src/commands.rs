@@ -9,6 +9,7 @@ use crate::bookmarks::{BookmarkCmd, BookmarkKey};
 use crate::menu::MenuCmd;
 use crate::overlay::OverlayCmd;
 use crate::page_tools::{PageCmd, PageKey};
+use crate::policy::LaunchCmd;
 use crate::settings::SettingsCmd;
 use crate::strip::{StripCmd, TabKey};
 use crate::tabs::TabId;
@@ -46,6 +47,8 @@ pub enum UiCommand {
     Menu(MenuCmd),
     /// The settings page (see `settings`).
     Settings(SettingsCmd),
+    /// The answer to "open another application?" (see `policy`).
+    Launch(LaunchCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +90,7 @@ impl UiCommand {
             (n, a) if BookmarkCmd::NAMES.contains(&n) => Self::Bookmark(BookmarkCmd::parse(n, a)?),
             (n, a) if MenuCmd::NAMES.contains(&n) => Self::Menu(MenuCmd::parse(n, a)?),
             (n, a) if SettingsCmd::NAMES.contains(&n) => Self::Settings(SettingsCmd::parse(n, a)?),
+            ("launch-open" | "launch-cancel" | "launch-press", None) => Self::Launch(LaunchCmd::parse(name)?),
             _ => return None,
         };
         Some(cmd)
