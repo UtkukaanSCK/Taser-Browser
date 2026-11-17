@@ -4,6 +4,7 @@
 mod app;
 mod bookmarks;
 mod commands;
+mod crx;
 mod downloads;
 mod history;
 mod instance;

@@ -17,6 +17,9 @@ wry = "0.57.2"
 # persistence; serde itself was already in the build graph (a wry build dep).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Inflate for the zip inside a CRX package (src/crx.rs). Pure Rust; pulls only
+# adler2. Signature checks and SHA-256 use the OS (CNG) instead of a crate.
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 
 # Windows-only glue for WebView2 events wry does not expose (SourceChanged,
 # HistoryChanged, NavigationStarting/Completed, AcceleratorKeyPressed, Stop).
@@ -29,6 +32,7 @@ windows = { version = "0.62.2", features = [
   "Win32_Graphics_Gdi",
   "Win32_Security",
   "Win32_Security_Authorization",
+  "Win32_Security_Cryptography",
   "Win32_System_Com",
   "Win32_System_DataExchange",
   "Win32_System_LibraryLoader",
