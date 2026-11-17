@@ -120,13 +120,16 @@ blank tab, median (ms since process creation):
 
 | | binary | window-shown | ui-webview-created | first-tab-created | ui-ready |
 | --- | --- | --- | --- | --- | --- |
-| v0.1 (33b478e) | 684,544 B | 60 | 320 | 354 | 361 |
-| v0.2 at task 5 (ae74229) | 1,073,152 B | 65 | 338 | 417 | 418 |
-| v0.2 final | | | | | |
+| v0.1 (33b478e) | 684,544 B | 50 | 276 | 302 | 308 |
+| v0.2 at task 5 (ae74229) | 1,073,152 B | 51 | 293 | 365 | 366 |
+| v0.2 final (e966be7) | 1,260,032 B | 50 | 291 | 361 | 362 |
 
-<!-- TODO: measure the "v0.2 final" row on the merged release build and fill it in. -->
-
-The first two rows were measured 2026-11-15.
+All three rows were measured in one session on 2026-11-17 (absolute numbers
+move with machine load: the same builds measured 50–60 ms slower on
+2026-11-15, with the same gaps between them). The v0.2 cost at start-up is
+creating the first content tab, which grew at task 5
+(first-tab-created − ui-webview-created: 26 ms in v0.1, 70 ms in v0.2);
+tasks 6–9 added nothing measurable.
 
 ## Fullscreen
 
