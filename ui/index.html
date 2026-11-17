@@ -63,6 +63,16 @@
     </button>
   </div>
 
+  <!-- Downloads (shown once this session has had a download; core.js,
+       xb.downloads) and the main menu. -->
+  <button id="downloads-btn" class="nav group relative" title="İndirilenler (Ctrl+J)" aria-label="İndirilenler" hidden>
+    <svg viewBox="0 0 16 16"><path d="M8 2.5v8m-3-3 3 3 3-3M3.5 13h9"/></svg>
+    <span class="absolute right-1 top-1 hidden size-1.5 rounded-full bg-accent group-data-[busy]:block"></span>
+  </button>
+  <button id="menu-btn" class="nav mr-1" title="Menü (Alt+F)" aria-label="Menü" aria-haspopup="menu">
+    <svg viewBox="0 0 16 16"><path d="M8 3.5v.01M8 8v.01m0 4.49v.01" stroke-width="2"/></svg>
+  </button>
+
   <div class="flex h-full shrink-0 self-stretch">
     <button id="min" class="win" title="Simge durumuna küçült" aria-label="Küçült">
       <svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg>

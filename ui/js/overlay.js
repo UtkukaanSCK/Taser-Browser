@@ -149,9 +149,12 @@
     list.replaceChildren();
     suggestList.hidden = true;
     panel.hidden = true;
+    // The menu and the settings page (menu.js, settings.js) hide too.
+    document.dispatchEvent(new Event("xb-clear"));
   }
 
   function cleared(ok) {
+    document.dispatchEvent(new CustomEvent("xb-cleared", { detail: ok === true }));
     status.textContent = ok
       ? "Geçmiş, çerezler, site verileri ve önbellek temizlendi."
       : "Geçmiş silindi; çerezler ve önbellek temizlenemedi.";

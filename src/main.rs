@@ -4,14 +4,17 @@
 mod app;
 mod bookmarks;
 mod commands;
+mod downloads;
 mod history;
 mod instance;
+mod menu;
 mod native;
 mod overlay;
 mod page_tools;
 #[cfg(feature = "selftest")]
 mod selftest;
 mod session;
+mod settings;
 mod store;
 mod strip;
 mod tabs;
@@ -105,7 +108,7 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
 
     let mut builder = WindowBuilder::new()
         .with_title("X-Browser")
-        .with_min_inner_size(LogicalSize::new(480.0, 240.0))
+        .with_min_inner_size(LogicalSize::new(570.0, 240.0))
         .with_decorations(false)
         .with_theme(None);
     // The last session's place, moved onto a monitor that is still there.
@@ -143,6 +146,8 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
     // Nothing read yet: that waits until the UI is up (see `history`).
     app.history = history::History::new(dir);
     app.bookmarks = bookmarks::Bookmarks::new(dir);
+    app.settings = settings::State::open(dir);
+    settings::apply(&mut app);
     session::track_window(&mut app);
     timing::mark("ui-webview-created");
 

@@ -238,10 +238,15 @@ fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
     parts.next().is_none().then_some(out)
 }
 
-/// DuckDuckGo search URL for free text.
+/// Search URL for free text, on the engine the settings chose.
 pub fn search_url(query: &str) -> String {
-    let mut out = String::with_capacity(SEARCH_URL.len() + query.len() * 3);
-    out.push_str(SEARCH_URL);
+    search_url_on(crate::settings::engine().search_url(), query)
+}
+
+/// `query` appended, encoded, to a search address (up to its `q=`).
+fn search_url_on(base: &str, query: &str) -> String {
+    let mut out = String::with_capacity(base.len() + query.len() * 3);
+    out.push_str(base);
     for b in query.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
@@ -305,6 +310,14 @@ pub fn display_url(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn free_text_goes_to_the_chosen_engine_encoded() {
+        for e in crate::settings::Engine::ALL {
+            let url = search_url_on(e.search_url(), "a b&c/ş");
+            assert_eq!(url, format!("{}a+b%26c%2F%C5%9F", e.search_url()));
+        }
+    }
 
     #[test]
     fn tab_urls_are_web_and_capped() {

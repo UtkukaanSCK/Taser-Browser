@@ -2,11 +2,14 @@
 //! - `UiCommand`: what the trusted UI webview may ask for over IPC.
 //! - `Shortcut`: what a key press may trigger. It is computed in Rust from a
 //!   native key event, so content pages cannot inject one and none carries
-//!   data (no URL, path or text).
+//!   data (no URL, path or text). The one path IPC carries is `st-folder`
+//!   (settings page), checked in Rust: absolute, no UNC.
 
 use crate::bookmarks::{BookmarkCmd, BookmarkKey};
+use crate::menu::MenuCmd;
 use crate::overlay::OverlayCmd;
 use crate::page_tools::{PageCmd, PageKey};
+use crate::settings::SettingsCmd;
 use crate::strip::{StripCmd, TabKey};
 use crate::tabs::TabId;
 
@@ -39,6 +42,10 @@ pub enum UiCommand {
     Overlay(OverlayCmd),
     /// The star, the editor and the list (see `bookmarks`).
     Bookmark(BookmarkCmd),
+    /// The main menu (see `menu`).
+    Menu(MenuCmd),
+    /// The settings page (see `settings`).
+    Settings(SettingsCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +85,8 @@ impl UiCommand {
             ("zoom-reset", Some(a)) => Self::Page(PageCmd::parse(name, a)?),
             (n, a) if OverlayCmd::NAMES.contains(&n) => Self::Overlay(OverlayCmd::parse(n, a)?),
             (n, a) if BookmarkCmd::NAMES.contains(&n) => Self::Bookmark(BookmarkCmd::parse(n, a)?),
+            (n, a) if MenuCmd::NAMES.contains(&n) => Self::Menu(MenuCmd::parse(n, a)?),
+            (n, a) if SettingsCmd::NAMES.contains(&n) => Self::Settings(SettingsCmd::parse(n, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -102,6 +111,10 @@ pub enum Shortcut {
     History,
     /// Ctrl+D and Ctrl+Shift+O (see `bookmarks`).
     Bookmark(BookmarkKey),
+    /// Alt+F / Alt+E: the main menu (see `menu`).
+    Menu,
+    /// Ctrl+J: WebView2's download flyout (see `downloads`).
+    Downloads,
 }
 
 /// Windows virtual-key codes used below (identical values on every keyboard layout).
@@ -111,7 +124,10 @@ pub mod vk {
     pub const NEXT: u32 = 0x22; // Page Down
     pub const LEFT: u32 = 0x25;
     pub const RIGHT: u32 = 0x27;
+    pub const E: u32 = 0x45;
+    pub const F: u32 = 0x46;
     pub const H: u32 = 0x48;
+    pub const J: u32 = 0x4A;
     pub const L: u32 = 0x4C;
     pub const R: u32 = 0x52;
     pub const T: u32 = 0x54;
@@ -149,6 +165,8 @@ impl Shortcut {
             W if ctrl_only && !m.shift => Self::CloseTab,
             L if ctrl_only && !m.shift => Self::FocusAddress,
             H if ctrl_only && !m.shift => Self::History,
+            J if ctrl_only && !m.shift => Self::Downloads,
+            F | E if alt_only && !m.shift => Self::Menu,
             R if ctrl_only => Self::Reload,
             F5 if none || ctrl_only => Self::Reload,
             TAB if ctrl_only && m.shift => Self::PrevTab,
@@ -205,6 +223,15 @@ mod tests {
             Some(UiCommand::Overlay(OverlayCmd::Suggest { x: 12, w: 300, text: "exa:mple".into() }))
         );
         assert_eq!(UiCommand::parse("ov-delete-all"), Some(UiCommand::Overlay(OverlayCmd::DeleteAll)));
+        assert_eq!(UiCommand::parse("menu-toggle"), Some(UiCommand::Menu(MenuCmd::Toggle)));
+        assert_eq!(
+            UiCommand::parse("menu-pick:downloads"),
+            Some(UiCommand::Menu(MenuCmd::Pick(crate::menu::Item::Downloads)))
+        );
+        assert_eq!(
+            UiCommand::parse("st-autofill:0"),
+            Some(UiCommand::Settings(SettingsCmd::Autofill(false)))
+        );
     }
 
     #[test]
@@ -214,7 +241,8 @@ mod tests {
             "resize:s", "resize", "navigate", "Back", " back", "move", "move:4", "move:4:x", "mute", "mute:",
             "zoom-reset", "zoom-reset:", "zoom-reset:x", "zoom-reset:1:2", "zoom", "zoom:1", "fullscreen",
             "suggest", "suggest:1", "suggest:x:1:a", "suggest-key:left", "ov-open:1", "ov-close:1", "ov-cleared:1",
-            "ov-data-cleared",
+            "ov-data-cleared", "menu-toggle:1", "menu-pick", "menu-pick:", "menu-pick:Find", "menu-pick:exit",
+            "st-engine", "st-engine:yahoo", "st-startup:x", "st-autofill:2", "st-folder", "st-theme:dark",
         ] {
             assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
         }
@@ -236,6 +264,14 @@ mod tests {
         assert_eq!(Shortcut::from_key(L, CTRL), Some(Shortcut::FocusAddress));
         assert_eq!(Shortcut::from_key(H, CTRL), Some(Shortcut::History));
         assert_eq!(Shortcut::from_key(H, CTRL_SHIFT), None);
+        assert_eq!(Shortcut::from_key(J, CTRL), Some(Shortcut::Downloads));
+        assert_eq!(Shortcut::from_key(J, CTRL_SHIFT), None);
+        assert_eq!(Shortcut::from_key(J, NONE), None, "plain J types a letter");
+        assert_eq!(Shortcut::from_key(F, ALT), Some(Shortcut::Menu));
+        assert_eq!(Shortcut::from_key(E, ALT), Some(Shortcut::Menu));
+        assert_eq!(Shortcut::from_key(F, Mods { shift: true, ..ALT }), None);
+        assert_eq!(Shortcut::from_key(F, NONE), None);
+        assert_eq!(Shortcut::from_key(F, ALTGR), None, "AltGr+F is a character");
         assert_eq!(Shortcut::from_key(H, NONE), None, "plain H types a letter");
         assert_eq!(Shortcut::from_key(R, CTRL), Some(Shortcut::Reload));
         assert_eq!(Shortcut::from_key(TAB, CTRL), Some(Shortcut::NextTab));

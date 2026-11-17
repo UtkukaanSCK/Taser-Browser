@@ -42,7 +42,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 421;
+const EXPECTED_CHECKS: u32 = 475;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -56,7 +56,7 @@ pub fn prepare_profile(profile: Option<&std::path::Path>) {
         return;
     }
     let Some(profile) = profile else { return };
-    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json"] {
+    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json", "settings.json"] {
         for suffix in ["", ".bak", ".tmp", ".bak.tmp", ".corrupt", ".bak.corrupt"] {
             let _ = std::fs::remove_file(profile.join(format!("{name}{suffix}")));
         }
@@ -262,7 +262,35 @@ const DELAYS: &[u64] = &[
     900,  // 181 check the marked suggestion; Esc
     900,  // 182 closed; hostile file; Ctrl+D, then the page tries bm-* IPC
     900,  // 183 content page could not reach it; Esc
-    900,  // 184 last tab close quits
+    900,  // 184 serve the file; Alt+F
+    900,  // 185 check the menu, focus; Down
+    600,  // 186 check Down; Up twice
+    600,  // 187 check wrap; Esc
+    900,  // 188 check Esc, focus; Alt+E
+    900,  // 189 check Alt+E; zoom in
+    900,  // 190 check zoom; zoom reset
+    900,  // 191 check reset; Find
+    900,  // 192 check Find; the menu button
+    900,  // 193 check the button; History
+    900,  // 194 check History; Esc
+    900,  // 195 check closed; Alt+F
+    900,  // 196 check the menu; Bookmarks
+    900,  // 197 check the hook; Alt+F
+    900,  // 198 check the menu; Settings
+    900,  // 199 check the page; change the settings
+    900,  // 200 check the changes; content IPC
+    900,  // 201 check IPC ignored; Esc; Ctrl+T
+    900,  // 202 check closed, new tab; download
+    3500, // 203 check the download; Ctrl+J
+    1200, // 204 check open; Ctrl+J
+    1200, // 205 check closed; menu Downloads
+    1200, // 206 check open; Ctrl+J
+    1200, // 207 check closed; open Settings
+    900,  // 208 defaults back; clear data
+    2500, // 209 check; hostile file; Esc
+    900,  // 210 check closed; Print
+    1500, // 211 check Print; ShowPrintUI
+    900,  // 212 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -553,7 +581,7 @@ fn close_extra_tabs(app: &mut App) {
 }
 
 /// Narrowest width the window may have (`with_min_inner_size` in main.rs).
-const MIN_W: f64 = 480.0;
+const MIN_W: f64 = 570.0;
 
 /// Shared JS helpers: `visEl` is true when an element has a box fully inside
 /// the viewport and is the topmost thing at its centre (not clipped, not covered).
@@ -1921,7 +1949,7 @@ pub fn step(app: &mut App, n: u32) {
             check("ui-drag-moves-tab", ids == [c, d, a, b], format!("{ids:?}"));
             // Narrow tabs, d inactive (two new blank tabs, the last one
             // active): a drag that starts on d's page icon.
-            app.window.set_inner_size(LogicalSize::new(820.0, 520.0));
+            app.window.set_inner_size(LogicalSize::new(880.0, 520.0));
             for key in ["se", "sf"] {
                 app.handle(UserEvent::Ui(UiCommand::NewTab));
                 remember(key, app.tabs.active().map_or(-1, |id| id as i64));
@@ -3555,7 +3583,259 @@ pub fn step(app: &mut App, n: u32) {
             overlay_js(app, "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))");
             close_extra_tabs(app);
         }
+        // Downloads, main menu, settings (task 7): one block, last before the finale.
         184 => {
+            let port = serve_attachment();
+            check("download-server-started", port.is_some(), "no local port");
+            remember("dl-port", port.map_or(0, i64::from));
+            let sc = press(app, vk::F, ALT);
+            check("alt-f-is-the-menu-shortcut", sc == Some(Shortcut::Menu), format!("{sc:?}"));
+        }
+        185 => {
+            check("menu-opens-with-alt-f", app.overlay.mode == Mode::Menu, format!("mode {:?}", app.overlay.mode));
+            let (w, h) = logical_size(app);
+            let b = app.overlay.view().map(|v| bounds_of(app, v)).unwrap_or((f64::NAN, f64::NAN, f64::NAN, f64::NAN));
+            let inside = b.0 >= 0.0 && b.1 >= crate::app::UI_HEIGHT && b.0 + b.2 <= w + 0.5 && b.1 + b.3 <= h + 0.5;
+            check("menu-is-clamped-inside-the-window", inside, format!("{b:?} in {w}x{h}"));
+            overlay_active(app, "menu-focus-starts-on-the-first-item", "new-tab");
+            overlay_js(app, &key_js("ArrowDown"));
+        }
+        186 => {
+            overlay_active(app, "menu-arrow-down-moves-on", "find");
+            overlay_js(app, &format!("{}{}", key_js("ArrowUp"), key_js("ArrowUp")));
+        }
+        187 => {
+            overlay_active(app, "menu-arrow-up-wraps-to-the-last-item", "settings");
+            overlay_js(app, &key_js("Escape"));
+        }
+        188 => {
+            check("menu-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            page_eval(app, "menu-esc-returns-focus-to-page", "document.hasFocus()", |r| {
+                check("menu-esc-returns-focus-to-page", r == "true", &r);
+            });
+            let sc = press(app, vk::E, ALT);
+            check("alt-e-is-the-menu-shortcut", sc == Some(Shortcut::Menu), format!("{sc:?}"));
+        }
+        189 => {
+            check("menu-opens-with-alt-e", app.overlay.mode == Mode::Menu, format!("mode {:?}", app.overlay.mode));
+            remember("zoom-before", i64::from(tab_zoom(app)));
+            overlay_click(app, "[data-item=zoom-in]");
+        }
+        190 => {
+            let (was, now) = (recall("zoom-before"), i64::from(tab_zoom(app)));
+            check("menu-zoom-in-zooms", now > was && app.overlay.mode == Mode::Menu, format!("{was} -> {now}, {:?}", app.overlay.mode));
+            let shown = format!("%{now}");
+            overlay_eval(app, "menu-shows-the-zoom-percent", "document.getElementById('m-zoom').textContent", move |r| {
+                check("menu-shows-the-zoom-percent", r == shown, format!("{r} want {shown}"));
+            });
+            overlay_click(app, "[data-item=zoom-reset]");
+        }
+        191 => {
+            let now = tab_zoom(app);
+            check("menu-zoom-reset-resets", now == 100 && app.overlay.mode == Mode::Menu, format!("{now}, {:?}", app.overlay.mode));
+            overlay_click(app, "[data-item=find]");
+        }
+        192 => {
+            check("menu-find-closes-the-menu", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            // Whether the bar shows cannot be seen from here; an error HRESULT can.
+            let hr = crate::native::FIND_START.load(Ordering::Relaxed);
+            check("menu-find-start-reports-no-error", hr == 0 || hr == 1, format!("Find::Start HRESULT {hr:#x} (1: not completed)"));
+            ui_js(app, "document.getElementById('menu-btn').click()");
+        }
+        193 => {
+            check("menu-opens-with-its-button", app.overlay.mode == Mode::Menu, format!("mode {:?}", app.overlay.mode));
+            overlay_click(app, "[data-item=history]");
+        }
+        194 => {
+            check("menu-history-opens-the-history", app.overlay.mode == Mode::History, format!("mode {:?}", app.overlay.mode));
+            overlay_js(app, &key_js("Escape"));
+        }
+        195 => {
+            check("history-from-menu-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            press(app, vk::F, ALT);
+        }
+        196 => {
+            check("menu-reopens-for-bookmarks", app.overlay.mode == Mode::Menu, format!("mode {:?}", app.overlay.mode));
+            overlay_click(app, "[data-item=bookmarks]");
+        }
+        197 => {
+            check("menu-bookmarks-opens-the-list", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
+            press(app, vk::F, ALT);
+        }
+        198 => {
+            check("menu-reopens-for-settings", app.overlay.mode == Mode::Menu, format!("mode {:?}", app.overlay.mode));
+            overlay_click(app, "[data-item=settings]");
+        }
+        199 => {
+            check("menu-settings-opens-the-settings", app.overlay.mode == Mode::Settings, format!("mode {:?}", app.overlay.mode));
+            let s = &app.settings.value;
+            check(
+                "settings-start-at-the-defaults",
+                (s.engine, s.startup, s.autofill) == (crate::settings::Engine::DuckDuckGo, crate::settings::Startup::Last, true)
+                    && s.download_dir.is_empty(),
+                format!("{s:?}"),
+            );
+            let all_on = app.views.iter().all(|(_, v)| crate::native::content_settings(v) == Some((true, false)));
+            check("autofill-on-and-password-save-off-by-default", all_on && !app.views.is_empty(), "a view differs");
+            let folder = dir().join("dl");
+            let _ = std::fs::create_dir_all(&folder);
+            remember("dl-ready", i64::from(folder.is_dir()));
+            let mut lit = String::new();
+            crate::tabs::push_json_str(&mut lit, &folder.to_string_lossy());
+            overlay_js(
+                app,
+                &format!(
+                    "document.querySelector('input[name=s-engine][value=google]').click(); \
+                     document.querySelector('input[name=s-startup][value=blank]').click(); \
+                     document.getElementById('s-autofill').click(); \
+                     document.getElementById('s-folder').value = {lit}; \
+                     document.getElementById('s-folder-apply').click();"
+                ),
+            );
+        }
+        200 => {
+            use crate::settings::{Engine, Startup};
+            let s = &app.settings.value;
+            check("settings-engine-changes", s.engine == Engine::Google && crate::settings::engine() == Engine::Google, format!("{:?}", s.engine));
+            let url = crate::url::search_url("a b");
+            check("settings-engine-drives-the-address-bar", url.starts_with("https://www.google.com/search?q=a"), &url);
+            check("settings-startup-changes", s.startup == Startup::Blank, format!("{:?}", s.startup));
+            check("settings-autofill-off-reaches-open-views", app.views.iter().all(|(_, v)| crate::native::content_settings(v) == Some((false, false))), "a view differs");
+            let want = dir().join("dl");
+            check("settings-download-folder-saved", s.download_dir == want.to_string_lossy(), format!("{:?}", s.download_dir));
+            let now = app.views.first().and_then(|(_, v)| crate::native::download_folder(v)).unwrap_or_default();
+            check("settings-download-folder-reaches-webview2", std::path::Path::new(&now).ends_with("dl"), &now);
+            let flushed = crate::store::flush(Duration::from_secs(2));
+            let file = crate::store::data_dir().map(|d| d.join("settings.json")).and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+            check(
+                "settings-are-written-to-settings-json",
+                flushed && file.contains("\"v\":1") && file.contains("google") && file.contains("blank") && file.contains("\"autofill\":false"),
+                &file,
+            );
+            // The page's own scripts reach none of it.
+            app.overlay.cleared = None;
+            page_js(
+                app,
+                "for (const m of ['menu-toggle','menu-pick:history','st-engine:bing','st-startup:last','st-autofill:1','st-folder:','ov-clear-data']) \
+                 { try { window.ipc.postMessage(m); } catch (e) {} }",
+            );
+        }
+        201 => {
+            let s = &app.settings.value;
+            check(
+                "content-ipc-cannot-reach-menu-or-settings",
+                app.overlay.mode == Mode::Settings
+                    && s.engine == crate::settings::Engine::Google
+                    && s.startup == crate::settings::Startup::Blank
+                    && !s.autofill
+                    && !s.download_dir.is_empty()
+                    && app.overlay.cleared.is_none(),
+                format!("{:?} {s:?} {:?}", app.overlay.mode, app.overlay.cleared),
+            );
+            overlay_js(app, &key_js("Escape"));
+            press(app, vk::T, CTRL);
+        }
+        202 => {
+            check("settings-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            let new_view = app.views.last().is_some_and(|(_, v)| crate::native::content_settings(v) == Some((false, false)));
+            check("autofill-off-reaches-new-tabs", new_view, "the new tab's webview differs");
+            let port = recall("dl-port");
+            app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{port}/xb-test.txt"))));
+        }
+        203 => {
+            let d = &app.downloads;
+            check("download-started-and-finished", d.started == 1 && d.completed == 1 && d.failed == 0 && d.active == 0, format!("{d:?}"));
+            let text = d.last_file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).unwrap_or_default();
+            check("download-file-has-the-served-bytes", text == DOWNLOAD_BODY, &text);
+            let in_folder = d.last_file.as_ref().is_some_and(|f| f.parent().is_some_and(|p| p.ends_with("dl")));
+            check("download-lands-in-the-chosen-folder", in_folder, format!("{:?}", d.last_file));
+            ui_eval(app, "downloads-button-shows-after-a-download", "String(!document.getElementById('downloads-btn').hidden)", |r| {
+                check("downloads-button-shows-after-a-download", r == "true", &r);
+            });
+            // WebView2 opened its own flyout when the download began.
+            let open = app.active_view().is_some_and(crate::native::downloads_open);
+            check("download-flyout-opens-by-itself", open, "closed");
+            let sc = press(app, vk::J, CTRL);
+            check("ctrl-j-is-the-downloads-shortcut", sc == Some(Shortcut::Downloads), format!("{sc:?}"));
+        }
+        204 => {
+            let open = app.active_view().is_some_and(crate::native::downloads_open);
+            check("ctrl-j-closes-the-download-flyout", !open, "still open");
+            press(app, vk::J, CTRL);
+        }
+        205 => {
+            let open = app.active_view().is_some_and(crate::native::downloads_open);
+            check("ctrl-j-opens-the-download-flyout", open, "closed");
+            press(app, vk::F, ALT);
+            overlay_click(app, "[data-item=downloads]");
+        }
+        206 => {
+            let open = app.active_view().is_some_and(crate::native::downloads_open);
+            check("menu-downloads-closes-the-open-flyout", !open && overlay_closed(app), format!("open {open}, mode {:?}", app.overlay.mode));
+            press(app, vk::F, ALT);
+            overlay_click(app, "[data-item=downloads]");
+        }
+        207 => {
+            let open = app.active_view().is_some_and(crate::native::downloads_open);
+            check("menu-downloads-opens-the-flyout", open && overlay_closed(app), format!("open {open}, mode {:?}", app.overlay.mode));
+            press(app, vk::J, CTRL);
+            crate::settings::open(app);
+        }
+        208 => {
+            let open = app.active_view().is_some_and(crate::native::downloads_open);
+            check("download-flyout-closes-again", !open, "still open");
+            // Back to the defaults through the page, then clear browsing data from it.
+            app.overlay.cleared = None;
+            overlay_js(
+                app,
+                "document.querySelector('input[name=s-engine][value=duckduckgo]').click(); \
+                 document.querySelector('input[name=s-startup][value=last]').click(); \
+                 document.getElementById('s-autofill').click(); \
+                 document.getElementById('s-folder-reset').click(); \
+                 document.getElementById('s-clear').click(); document.getElementById('s-yes').click();",
+            );
+        }
+        209 => {
+            use crate::settings::{Engine, Startup};
+            let s = &app.settings.value;
+            check(
+                "settings-go-back-to-the-defaults",
+                (s.engine, s.startup, s.autofill) == (Engine::DuckDuckGo, Startup::Last, true) && s.download_dir.is_empty(),
+                format!("{s:?}"),
+            );
+            check("settings-engine-restored-for-the-address-bar", crate::url::search_url("a").starts_with(crate::url::SEARCH_URL), crate::url::search_url("a"));
+            let all_on = app.views.iter().all(|(_, v)| crate::native::content_settings(v) == Some((true, false)));
+            check("autofill-back-on-and-password-save-still-off", all_on, "a view differs");
+            check("settings-clear-data-clears", app.overlay.cleared == Some(true), format!("{:?}", app.overlay.cleared));
+            // A hostile settings.json costs only its fields; an oversize one is ignored.
+            let hostile = dir().join("hostile");
+            let _ = std::fs::create_dir_all(&hostile);
+            let _ = std::fs::write(
+                hostile.join("settings.json"),
+                r#"{"v":1,"engine":"evil","startup":"blank","autofill":"x","download_dir":"..\\x"}"#,
+            );
+            let read = crate::settings::State::open(Some(&hostile));
+            let v = &read.value;
+            check(
+                "hostile-settings-file-is-sanitized",
+                (v.engine, v.startup, v.autofill) == (Engine::DuckDuckGo, Startup::Blank, true) && v.download_dir.is_empty(),
+                format!("{v:?}"),
+            );
+            overlay_js(app, &key_js("Escape"));
+        }
+        210 => {
+            check("settings-esc-closes-the-page", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            press(app, vk::F, ALT);
+            overlay_click(app, "[data-item=print]");
+        }
+        211 => {
+            check("menu-print-closes-the-menu", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            let shown = app.active_view().is_some_and(crate::native::print);
+            check("print-preview-opens", shown, "ShowPrintUI failed");
+        }
+        212 => {
+            // The block opened a second tab (Ctrl+T); the last close quits.
+            app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -3570,6 +3850,63 @@ pub fn step(app: &mut App, n: u32) {
         }
         _ => {}
     }
+}
+
+/// What the served download contains.
+const DOWNLOAD_BODY: &str = "x-browser download test
+";
+
+/// A local server on 127.0.0.1 that answers every request with a small file
+/// as an attachment (the only download the self-test makes; nothing is
+/// fetched from the internet and the file is never opened). Returns its port.
+fn serve_attachment() -> Option<u16> {
+    use std::io::Read as _;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+    let port = listener.local_addr().ok()?.port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = s.read(&mut [0u8; 2048]);
+            let head = format!(
+                "HTTP/1.1 200 OK
+Content-Type: application/octet-stream
+                 Content-Disposition: attachment; filename=\"xb-test.txt\"
+                 Content-Length: {}
+Connection: close
+
+",
+                DOWNLOAD_BODY.len()
+            );
+            let _ = s.write_all(head.as_bytes());
+            let _ = s.write_all(DOWNLOAD_BODY.as_bytes());
+        }
+    });
+    Some(port)
+}
+
+/// JS that sends a key-down to the overlay page.
+fn key_js(key: &str) -> String {
+    format!("document.dispatchEvent(new KeyboardEvent('keydown', {{ key: '{key}', bubbles: true, cancelable: true }}));")
+}
+
+fn overlay_eval(app: &App, name: &'static str, js: &str, then: impl Fn(String) + Send + 'static) {
+    eval(app.overlay.view(), name, js, then);
+}
+
+/// Checks which menu item has the focus (its `data-item`).
+fn overlay_active(app: &App, name: &'static str, want: &'static str) {
+    overlay_eval(app, name, "document.activeElement.dataset.item || 'none'", move |r| {
+        check(name, r == want, format!("{r}, want {want}"));
+    });
+}
+
+fn overlay_click(app: &App, selector: &str) {
+    overlay_js(app, &format!("document.querySelector('{selector}').click()"));
+}
+
+fn tab_zoom(app: &App) -> u16 {
+    app.tabs.active().and_then(|id| app.tabs.get(id)).map_or(0, |t| t.zoom)
 }
 
 /// A key-down with the live Esc state, as the native hook reads it

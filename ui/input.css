@@ -6,6 +6,8 @@
 @source "./overlay.html";
 @source "./js/overlay.js";
 @source "./js/bookmarks.js";
+@source "./js/menu.js";
+@source "./js/settings.js";
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
@@ -66,6 +68,16 @@
   /* Window caption button (full strip height, Windows-like width). */
   .win {
     @apply flex h-full w-11 items-center justify-center transition-colors duration-100 hover:bg-hover;
+  }
+  /* Main menu row and its zoom buttons (overlay.html, menu.js). */
+  .mi {
+    @apply flex h-8 w-full items-center gap-2 px-3 text-left outline-none hover:bg-hover focus:bg-hover;
+  }
+  .mi kbd {
+    @apply ml-auto font-sans text-[12px] text-muted;
+  }
+  .zbtn {
+    @apply flex h-7 min-w-7 items-center justify-center rounded-md border border-line px-1.5 outline-none hover:bg-hover focus:border-accent;
   }
   /* Tab list scroll arrows, shown only while the tabs overflow. */
   .arrow {

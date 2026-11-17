@@ -19,13 +19,17 @@ pub enum ProfileBusy {
 
 mod audio;
 mod content;
+mod download;
 mod favicon;
 mod fullscreen;
+mod tools;
 mod zoom;
 pub use audio::*;
 pub use content::*;
+pub use download::*;
 pub use favicon::*;
 pub use fullscreen::*;
+pub use tools::*;
 pub use zoom::*;
 
 #[cfg(windows)]

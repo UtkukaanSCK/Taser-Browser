@@ -589,7 +589,8 @@ pub fn open_list(app: &mut App) {
     if app.fullscreen.on() {
         page_tools::leave_fullscreen(app);
     }
-    if !showing(app, View::List) {
+    // (Mode Hidden: nothing to close, and a handed-over webview must stay up.)
+    if app.overlay.mode != Mode::Hidden && !showing(app, View::List) {
         overlay::close(app);
     }
     app.bookmarks.ensure_loaded();

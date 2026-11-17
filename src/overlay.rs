@@ -124,6 +124,18 @@ pub enum Mode {
     History,
     /// The bookmark editor or list (see `bookmarks`).
     Bookmarks,
+    /// The main menu (see `menu`).
+    Menu,
+    /// The settings page (see `settings`).
+    Settings,
+}
+
+impl Mode {
+    /// The list takes the keyboard (a search box, arrow keys), as opposed to
+    /// the suggestions, which the address bar keeps typing into.
+    fn owns_keyboard(self) -> bool {
+        matches!(self, Mode::History | Mode::Bookmarks | Mode::Menu | Mode::Settings)
+    }
 }
 
 #[derive(Default)]
@@ -149,6 +161,8 @@ pub struct Overlay {
     built_at: Option<Instant>,
     /// From the start of the build to the first show.
     pub first_show: Option<Duration>,
+    /// The webview was kept up and focused for the next page (`hand_over`).
+    handed: bool,
     /// Result of the last ClearBrowsingData.
     #[cfg(feature = "selftest")]
     pub cleared: Option<bool>,
@@ -273,14 +287,44 @@ fn present(o: &mut Overlay, was: Mode, js: &str, bounds: Rect) {
             crate::timing::mark("overlay-shown");
         }
     }
-    if matches!(o.mode, Mode::History | Mode::Bookmarks) && was != o.mode {
+    // (A handed-over webview has the focus already; moving it there again
+    // would blur the page, and the blur would close it.)
+    let handed = std::mem::take(&mut o.handed);
+    if o.mode.owns_keyboard() && was != o.mode && !handed {
         let _ = view.focus();
+    }
+}
+
+/// Runs `js` in the overlay while it shows `mode` (a menu redrawing a number).
+pub(crate) fn run(app: &App, mode: Mode, js: &str) {
+    if app.overlay.mode == mode
+        && let Some(view) = &app.overlay.view
+    {
+        let _ = view.evaluate_script(js);
     }
 }
 
 /// Hides the overlay. Its last list stays known, so a pick that races the
 /// close (a click blurs the address input first) still lands.
 pub fn close(app: &mut App) {
+    reset(app, true);
+}
+
+/// Clears the overlay's page and mode but leaves its webview shown and
+/// focused, for a menu item that opens another page in it right away
+/// (hiding and showing the webview blurs its page, and that blur, arriving
+/// after the new page is up, would close it again). The caller must show
+/// something.
+pub(crate) fn hand_over(app: &mut App) {
+    // Only a page that owns the keyboard is handed over; Suggest leaves the
+    // keyboard in the address input, so the next page must take it.
+    let was_up = app.overlay.mode.owns_keyboard() && app.overlay.view.is_some();
+    reset(app, false);
+    // (`|=`: a second hand-over of the same page, now Hidden, keeps the first.)
+    app.overlay.handed |= was_up;
+}
+
+fn reset(app: &mut App, hide: bool) {
     let o = &mut app.overlay;
     let was = std::mem::take(&mut o.mode);
     o.pending = None;
@@ -290,7 +334,9 @@ pub fn close(app: &mut App) {
     }
     if let Some(view) = &o.view {
         let _ = view.evaluate_script("xbo.clear();xbBm.hide()");
-        let _ = view.set_visible(false);
+        if hide {
+            let _ = view.set_visible(false);
+        }
     }
     if was == Mode::Suggest {
         let _ = app.ui.evaluate_script("xbSuggest.set(false,null)");
@@ -302,7 +348,7 @@ pub fn close(app: &mut App) {
 /// keyboard, so it goes back where Esc would put it, as long as X-Browser is
 /// still the foreground window.
 pub fn dismiss(app: &mut App) {
-    let had_keyboard = matches!(app.overlay.mode, Mode::History | Mode::Bookmarks);
+    let had_keyboard = app.overlay.mode.owns_keyboard();
     close(app);
     if had_keyboard && native::is_foreground(&app.window) {
         app.focus_after_switch();
@@ -369,7 +415,7 @@ fn render_history(app: &mut App, keep: bool) {
 }
 
 fn suggest(app: &mut App, x: u16, w: u16, text: String) {
-    if app.fullscreen.on() || matches!(app.overlay.mode, Mode::History | Mode::Bookmarks) {
+    if app.fullscreen.on() || app.overlay.mode.owns_keyboard() {
         return;
     }
     let found = crate::bookmarks::suggest(app, &text);
@@ -454,7 +500,7 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
             }
         }
         OverlayCmd::Close => {
-            if matches!(app.overlay.mode, Mode::History | Mode::Bookmarks) {
+            if app.overlay.mode.owns_keyboard() {
                 close(app);
             }
         }
@@ -488,12 +534,15 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
                 render_history(app, true);
             }
         }
-        OverlayCmd::ClearData => {
-            if app.overlay.mode == Mode::History {
+        OverlayCmd::ClearData => match app.overlay.mode {
+            Mode::History => {
                 clear_data(app);
                 render_history(app, true);
             }
-        }
+            // The settings page asks for it too; it words the outcome itself.
+            Mode::Settings => clear_data(app),
+            _ => {}
+        },
         OverlayCmd::DataCleared(ok) => {
             #[cfg(feature = "selftest")]
             {
@@ -517,8 +566,8 @@ pub fn refresh(app: &mut App) {
             let text = app.overlay.query.clone();
             suggest(app, x, w, text);
         }
-        // The list is redrawn by `bookmarks` itself on every change.
-        Mode::Suggest | Mode::Hidden | Mode::Bookmarks => {}
+        // The bookmark list is redrawn by `bookmarks` itself on every change.
+        Mode::Suggest | Mode::Hidden | Mode::Bookmarks | Mode::Menu | Mode::Settings => {}
     }
 }
 
@@ -536,6 +585,16 @@ pub fn clear_data(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_pages_that_own_the_keyboard_are_handed_over() {
+        // Suggest keeps the keyboard in the address input: the page that
+        // replaces it must take the focus itself.
+        assert!(!Mode::Suggest.owns_keyboard() && !Mode::Hidden.owns_keyboard());
+        for m in [Mode::History, Mode::Bookmarks, Mode::Menu, Mode::Settings] {
+            assert!(m.owns_keyboard());
+        }
+    }
 
     fn parts(r: Rect) -> (f64, f64, f64, f64) {
         let (p, s) = (r.position.to_logical::<f64>(1.0), r.size.to_logical::<f64>(1.0));

@@ -333,6 +333,11 @@ pub fn track_window(app: &mut App) {
 /// Appends the saved tabs and shows the saved active one; only that one gets
 /// a webview now. Returns the active tab.
 pub fn restore(app: &mut App, session: &Session) -> Option<TabId> {
+    // The setting asks for a blank start: the saved tabs are not brought back
+    // (and the next save replaces them).
+    if app.settings.value.startup == crate::settings::Startup::Blank {
+        return None;
+    }
     let mut active = None;
     for (i, t) in session.tabs.iter().enumerate() {
         let id = app.tabs.add(&t.url, Placement::End);

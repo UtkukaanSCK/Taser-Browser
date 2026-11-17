@@ -30,6 +30,7 @@ const ui = {
   const loadbar = $("loadbar");
   const zoomBtn = $("zoom");
   const zoomLevel = $("zoom-level");
+  const downloadsBtn = $("downloads-btn");
   const notice = $("fs-notice");
   const noticeSite = $("fs-notice-site");
   const noticeText = $("fs-notice-text");
@@ -105,12 +106,24 @@ const ui = {
       send("focus-content");
     }
   });
+  // Find and print are the page's own keys (WebView2 answers them in a
+  // page); typed in the strip they would act on the strip, so ask for them.
+  document.addEventListener("keydown", (e) => {
+    if (e.isComposing || !e.ctrlKey || e.altKey || e.shiftKey) return;
+    const k = e.key.toLowerCase();
+    if (k === "f" || k === "p") {
+      e.preventDefault();
+      send(k === "f" ? "menu-pick:find" : "menu-pick:print");
+    }
+  });
 
   // Toolbar.
   back.addEventListener("click", () => send("back"));
   fwd.addEventListener("click", () => send("forward"));
   reload.addEventListener("click", () => send(reload.hasAttribute("data-loading") ? "stop" : "reload"));
   newTab.addEventListener("click", () => send("new"));
+  $("menu-btn").addEventListener("click", () => send("menu-toggle"));
+  downloadsBtn.addEventListener("click", () => send("menu-pick:downloads"));
   zoomBtn.addEventListener("click", () => {
     if (ui.state.active != null) send("zoom-reset:" + ui.state.active);
   });
@@ -150,6 +163,12 @@ const ui = {
       addrBox.setAttribute("data-blocked", "");
       clearTimeout(blockedTimer);
       blockedTimer = setTimeout(() => addrBox.removeAttribute("data-blocked"), 900);
+    },
+    /** The downloads button: shown once there was a download; `busy`: one is running. */
+    downloads(show, busy) {
+      downloadsBtn.hidden = show !== true;
+      downloadsBtn.toggleAttribute("data-busy", busy === true);
+      downloadsBtn.title = busy === true ? "İndirilenler: indiriliyor (Ctrl+J)" : "İndirilenler (Ctrl+J)";
     },
     /** Fullscreen notice: `site` (or null) and `text`; `notice(null)` hides it. */
     notice(site, text) {

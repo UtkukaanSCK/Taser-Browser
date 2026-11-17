@@ -21,6 +21,8 @@ const SUGGEST_JS: &str = include_str!("../ui/js/suggest.js");
 const OVERLAY_HTML: &str = include_str!("../ui/overlay.html");
 const OVERLAY_JS: &str = include_str!("../ui/js/overlay.js");
 const BOOKMARKS_JS: &str = include_str!("../ui/js/bookmarks.js");
+const MENU_JS: &str = include_str!("../ui/js/menu.js");
+const SETTINGS_JS: &str = include_str!("../ui/js/settings.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -74,6 +76,8 @@ fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/overlay.html" => (OVERLAY_HTML, "text/html; charset=utf-8"),
         "/js/overlay.js" => (OVERLAY_JS, "text/javascript; charset=utf-8"),
         "/js/bookmarks.js" => (BOOKMARKS_JS, "text/javascript; charset=utf-8"),
+        "/js/menu.js" => (MENU_JS, "text/javascript; charset=utf-8"),
+        "/js/settings.js" => (SETTINGS_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })
@@ -227,6 +231,8 @@ mod tests {
         assert_eq!(get("/js/suggest.js").status(), 200);
         assert_eq!(get("/js/bookmarks.js").status(), 200);
         assert_eq!(get("/js/overlay.js").status(), 200);
+        assert_eq!(get("/js/menu.js").status(), 200);
+        assert_eq!(get("/js/settings.js").status(), 200);
         let r = get("/overlay.html");
         assert_eq!(r.status(), 200);
         assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], CSP);
@@ -267,7 +273,7 @@ mod tests {
 
     #[test]
     fn scripts_never_write_html() {
-        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS] {
+        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS] {
             for bad in [".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval("] {
                 assert!(!js.contains(bad), "{bad}");
             }

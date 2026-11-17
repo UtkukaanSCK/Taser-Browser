@@ -6,6 +6,8 @@
 <link rel="stylesheet" href="/app.css">
 <script src="/js/bookmarks.js" defer></script>
 <script src="/js/overlay.js" defer></script>
+<script src="/js/menu.js" defer></script>
+<script src="/js/settings.js" defer></script>
 </head>
 <body class="bg-surface text-ink font-sans text-[13px] leading-none border border-line">
 <!-- Address-bar suggestions: 30px rows (ROW_H in overlay.rs), 4px padding. -->
@@ -58,6 +60,73 @@
   <ul id="bm-rows" aria-label="Yer imleri" class="min-h-0 flex-1 overflow-y-auto py-1"></ul>
   <p id="bm-empty" class="flex-1 px-3 py-6 text-center text-muted" hidden>Yer imi yok</p>
   <p id="bm-more" class="border-t border-line px-3 py-1.5 text-muted" hidden></p>
+</section>
+
+<!-- Main menu (menu.js, src/menu.rs). Sized in menu.rs (264 x 292): 32px rows,
+     a 36px zoom row, two separators. The zoom row is one stop for ↑/↓: ←/→ zoom,
+     Enter resets; the − and + buttons are for the mouse. -->
+<section id="menu" role="menu" aria-label="Ana menü" class="h-full overflow-y-auto py-1" hidden>
+  <button type="button" role="menuitem" data-item="new-tab" data-stop class="mi">Yeni sekme<kbd>Ctrl+T</kbd></button>
+  <button type="button" role="menuitem" data-item="find" data-stop class="mi">Sayfada bul<kbd>Ctrl+F</kbd></button>
+  <div role="group" aria-label="Yakınlaştırma" class="my-1 flex h-9 items-center gap-1 border-y border-line px-3">
+    <span class="mr-auto">Yakınlaştırma</span>
+    <button type="button" role="menuitem" data-item="zoom-out" tabindex="-1" title="Uzaklaştır (Ctrl+-)" aria-label="Uzaklaştır" class="zbtn">−</button>
+    <button id="m-zoom" type="button" role="menuitem" data-item="zoom-reset" data-stop title="Sıfırla (Ctrl+0)" aria-label="Yakınlaştırma yüzde 100, sıfırla" class="zbtn w-14 tabular-nums">%100</button>
+    <button type="button" role="menuitem" data-item="zoom-in" tabindex="-1" title="Yakınlaştır (Ctrl++)" aria-label="Yakınlaştır" class="zbtn">+</button>
+  </div>
+  <button type="button" role="menuitem" data-item="print" data-stop class="mi">Yazdır<kbd>Ctrl+P</kbd></button>
+  <button type="button" role="menuitem" data-item="history" data-stop class="mi">Geçmiş<kbd>Ctrl+H</kbd></button>
+  <button type="button" role="menuitem" data-item="bookmarks" data-stop class="mi">Yer imleri<kbd>Ctrl+Shift+O</kbd></button>
+  <button type="button" role="menuitem" data-item="downloads" data-stop class="mi">İndirilenler<kbd>Ctrl+J</kbd></button>
+  <button type="button" role="menuitem" data-item="settings" data-stop class="mi">Ayarlar</button>
+</section>
+
+<!-- Settings (settings.js, src/settings.rs). -->
+<section id="settings" aria-label="Ayarlar" class="flex h-full flex-col" hidden>
+  <header class="border-b border-line px-4 py-2">
+    <h1 class="text-[14px] font-semibold">Ayarlar</h1>
+  </header>
+  <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-3">
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1 font-semibold">Arama motoru</legend>
+      <label class="flex items-center gap-2"><input type="radio" name="s-engine" value="duckduckgo" class="accent-accent">DuckDuckGo</label>
+      <label class="flex items-center gap-2"><input type="radio" name="s-engine" value="google" class="accent-accent">Google</label>
+      <label class="flex items-center gap-2"><input type="radio" name="s-engine" value="bing" class="accent-accent">Bing</label>
+    </fieldset>
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1 font-semibold">Açılışta</legend>
+      <label class="flex items-center gap-2"><input type="radio" name="s-startup" value="last" class="accent-accent">Son oturumu aç</label>
+      <label class="flex items-center gap-2"><input type="radio" name="s-startup" value="blank" class="accent-accent">Boş sekme aç</label>
+    </fieldset>
+    <div class="flex flex-col gap-1">
+      <label class="flex items-center gap-2"><input id="s-autofill" type="checkbox" class="accent-accent">Formları otomatik doldur</label>
+      <p class="leading-snug text-muted">Parolalar hiçbir zaman kaydedilmez.</p>
+    </div>
+    <div class="flex flex-col gap-2">
+      <label for="s-folder" class="font-semibold">İndirme klasörü</label>
+      <div class="flex gap-2">
+        <input id="s-folder" type="text" maxlength="1024" spellcheck="false" autocomplete="off"
+          class="h-7 min-w-0 flex-1 select-text rounded-md border border-line bg-surface px-2 outline-none focus:border-accent">
+        <button id="s-folder-apply" type="button" class="h-7 shrink-0 rounded-md border border-line px-3 hover:bg-hover">Uygula</button>
+        <button id="s-folder-reset" type="button" class="h-7 shrink-0 rounded-md border border-line px-3 hover:bg-hover">Varsayılan</button>
+      </div>
+      <p id="s-folder-hint" class="break-all leading-snug text-muted"></p>
+    </div>
+    <div class="flex flex-col gap-2">
+      <h2 class="font-semibold">Tarama verileri</h2>
+      <div id="s-actions" class="flex">
+        <button id="s-clear" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Tarama verilerini temizle</button>
+      </div>
+      <div id="s-confirm" class="flex flex-wrap items-center gap-2" hidden>
+        <span class="mr-auto leading-snug">Geçmiş, çerezler ve site verileri ile önbellek silinsin mi? Oturumlarınız kapanır.</span>
+        <button id="s-yes" type="button" class="h-7 rounded-md border border-danger px-3 text-danger hover:bg-hover">Sil</button>
+        <button id="s-no" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Vazgeç</button>
+      </div>
+    </div>
+  </div>
+  <footer class="border-t border-line px-4 py-2">
+    <p id="s-status" role="status" class="min-h-4 leading-snug text-muted"></p>
+  </footer>
 </section>
 </body>
 </html>

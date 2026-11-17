@@ -35,6 +35,8 @@ pub enum UserEvent {
     OpenFromOtherInstance(Option<String>),
     /// The history file has been read in the background (see `history`).
     HistoryLoaded,
+    /// WebView2's download flyout state changed (see `downloads`).
+    Download(crate::downloads::Event),
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -132,6 +134,10 @@ pub struct App {
     pub history: crate::history::History,
     /// bookmarks.json (see `bookmarks`).
     pub bookmarks: crate::bookmarks::Bookmarks,
+    /// settings.json (see `settings`).
+    pub settings: crate::settings::State,
+    /// Downloads of this session (see `downloads`).
+    pub downloads: crate::downloads::Downloads,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -199,6 +205,8 @@ impl App {
             persist: Default::default(),
             history: Default::default(),
             bookmarks: Default::default(),
+            settings: Default::default(),
+            downloads: Default::default(),
             overlay: Default::default(),
             quit: false,
         })
@@ -212,7 +220,7 @@ impl App {
         self.views.iter().find(|(i, _)| *i == id).map(|(_, v)| v)
     }
 
-    fn active_view(&self) -> Option<&WebView> {
+    pub(crate) fn active_view(&self) -> Option<&WebView> {
         self.view(self.tabs.active()?)
     }
 
@@ -295,6 +303,8 @@ impl App {
                 native::harden_content(view)?;
                 native::attach_content_events(view, id, &self.proxy)?;
                 native::attach_accelerators(view, &self.proxy)?;
+                native::attach_downloads(view, &self.proxy)?;
+                let _ = native::apply_content_settings(view, self.settings.value.autofill);
             }
             view.load_url(url)
         };
@@ -547,6 +557,7 @@ impl App {
             // Only a wake-up: `flush`, at the end of this pass, merges the
             // load and redraws what it changes.
             UserEvent::HistoryLoaded => {}
+            UserEvent::Download(ev) => crate::downloads::on_event(self, ev),
             UserEvent::OpenFromOtherInstance(url) => {
                 if let Some(url) = url
                     && crate::url::is_tab_url(&url)
@@ -581,6 +592,7 @@ impl App {
                 self.dirty = true;
                 // A (re)loaded UI has no icons yet.
                 self.tabs.resend_icons();
+                crate::downloads::sync_ui(self);
                 crate::timing::mark("ui-ready");
                 if crate::timing::quit_when_ready() {
                     self.quit = true;
@@ -629,10 +641,12 @@ impl App {
             UiCommand::Page(cmd) => page_tools::on_command(self, cmd),
             UiCommand::Overlay(cmd) => crate::overlay::on_command(self, cmd),
             UiCommand::Bookmark(cmd) => crate::bookmarks::on_command(self, cmd),
+            UiCommand::Menu(cmd) => crate::menu::on_command(self, cmd),
+            UiCommand::Settings(cmd) => crate::settings::on_command(self, cmd),
         }
     }
 
-    fn on_shortcut(&mut self, sc: Shortcut) {
+    pub(crate) fn on_shortcut(&mut self, sc: Shortcut) {
         match sc {
             Shortcut::NewTab => self.new_blank_tab(),
             Shortcut::CloseTab => {
@@ -660,6 +674,12 @@ impl App {
             Shortcut::Page(key) => page_tools::on_key(self, key),
             Shortcut::History => crate::overlay::toggle_history(self),
             Shortcut::Bookmark(key) => crate::bookmarks::on_key(self, key),
+            Shortcut::Menu => crate::menu::toggle(self),
+            Shortcut::Downloads => {
+                // (An overlay page may hold the keyboard: give it back to the page first.)
+                self.focus_after_switch();
+                crate::downloads::toggle(self);
+            }
         }
     }
 
