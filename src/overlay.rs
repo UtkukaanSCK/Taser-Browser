@@ -274,6 +274,7 @@ fn place(app: &App) -> Place {
 /// Draws `js` in the overlay at `bounds` in `mode` (once the page is ready).
 pub(crate) fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
     if !ensure_view(app) {
+        app.overlay.handed = false;
         return;
     }
     app.overlay.placed = Some(place(app));
@@ -284,6 +285,9 @@ pub(crate) fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
         crate::policy::on_question_closed(app);
     }
     if !app.overlay.ready {
+        // The page is (re)loading: whatever focus was handed over went with
+        // the old page, so the new one takes the keyboard once it is ready.
+        app.overlay.handed = false;
         app.overlay.pending = Some((js, bounds));
         return;
     }
@@ -394,13 +398,29 @@ pub(crate) fn hand_over(app: &mut App) {
     app.overlay.handed |= was_up;
 }
 
+/// As `hand_over`, for a page asked for from the strip (its ⋮ button): the
+/// keyboard is in the strip then, not in the overlay, even when an overlay
+/// page that does not close on blur (the launch question) is still up. So
+/// the next page takes the keyboard.
+pub(crate) fn hand_over_from_strip(app: &mut App) {
+    reset(app, false);
+    app.overlay.handed = false;
+}
+
 fn reset(app: &mut App, hide: bool) {
     let o = &mut app.overlay;
     let was = std::mem::take(&mut o.mode);
     o.pending = None;
     o.sel = None;
+    // (Hidden: nothing is up, or a handed-over webview waits for its next
+    // page, which must still find `handed`; a `close` before that show
+    // leaves it as it is.)
     if was == Mode::Hidden {
         return;
+    }
+    if hide {
+        // Hidden now: the next page shown must take the keyboard itself.
+        o.handed = false;
     }
     if was == Mode::Launch {
         crate::policy::on_question_closed(app);
@@ -580,6 +600,7 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
             // (The launch question answers its own blur: "launch-cancel",
             // after a moment to see whether the keyboard comes back.)
             if app.overlay.mode.owns_keyboard() && app.overlay.mode != Mode::Launch {
+                crate::bookmarks::closing_on_blur(app);
                 close(app);
             }
         }

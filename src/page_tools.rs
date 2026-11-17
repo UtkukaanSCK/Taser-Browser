@@ -177,6 +177,12 @@ impl Fullscreen {
     }
 }
 
+/// The notice's host for a tab URL, as the address box shows it (punycode),
+/// so a look-alike Unicode name cannot pose as another site here either.
+fn notice_host(url: &str) -> Option<String> {
+    crate::url::host_of(&crate::policy::ascii_host(url))
+}
+
 /// The notice's two parts: the site (shown bold; None for F11 and for pages
 /// without a host) and the rest. `host` comes from the tab's URL as the host
 /// tracks it, never from the page's script.
@@ -375,7 +381,7 @@ fn show_notice(app: &mut App, page: bool) {
     if !app.fullscreen.on() {
         return;
     }
-    let host = app.tabs.active().and_then(|id| app.tabs.get(id)).and_then(|t| crate::url::host_of(&t.url));
+    let host = app.tabs.active().and_then(|id| app.tabs.get(id)).and_then(|t| notice_host(&t.url));
     let (site, rest) = notice_parts(page, host.as_deref());
     let mut js = String::from("xb.notice(");
     match &site {
@@ -568,5 +574,13 @@ mod tests {
         assert!(site.starts_with('…') && site.ends_with(".evil.example"), "{site}");
         let exact = "a".repeat(NOTICE_HOST_MAX);
         assert_eq!(notice_parts(true, Some(&exact)).0.as_deref(), Some(exact.as_str()));
+    }
+
+    #[test]
+    fn notice_names_a_unicode_host_in_punycode() {
+        assert_eq!(notice_host("https://bücher.example/a").as_deref(), Some("xn--bcher-kva.example"));
+        assert_eq!(notice_host("https://аррӏе.com/").as_deref(), Some("xn--80ak6aa92e.com"));
+        assert_eq!(notice_host("https://Example.COM./x").as_deref(), Some("example.com"));
+        assert_eq!(notice_host("about:blank"), None);
     }
 }

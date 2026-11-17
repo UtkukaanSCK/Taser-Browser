@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 525;
+const EXPECTED_CHECKS: u32 = 533;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -320,7 +320,17 @@ const DELAYS: &[u64] = &[
     900,  // 238 crash a third time
     1500, // 239 go to an address that cannot load
     2500, // 240 check the crashed mark went with the navigation
-    900,  // 241 last tab close quits
+    900,  // 241 v0.2 fixes: a page on example.org
+    2500, // 242 Ctrl+H
+    1000, // 243 a jump within the page
+    1200, // 244 check the history list stayed up; Esc
+    800,  // 245 Ctrl+D: bookmark and editor
+    1000, // 246 press and click the star
+    900,  // 247 check the editor closed; too many certificate errors
+    900,  // 248 the launch question
+    1200, // 249 click the ⋮ button from the strip
+    1000, // 250 check the menu has the keyboard; Esc
+    900,  // 251 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -491,7 +501,7 @@ const BM_O: u32 = 0x4F;
 
 /// The active tab's committed page address, as the star sees it.
 fn page_url(app: &App) -> String {
-    app.tabs.active().and_then(|id| app.tabs.get(id)).map(|t| crate::history::normalize(&t.page_url)).unwrap_or_default()
+    app.tabs.active().and_then(|id| app.tabs.get(id)).map(|t| crate::history::without_userinfo(&t.page_url)).unwrap_or_default()
 }
 
 /// bookmarks.json as parsed from disk.
@@ -3579,7 +3589,9 @@ pub fn step(app: &mut App, n: u32) {
                 {"url": "javascript:alert(document.cookie)", "title": "x", "added": 1},
                 {"url": "file:///C:/Windows/win.ini", "title": "x", "added": 1},
                 {"url": "https://big.example/", "title": big, "added": 1},
-                {"url": "https://ok.example/#again", "title": "duplicate", "added": 9},
+                // The same page once the login is dropped (a #fragment would
+                // be a page of its own: bookmarks keep it).
+                {"url": "https://me:pw@ok.example/", "title": "duplicate", "added": 9},
                 {"url": 5, "title": "wrong type"},
                 null,
                 42,
@@ -3597,14 +3609,17 @@ pub fn step(app: &mut App, n: u32) {
                 format!("{written:?}, {urls:?}"),
             );
             // Ctrl+D on the (now unbookmarked) alpha page: an editor is open
-            // for it; the content page then tries the same commands.
+            // for it; the content page then tries the same commands. A
+            // content webview has no IPC handler at all, so they go nowhere
+            // (that a page of another origin is refused even where there is
+            // a handler is `ui::tests`' job).
             press(app, BM_D, CTRL);
             remember("bm-count", app.bookmarks.items().len() as i64);
             page_js(app, "try { window.ipc.postMessage('bm-remove'); window.ipc.postMessage('bm-save:evil'); window.ipc.postMessage('bm-star:1:1'); } catch (e) {}");
         }
         183 => {
             check(
-                "bm-content-page-cannot-reach-bookmarks",
+                "bm-content-webview-has-no-ipc",
                 app.overlay.mode == Mode::Bookmarks
                     && app.bookmarks.items().len() as i64 == recall("bm-count")
                     && !app.bookmarks.items().iter().any(|b| b.title == "evil"),
@@ -4100,7 +4115,7 @@ pub fn step(app: &mut App, n: u32) {
             // warning page is up.
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/?policy-cert".into())));
             let uri = "https://example.com/?policy-cert";
-            app.handle(UserEvent::Policy(id, Event::CertError { uri: uri.into(), nav: uri.into() }));
+            app.handle(UserEvent::Policy(id, Event::CertError { uri: uri.into(), navs: vec![uri.into()] }));
         }
         229 => {
             check("policy-cert-page-loaded", active_url(app).starts_with("https://example.com/?policy-cert"), active_url(app));
@@ -4114,7 +4129,7 @@ pub fn step(app: &mut App, n: u32) {
             // Something the page loads from another server fails the same
             // way: that says nothing about the other server's own pages.
             let id = app.tabs.active().unwrap();
-            app.handle(UserEvent::Policy(id, Event::CertError { uri: "https://example.org/a.png".into(), nav: active_url(app) }));
+            app.handle(UserEvent::Policy(id, Event::CertError { uri: "https://example.org/a.png".into(), navs: vec![active_url(app)] }));
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?policy".into())));
         }
         230 => {
@@ -4210,7 +4225,83 @@ pub fn step(app: &mut App, n: u32) {
                 check("indicator-after-crash-and-failed-load", field(&r, "state").is_empty() && field(&r, "reload") == "false" && field(&r, "name").is_empty(), &r);
             });
         }
+        // ---- v0.2 fixes: one contiguous block ----
         241 => {
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?frag".into())));
+        }
+        242 => {
+            press(app, vk::H, CTRL);
+        }
+        243 => {
+            // A jump within the page loads nothing: the list stays up.
+            page_js(app, "location.hash = 'x'");
+        }
+        244 => {
+            check("history-stays-open-on-a-fragment-change", app.overlay.mode == Mode::History, format!("mode {:?}, url {}", app.overlay.mode, active_url(app)));
+            page_eval(app, "history-fragment-change-happened", "`hash=${location.hash}`", |r| {
+                check("history-fragment-change-happened", field(&r, "hash") == "#x", &r);
+            });
+            overlay_js(app, &key_js("Escape"));
+        }
+        245 => {
+            press(app, BM_D, CTRL);
+        }
+        246 => {
+            check("bm-editor-open-before-star-press", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
+            // A press then a click on the star, as a mouse makes them.
+            ui_js(
+                app,
+                "(() => { const b = document.getElementById('bm-star'); \
+                 b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true })); b.click(); })()",
+            );
+        }
+        247 => {
+            let page = page_url(app);
+            check(
+                "bm-star-click-closes-the-open-editor",
+                overlay_closed(app) && app.bookmarks.contains(&page),
+                format!("mode {:?}, {page} kept {}", app.overlay.mode, app.bookmarks.contains(&page)),
+            );
+            // More hosts with certificate errors than are remembered: no
+            // https page is secure for the rest of the run, and it is said.
+            let id = app.tabs.active().unwrap();
+            for i in 0..70 {
+                let uri = format!("https://bad{i}.example/");
+                app.handle(UserEvent::Policy(id, Event::CertError { uri: uri.clone(), navs: vec![uri] }));
+            }
+            app.flush();
+            ui_eval(app, "indicator-distrust-is-said", SECURITY_JS, |r| {
+                check(
+                    "indicator-distrust-is-said",
+                    field(&r, "state") == "cert" && field(&r, "text") == "Sertifikalara güvenilmiyor" && field(&r, "name").contains("yeniden başlatılana kadar"),
+                    &r,
+                );
+            });
+        }
+        248 => {
+            let id = app.tabs.active().unwrap();
+            app.handle(UserEvent::Policy(id, Event::ExternalLaunch { uri: MAIL_URI.into(), origin: String::new(), user: true }));
+        }
+        249 => {
+            log(&format!("INFO step 249: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            check("launch-question-up-before-menu-click", app.overlay.mode == Mode::Launch, format!("mode {:?}", app.overlay.mode));
+            // A mouse click on ⋮: the strip takes the keyboard first.
+            let _ = app.ui.focus();
+            ui_js(app, "document.getElementById('menu-btn').click()");
+        }
+        250 => {
+            let now = std::time::Instant::now();
+            check(
+                "menu-click-answers-the-launch-question-no",
+                app.overlay.mode == Mode::Menu && !app.policy.launch.asking(now) && launched().len() == 1,
+                format!("mode {:?}, asking {}, launched {:?}", app.overlay.mode, app.policy.launch.asking(now), launched()),
+            );
+            overlay_eval(app, "menu-from-launch-question-has-the-keyboard", "`focus=${document.hasFocus()};item=${document.activeElement.dataset.item || 'none'}`", |r| {
+                check("menu-from-launch-question-has-the-keyboard", field(&r, "focus") == "true" && field(&r, "item") != "none", &r);
+            });
+            overlay_js(app, &key_js("Escape"));
+        }
+        251 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -4244,13 +4335,9 @@ fn serve_attachment() -> Option<u16> {
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = s.read(&mut [0u8; 2048]);
             let head = format!(
-                "HTTP/1.1 200 OK
-Content-Type: application/octet-stream
-                 Content-Disposition: attachment; filename=\"xb-test.txt\"
-                 Content-Length: {}
-Connection: close
-
-",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                 Content-Disposition: attachment; filename=\"xb-test.txt\"\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
                 DOWNLOAD_BODY.len()
             );
             let _ = s.write_all(head.as_bytes());

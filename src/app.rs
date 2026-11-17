@@ -37,6 +37,8 @@ pub enum UserEvent {
     OpenFromOtherInstance(Option<String>),
     /// The history file has been read in the background (see `history`).
     HistoryLoaded,
+    /// The bookmarks file has been read in the background (see `bookmarks`).
+    BookmarksLoaded,
     /// WebView2's download flyout state changed (see `downloads`).
     Download(crate::downloads::Event),
     #[cfg(feature = "selftest")]
@@ -239,8 +241,17 @@ impl App {
     }
 
     /// Creates a tab + webview. Returns the new id.
+    ///
+    /// Every tab opened here was asked for (a link the user clicked, an
+    /// address from another program or the command line, a bookmark, a
+    /// reopened tab), so its first load counts as the user's visit (see
+    /// `history`); the last session's tabs come back through `session` and
+    /// do not.
     pub fn open_tab(&mut self, url: &str, placement: Placement, activate: bool) -> wry::Result<TabId> {
         let id = self.tabs.add(url, placement);
+        if let Some(t) = self.tabs.get_mut(id) {
+            t.user_nav_next = true;
+        }
         if let Err(e) = self.create_view(id) {
             self.tabs.close(id);
             return Err(e);
@@ -563,7 +574,8 @@ impl App {
             UserEvent::NoticeTimeout(generation) => page_tools::on_notice_timeout(self, generation),
             // Only a wake-up: `flush`, at the end of this pass, merges the
             // load and redraws what it changes.
-            UserEvent::HistoryLoaded => {}
+            // (The star the same way: `bookmarks::sync_star` takes the file.)
+            UserEvent::HistoryLoaded | UserEvent::BookmarksLoaded => {}
             UserEvent::Download(ev) => crate::downloads::on_event(self, ev),
             UserEvent::Policy(tab, ev) => crate::policy::on_event(self, tab, ev),
             UserEvent::OpenFromOtherInstance(url) => {
@@ -596,6 +608,11 @@ impl App {
                     let _ = proxy.send_event(UserEvent::HistoryLoaded);
                 });
                 self.history.preload();
+                // The bookmarks too (for the star; a few ms, but off this thread).
+                let proxy = self.proxy.clone();
+                self.bookmarks.preload(move || {
+                    let _ = proxy.send_event(UserEvent::BookmarksLoaded);
+                });
                 crate::bookmarks::on_ui_ready(self);
                 self.dirty = true;
                 // A (re)loaded UI has no icons yet.

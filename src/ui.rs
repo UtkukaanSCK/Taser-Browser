@@ -100,6 +100,17 @@ fn serve(req: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     .unwrap_or_else(|_| Response::new(Cow::Borrowed(&b""[..])))
 }
 
+/// The command an IPC message from page `origin` asks for, if it may. The
+/// handler is only installed on our own webviews; the message must also
+/// come from our own page, in case it was navigated. The launch question is
+/// answered from the overlay (`overlay`) only.
+fn ipc_command(origin: &str, body: &str, overlay: bool) -> Option<UiCommand> {
+    if !is_ui_origin(origin) {
+        return None;
+    }
+    UiCommand::parse(body).filter(|cmd| overlay || !matches!(cmd, UiCommand::Launch(_)))
+}
+
 /// What the UI and overlay webviews share: our assets on the `xb` protocol,
 /// the one IPC handler, and no way off the UI origin. `overlay` says which of
 /// the two this is: an answer to the launch question is taken from the
@@ -119,12 +130,7 @@ fn ui_builder<'a>(
         .with_bounds(bounds)
         .with_background_color(background)
         .with_ipc_handler(move |req: Request<String>| {
-            // The handler is only installed on our own webviews; also require
-            // the message to come from our own page, in case it was navigated.
-            if !is_ui_origin(&req.uri().to_string()) {
-                return;
-            }
-            if let Some(cmd) = UiCommand::parse(req.body()).filter(|cmd| overlay || !matches!(cmd, UiCommand::Launch(_))) {
+            if let Some(cmd) = ipc_command(&req.uri().to_string(), req.body(), overlay) {
                 let _ = p.send_event(UserEvent::Ui(cmd));
             }
         })
@@ -200,6 +206,23 @@ mod tests {
         assert!(!is_ui_origin("https://example.com/?http://xb.ui/"));
         assert!(!is_ui_origin("http://xb.uix/"));
         assert!(!is_ui_origin(""));
+    }
+
+    #[test]
+    fn only_the_ui_origin_reaches_bookmarks_and_the_launch_question() {
+        // How WebView2 reports our pages (custom protocols as http://<name>.<host>).
+        let ui = if cfg!(windows) { "http://xb.ui/index.html" } else { START_URL };
+        let bm = ["bm-remove", "bm-save:x", "bm-star:1:1", "bm-open:1:0:t", "bm-delete:1:0", "bm-filter:a"];
+        for body in bm {
+            assert!(matches!(ipc_command(ui, body, false), Some(UiCommand::Bookmark(_))), "{body}");
+            for page in ["https://example.com/", "http://xb.ui.evil.com/", "https://xb.ui/", "about:blank", ""] {
+                assert_eq!(ipc_command(page, body, false), None, "{page} {body}");
+                assert_eq!(ipc_command(page, body, true), None, "{page} {body}");
+            }
+        }
+        assert!(ipc_command(ui, "launch-open", true).is_some(), "the overlay answers the question");
+        assert_eq!(ipc_command(ui, "launch-open", false), None, "the strip does not");
+        assert_eq!(ipc_command("https://example.com/", "launch-open", true), None);
     }
 
     #[test]

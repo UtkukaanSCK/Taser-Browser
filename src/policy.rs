@@ -503,8 +503,9 @@ impl ExternalLaunch {
 #[derive(Debug)]
 pub enum Event {
     /// The certificate of the server of request `uri` failed verification,
-    /// while the tab's main navigation was to `nav`.
-    CertError { uri: String, nav: String },
+    /// while the tab's main navigations started and not completed were to
+    /// `navs` (`native::attach_policy`).
+    CertError { uri: String, navs: Vec<String> },
     /// The tab began to show a new document; `error`: WebView2's own error
     /// page (no connection, name not found, ...), not the site's.
     Page { error: bool },
@@ -564,10 +565,11 @@ impl State {
     }
 
     /// The certificate of the server of `request` failed while the tab's
-    /// main navigation was to `nav`. Only the page's own server is
-    /// remembered (`is_main_navigation`, which compares host and port); a
-    /// page cannot fill the list with requests to other servers. The mark
-    /// is for the host (`cert_host`).
+    /// main navigations not completed yet were to `navs`. Only a page's own
+    /// server is remembered (`is_main_navigation`, which compares host and
+    /// port, against each of them: a newer navigation does not make an
+    /// older one's error a subresource's); a page cannot fill the list with
+    /// requests to other servers. The mark is for the host (`cert_host`).
     ///
     /// A full list forgets nothing: a forgotten host the user had proceeded
     /// to would load without error and show a lock. Nor is WebView2 asked to
@@ -577,8 +579,8 @@ impl State {
     /// fit is one that may load without error from now on and that nothing
     /// here remembers: then no https page is called secure for the rest of
     /// the run (`distrust`). A warning too many, never a lock too many.
-    pub fn cert_error(&mut self, request: &str, nav: &str) {
-        let Some(host) = cert_host(request).filter(|_| is_main_navigation(request, nav)) else { return };
+    pub fn cert_error(&mut self, request: &str, navs: &[String]) {
+        let Some(host) = cert_host(request).filter(|_| navs.iter().any(|nav| is_main_navigation(request, nav))) else { return };
         if self.bad_cert.contains(&host) {
             return;
         }
@@ -602,7 +604,7 @@ pub fn on_event(app: &mut App, tab: TabId, ev: Event) {
         return;
     }
     match ev {
-        Event::CertError { uri, nav } => app.policy.cert_error(&uri, &nav),
+        Event::CertError { uri, navs } => app.policy.cert_error(&uri, &navs),
         Event::Page { error } => app.policy.set_failed(tab, error),
         Event::Failed => app.policy.set_failed(tab, true),
         Event::Loaded => app.policy.crashed.retain(|t| *t != tab),
@@ -775,7 +777,9 @@ pub fn render_js(app: &mut App) -> String {
         },
         None => "",
     };
-    format!("window.xbSecurity&&xbSecurity.render(\"{state}\")")
+    // `distrust`: a certificate error is shown with why every https page has
+    // one now; the page says so once, unasked (`security.js`).
+    format!("window.xbSecurity&&xbSecurity.render(\"{state}\",{})", policy.distrust)
 }
 
 #[cfg(test)]
@@ -841,7 +845,21 @@ mod tests {
     }
 
     fn mark(state: &mut State, request: &str, nav: &str) {
-        state.cert_error(request, nav);
+        state.cert_error(request, &[nav.to_string()]);
+    }
+
+    #[test]
+    fn an_older_navigation_still_under_way_keeps_its_certificate_error() {
+        let mut state = State::default();
+        // A navigation to a bad server, then another one started before the
+        // first completed: the first one's error is still the page's own.
+        let navs = ["https://bad.example/".to_string(), "https://good.example/".to_string()];
+        state.cert_error("https://bad.example/", &navs);
+        assert_eq!(state.bad_cert, ["bad.example"]);
+        // Neither of them: a subresource.
+        state.cert_error("https://ads.example/a.png", &navs);
+        state.cert_error("https://ads.example/", &[]);
+        assert_eq!(state.bad_cert, ["bad.example"]);
     }
 
     #[test]

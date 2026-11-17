@@ -18,13 +18,21 @@
     cert: ["Sertifika hatası", "Sertifika hatası: bu sitenin kimliği doğrulanamadı, bağlantı güvenli değil"],
     crashed: ["Sayfa çöktü", "Sayfa çöktü. Yeniden yüklemek için Ctrl+R"],
   };
+  // "cert" once Rust distrusts every https page for the rest of the session
+  // (too many certificate errors to remember each site). The new sentence
+  // is read out once, when it first appears, like any change of state.
+  const DISTRUST = [
+    "Sertifikalara güvenilmiyor",
+    "Bu oturumda çok fazla sertifika hatası oldu: tarayıcı yeniden başlatılana kadar hiçbir HTTPS sayfası güvenli sayılmaz",
+  ];
 
   reload.addEventListener("click", () => ui.send("reload"));
 
   window.xbSecurity = Object.freeze({
-    /** `state`: "" (no mark), "secure", "insecure", "cert" or "crashed". */
-    render(state) {
-      const known = Object.hasOwn(STATES, state) ? STATES[state] : null;
+    /** `state`: "" (no mark), "secure", "insecure", "cert" or "crashed".
+     *  `distrust`: no https page counts as secure until the next start. */
+    render(state, distrust) {
+      const known = state === "cert" && distrust === true ? DISTRUST : Object.hasOwn(STATES, state) ? STATES[state] : null;
       const said = known ? known[1] : "";
       // Written only when it changes: every render comes through here, and
       // the same sentence must not be read out again.

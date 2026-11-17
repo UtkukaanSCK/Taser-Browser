@@ -76,7 +76,8 @@ impl MenuCmd {
 
 pub fn on_command(app: &mut App, cmd: MenuCmd) {
     match cmd {
-        MenuCmd::Toggle => toggle(app),
+        // (Only the strip's ⋮ button sends it: the keyboard is in the strip.)
+        MenuCmd::Toggle => toggle_from(app, true),
         MenuCmd::Pick(item) => pick(app, item),
     }
 }
@@ -89,15 +90,26 @@ fn menu_rect(size: tao::dpi::LogicalSize<f64>) -> Rect {
     overlay::rect((size.width - w - EDGE).max(0.0), y, w, h)
 }
 
-/// Alt+F / Alt+E / the ⋮ button: opens the menu, or closes it.
+/// Alt+F / Alt+E: opens the menu, or closes it.
 pub fn toggle(app: &mut App) {
+    toggle_from(app, false);
+}
+
+/// `strip`: the ⋮ button asked, so the keyboard is in the strip and the menu
+/// must take it, even from a launch question still up (it does not close on
+/// blur; showing the menu answers it "no").
+fn toggle_from(app: &mut App, strip: bool) {
     if app.overlay.mode == Mode::Menu {
         overlay::close(app);
         app.focus_after_switch();
         return;
     }
     // (Another overlay page may be up: keep its webview, show the menu in it.)
-    overlay::hand_over(app);
+    if strip {
+        overlay::hand_over_from_strip(app);
+    } else {
+        overlay::hand_over(app);
+    }
     // The menu hangs under the strip, so fullscreen gives way (as for Ctrl+H).
     if app.fullscreen.on() {
         page_tools::leave_fullscreen(app);

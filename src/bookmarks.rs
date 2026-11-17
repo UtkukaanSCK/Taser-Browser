@@ -23,6 +23,8 @@ use crate::tabs::Placement;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 use tao::dpi::LogicalSize;
 use wry::Rect;
 
@@ -45,6 +47,11 @@ const MAX_TITLE_ARG: usize = MAX_TITLE * 4;
 /// The editor popup (logical px); must fit overlay.html's `#bm-edit`.
 const EDITOR_W: f64 = 320.0;
 const EDITOR_H: f64 = 156.0;
+/// The editor closing on blur and the star's press that caused it come
+/// within this of each other, whichever is first.
+const PRESS_WINDOW: Duration = Duration::from_millis(500);
+/// A press and its click (a slow one included).
+const CLICK_WINDOW: Duration = Duration::from_secs(5);
 
 // ------------------------------------------------------------------ file
 
@@ -82,11 +89,12 @@ const BUDGET: usize = MAX_FILE_BYTES as usize - FILE_OVERHEAD;
 
 /// A bookmark within the limits, or None if it must not be kept: a web
 /// address (no `javascript:`, `file:`, the browser's own pages...) of at most
-/// 8 KiB without control characters, fragment or `user:password@`; a title of
-/// at most `MAX_TITLE` characters (longer ones are cut, control characters
-/// dropped); an `added` that is not in the future.
+/// 8 KiB without control characters or `user:password@` (a `#fragment` stays:
+/// on many sites it is the page); a title of at most `MAX_TITLE` characters
+/// (longer ones are cut, control characters dropped); an `added` that is not
+/// in the future. The star looks pages up by the same rule (`page_key`).
 fn clean(b: Bookmark, now: u64) -> Option<Bookmark> {
-    let url = history::normalize(&b.url);
+    let url = history::without_userinfo(&b.url);
     history::recordable(&url).then(|| Bookmark { url, title: history::clean_title(&b.title), added: b.added.min(now) })
 }
 
@@ -146,16 +154,83 @@ pub struct Bookmarks {
     /// The addresses of the list drawn as `serial`.
     shown: Vec<String>,
     filter: String,
+    /// The file being read on its own thread (`preload`): the store comes
+    /// back with the items.
+    loading: Option<mpsc::Receiver<(Store<BookmarkFile>, Vec<Bookmark>)>>,
+    /// When the editor was last closed by losing the focus.
+    blurred: Option<Instant>,
+    /// The star was pressed while the editor was open (or just closed by
+    /// that press): its click closes the editor instead of opening it.
+    press_closes: Option<Instant>,
 }
 
 impl Bookmarks {
-    /// Nothing is read until first needed (see `ensure_loaded`).
+    /// Nothing is read until `preload` or first needed (see `ensure_loaded`).
     pub fn new(dir: Option<&Path>) -> Self {
         Self { store: dir.map(Store::new), ..Self::default() }
     }
 
-    /// Reads the file once (a few ms at most: 4 MiB is the limit).
+    /// Starts reading the file on its own thread, off the UI thread (once);
+    /// `wake` is called there when it is ready to `poll`.
+    pub fn preload(&mut self, wake: impl FnOnce() + Send + 'static) {
+        if self.loaded || self.loading.is_some() {
+            return;
+        }
+        let Some(mut store) = self.store.take() else {
+            self.loaded = true;
+            return;
+        };
+        let dir = store.path().parent().map(Path::to_path_buf);
+        let (tx, rx) = mpsc::channel();
+        let spawned = std::thread::Builder::new().name("xb-bookmarks".into()).spawn(move || {
+            let items = store.load().value.items;
+            let _ = tx.send((store, items));
+            wake();
+        });
+        match spawned {
+            Ok(_) => self.loading = Some(rx),
+            Err(e) => {
+                eprintln!("x-browser: no bookmarks thread ({e}); reading inline");
+                self.store = dir.as_deref().map(Store::new);
+                self.ensure_loaded();
+            }
+        }
+    }
+
+    /// Takes the file `preload` read, if it is ready (never waits). True
+    /// when it was taken now.
+    pub fn poll(&mut self) -> bool {
+        let Some(rx) = &self.loading else { return false };
+        match rx.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => false,
+            got => {
+                self.loading = None;
+                self.take_loaded(got.ok());
+                true
+            }
+        }
+    }
+
+    fn take_loaded(&mut self, got: Option<(Store<BookmarkFile>, Vec<Bookmark>)>) {
+        self.loaded = true;
+        match got {
+            Some((store, items)) => {
+                self.store = Some(store);
+                self.set(items);
+            }
+            // The thread died reading: without the file nothing may
+            // overwrite it, so this run keeps bookmarks in memory only.
+            None => eprintln!("x-browser: the bookmarks file could not be read; changes are not saved"),
+        }
+    }
+
+    /// Reads the file once (a few ms at most: 4 MiB is the limit), or
+    /// waits for `preload` to finish reading it.
     pub fn ensure_loaded(&mut self) {
+        if let Some(rx) = self.loading.take() {
+            let got = rx.recv().ok();
+            return self.take_loaded(got);
+        }
         if std::mem::replace(&mut self.loaded, true) {
             return;
         }
@@ -183,7 +258,7 @@ impl Bookmarks {
         self.store.as_ref().map(Store::path)
     }
 
-    /// Whether `url` (as `history::normalize` leaves it) is bookmarked.
+    /// Whether `url` (as `history::without_userinfo` leaves it) is bookmarked.
     pub fn contains(&self, url: &str) -> bool {
         self.urls.contains(url)
     }
@@ -314,6 +389,8 @@ pub fn suggest(app: &mut App, text: &str) -> Vec<Marked> {
 pub enum BookmarkCmd {
     /// The star was pressed; `x`, `w`: its left edge and width.
     Star { x: u16, w: u16 },
+    /// The mouse went down on the star (its click follows).
+    Press,
     /// The star moved or was resized.
     Anchor { x: u16, w: u16 },
     /// The editor's Done / Enter: keep the title and close.
@@ -327,7 +404,8 @@ pub enum BookmarkCmd {
 }
 
 impl BookmarkCmd {
-    pub const NAMES: &[&str] = &["bm-star", "bm-anchor", "bm-save", "bm-remove", "bm-filter", "bm-open", "bm-delete"];
+    pub const NAMES: &[&str] =
+        &["bm-star", "bm-star-press", "bm-anchor", "bm-save", "bm-remove", "bm-filter", "bm-open", "bm-delete"];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         let edge = |a: &str| {
@@ -339,6 +417,7 @@ impl BookmarkCmd {
             Some((g.parse::<u32>().ok()?, i.parse::<usize>().ok()?))
         };
         Some(match (name, arg) {
+            ("bm-star-press", None) => Self::Press,
             ("bm-star", Some(a)) => {
                 let (x, w) = edge(a)?;
                 Self::Star { x, w }
@@ -412,8 +491,24 @@ pub fn on_key(app: &mut App, key: BookmarkKey) {
 pub fn on_command(app: &mut App, cmd: BookmarkCmd) {
     match cmd {
         BookmarkCmd::Anchor { x, w } => app.bookmarks.anchor = (x, w),
+        BookmarkCmd::Press => {
+            // Pressing the star moves the focus to the strip, which closes an
+            // open editor (on blur) before the click arrives: note here, in
+            // whichever order the two came, that this click is to close it.
+            let open = showing(app, View::Editor);
+            let b = &mut app.bookmarks;
+            let blurred = b.blurred.take().is_some_and(|t| t.elapsed() < PRESS_WINDOW);
+            b.press_closes = (blurred || open).then(Instant::now);
+        }
         BookmarkCmd::Star { x, w } => {
             app.bookmarks.anchor = (x, w);
+            // The star toggles the editor: a click while it was open closes it.
+            if app.bookmarks.press_closes.take().is_some_and(|t| t.elapsed() < CLICK_WINDOW) {
+                if showing(app, View::Editor) {
+                    finish(app);
+                }
+                return;
+            }
             star(app, false);
         }
         BookmarkCmd::Save(title) => {
@@ -460,9 +555,17 @@ pub fn on_command(app: &mut App, cmd: BookmarkCmd) {
     }
 }
 
-/// The UI page has (re)loaded: it knows no star state yet.
+/// The overlay is closing because it lost the focus: if that is the editor
+/// and the star was what took the focus, its click is to close it.
+pub fn closing_on_blur(app: &mut App) {
+    if showing(app, View::Editor) {
+        app.bookmarks.blurred = Some(Instant::now());
+    }
+}
+
+/// The UI page has (re)loaded: it knows no star state yet. (The file is
+/// being read meanwhile, see `Bookmarks::preload`; `sync_star` shows it.)
 pub fn on_ui_ready(app: &mut App) {
-    app.bookmarks.ensure_loaded();
     app.bookmarks.star_sent = None;
 }
 
@@ -487,7 +590,7 @@ fn finish(app: &mut App) {
 /// typed address: that shows in the address bar before the page commits.
 fn page_key(app: &App) -> Option<String> {
     let tab = app.tabs.get(app.tabs.active()?)?;
-    let url = history::normalize(&tab.page_url);
+    let url = history::without_userinfo(&tab.page_url);
     history::recordable(&url).then_some(url)
 }
 
@@ -495,7 +598,10 @@ fn page_key(app: &App) -> Option<String> {
 /// Called at the end of every event-loop pass: a navigation commits without
 /// marking the strip dirty, so this is its own check.
 pub fn sync_star(app: &mut App) {
-    if !app.ui_ready {
+    app.bookmarks.poll();
+    // Still loading: an empty star now would flip to filled a moment later
+    // (and be read out twice); the load's wake event brings another pass.
+    if !app.ui_ready || app.bookmarks.loading.is_some() {
         return;
     }
     let state = page_key(app).map_or((false, false), |u| (true, app.bookmarks.contains(&u)));
@@ -669,7 +775,7 @@ mod tests {
         assert_eq!(kept[1].title.chars().count(), MAX_TITLE, "cut, not dropped");
         assert!(kept[1].title.starts_with("ab"), "control characters are gone: {}", &kept[1].title[..8]);
         assert!(kept[1].added <= history::now_secs(), "never from the future");
-        assert_eq!(kept[2], bm("https://d.example/page", "padded", 4), "no userinfo, no fragment, trimmed");
+        assert_eq!(kept[2], bm("https://d.example/page#frag", "padded", 4), "no userinfo, the fragment kept, trimmed");
     }
 
     #[test]
@@ -677,10 +783,11 @@ mod tests {
         let kept = cleaned(vec![
             bm("https://a.example/", "first", 1),
             bm("https://a.example/", "second", 2),
-            bm("https://a.example/#frag", "same page", 3),
+            bm("https://me@a.example/#", "same page", 3),
             bm("https://a.example/other", "other", 4),
+            bm("https://a.example/#/inbox", "a route of the page", 5),
         ]);
-        assert_eq!(kept.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["first", "other"]);
+        assert_eq!(kept.iter().map(|b| b.title.as_str()).collect::<Vec<_>>(), ["first", "other", "a route of the page"]);
     }
 
     #[test]
@@ -706,8 +813,12 @@ mod tests {
     #[test]
     fn adds_removes_renames_and_refuses_what_it_cannot_keep() {
         let mut b = Bookmarks::default();
-        assert!(b.add("https://a.example/#top", " A  page "));
-        assert!(b.contains("https://a.example/"), "stored without the fragment");
+        assert!(b.add("https://u:secret@a.example/#/inbox", "Inbox"));
+        assert!(b.contains("https://a.example/#/inbox"), "stored with its fragment, without the user info");
+        assert!(!b.contains("https://a.example/"), "a route is not the bare page");
+        assert!(b.remove("https://a.example/#/inbox"));
+        assert!(b.add("https://a.example/#", " A  page "));
+        assert!(b.contains("https://a.example/"), "an empty fragment is none");
         assert_eq!(b.title_of("https://a.example/"), "A  page");
         assert!(b.add("https://a.example/", "again"), "already there: fine, unchanged");
         assert_eq!(b.items().len(), 1);
@@ -755,6 +866,36 @@ mod tests {
     }
 
     #[test]
+    fn the_file_is_read_off_the_calling_thread() {
+        let dir = temp_dir("bm-preload");
+        let mut first = Bookmarks::new(Some(&dir));
+        assert!(first.add("https://a.example/", "A"));
+        assert!(crate::store::flush(Duration::from_secs(5)));
+        let mut b = Bookmarks::new(Some(&dir));
+        let (tx, rx) = mpsc::channel();
+        let caller = std::thread::current().id();
+        b.preload(move || {
+            let _ = tx.send(std::thread::current().id());
+        });
+        assert_ne!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), caller);
+        assert!(!b.contains("https://a.example/"), "not taken before poll");
+        assert!(b.poll() && !b.poll());
+        assert!(b.contains("https://a.example/"));
+        // The store came back with it: changes are saved.
+        assert!(b.add("https://b.example/", "B"));
+        assert!(crate::store::flush(Duration::from_secs(5)));
+        let mut again = Bookmarks::new(Some(&dir));
+        again.ensure_loaded();
+        assert_eq!(again.items().len(), 2);
+        // A change before the read finished waits for it, then applies.
+        let mut c = Bookmarks::new(Some(&dir));
+        c.preload(|| {});
+        assert!(c.remove("https://a.example/"));
+        assert_eq!(c.items().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_hostile_file_loads_sanitized() {
         let dir = temp_dir("bm-hostile");
         let big_title = "T".repeat(100_000);
@@ -766,7 +907,7 @@ mod tests {
                 {"url": "file:///C:/Users/", "title": "x", "added": 1},
                 {"url": "https://big.example/", "title": big_title, "added": 1},
                 {"url": "https://ok.example/", "title": "duplicate", "added": 9},
-                {"url": "https://ok.example/#frag", "title": "duplicate too", "added": 9},
+                {"url": "https://me:pw@ok.example/", "title": "duplicate too", "added": 9},
                 {"url": 5, "title": "wrong type"},
                 {"title": "no url"},
                 null,
@@ -867,6 +1008,8 @@ mod tests {
         let p = |m: &str| UiCommand::parse(m);
         let bm = |c| Some(UiCommand::Bookmark(c));
         assert_eq!(p("bm-star:700:20"), bm(BookmarkCmd::Star { x: 700, w: 20 }));
+        assert_eq!(p("bm-star-press"), bm(BookmarkCmd::Press));
+        assert_eq!(p("bm-star-press:1"), None);
         assert_eq!(p("bm-anchor:0:0"), bm(BookmarkCmd::Anchor { x: 0, w: 0 }));
         assert_eq!(p("bm-save:My: title"), bm(BookmarkCmd::Save("My: title".into())), "only the first colon splits");
         assert_eq!(p("bm-save"), bm(BookmarkCmd::Save(String::new())));

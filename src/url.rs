@@ -302,6 +302,14 @@ pub fn host_of(url: &str) -> Option<String> {
     Some(host.trim_end_matches('.').to_ascii_lowercase())
 }
 
+/// Whether going from `from` to `to` stays in the same document: `to` has a
+/// `#fragment` and nothing before it differs (a jump within the page, which
+/// loads nothing). The very same address is a reload (F5 on `doc#x`, a form
+/// posting to it), which does load.
+pub fn same_document(from: &str, to: &str) -> bool {
+    to != from && to.split_once('#').is_some_and(|(base, _)| from.split('#').next() == Some(base))
+}
+
 /// What the address bar shows for a URL (blank pages show nothing).
 pub fn display_url(url: &str) -> std::borrow::Cow<'_, str> {
     if url == BLANK { "".into() } else { crate::policy::display(url) }
@@ -551,5 +559,17 @@ mod tests {
     fn display_hides_blank() {
         assert_eq!(display_url("about:blank"), "");
         assert_eq!(display_url("https://a.com/"), "https://a.com/");
+    }
+
+    #[test]
+    fn only_a_fragment_change_stays_in_the_document() {
+        assert!(same_document("https://a.com/doc", "https://a.com/doc#two"));
+        assert!(same_document("https://a.com/doc#one", "https://a.com/doc#two"));
+        assert!(same_document("https://a.com/doc#one", "https://a.com/doc#"));
+        assert!(!same_document("https://a.com/doc#one", "https://a.com/doc"), "dropping the fragment loads the page");
+        assert!(!same_document("https://a.com/doc", "https://a.com/doc"), "a reload loads");
+        assert!(!same_document("https://a.com/app#/inbox", "https://a.com/app#/inbox"), "a reload with a fragment loads");
+        assert!(!same_document("https://a.com/doc", "https://a.com/other#two"));
+        assert!(!same_document("https://a.com/doc?q=1", "https://a.com/doc?q=2#x"));
     }
 }

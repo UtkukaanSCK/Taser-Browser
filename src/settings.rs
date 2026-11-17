@@ -113,7 +113,8 @@ impl Default for Settings {
     }
 }
 
-/// A download folder worth passing to WebView2: absolute, plain text.
+/// A download folder worth passing to WebView2: absolute, plain text, and not
+/// a folder whose files Windows runs at sign-in.
 fn valid_dir(dir: &str) -> bool {
     // No UNC or device paths: `is_dir()` on an unreachable host stalls the UI
     // thread and sends NTLM credentials.
@@ -122,19 +123,72 @@ fn valid_dir(dir: &str) -> bool {
         && !dir.chars().any(char::is_control)
         && !dir.starts_with(['/', '\\'])
         && Path::new(dir).is_absolute()
+        && !startup_folders().iter().any(|s| inside(dir, s))
+}
+
+/// `dir` is `root` or a folder below it, compared the way Windows compares
+/// paths: case aside, either separator, trailing separators and `.`/`..`
+/// steps resolved by text. (A short 8.3 name or a junction still gets past;
+/// this is a guard against a slip, not a sandbox.)
+fn inside(dir: &str, root: &str) -> bool {
+    fn steps(p: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for part in p.split(['\\', '/']).filter(|s| !s.is_empty() && *s != ".") {
+            if part == ".." {
+                if out.len() > 1 {
+                    out.pop();
+                }
+            } else {
+                // Windows drops trailing dots and spaces: `Startup.` is Startup.
+                let part = part.trim_end_matches(['.', ' ']);
+                if !part.is_empty() {
+                    out.push(part.to_lowercase());
+                }
+            }
+        }
+        out
+    }
+    let (dir, root) = (steps(dir), steps(root));
+    !root.is_empty() && dir.starts_with(&root)
+}
+
+/// The per-user and all-users Startup folders, asked of Windows once.
+fn startup_folders() -> &'static [String] {
+    static FOLDERS: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    FOLDERS.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            use windows::Win32::UI::Shell::{FOLDERID_CommonStartup, FOLDERID_Startup};
+            [FOLDERID_Startup, FOLDERID_CommonStartup].iter().filter_map(known_folder).collect()
+        }
+        #[cfg(not(windows))]
+        Vec::new()
+    })
+}
+
+#[cfg(windows)]
+fn known_folder(id: &windows::core::GUID) -> Option<String> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+    unsafe {
+        let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
+        let s = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        s
+    }
 }
 
 /// The OS Downloads folder (not WebView2's profile value, which keeps whatever
 /// was chosen last).
+#[cfg(windows)]
 fn os_downloads() -> Option<String> {
-    use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Downloads, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
-    unsafe {
-        let p = SHGetKnownFolderPath(&FOLDERID_Downloads, KF_FLAG_DEFAULT, None).ok()?;
-        let s = p.to_string().ok();
-        CoTaskMemFree(Some(p.0 as *const _));
-        s.filter(|d| valid_dir(d))
-    }
+    known_folder(&windows::Win32::UI::Shell::FOLDERID_Downloads).filter(|d| valid_dir(d))
+}
+
+/// Elsewhere there is no known-folder API; WebView2's own default stands.
+#[cfg(not(windows))]
+fn os_downloads() -> Option<String> {
+    None
 }
 
 impl Stored for Settings {
@@ -331,6 +385,48 @@ mod tests {
         assert!(valid_dir(r"C:\Users\x\Downloads"));
     }
 
+    #[test]
+    fn a_folder_is_inside_another_by_windows_rules() {
+        let root = r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup";
+        for dir in [
+            root,
+            r"c:\users\X\appdata\roaming\microsoft\windows\start menu\programs\STARTUP\",
+            r"C:/Users/x/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup//sub",
+            r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\.\Startup\a\..\b",
+            r"C:\Users\x\Downloads\..\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup",
+            r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup.",
+            r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup. \sub",
+        ] {
+            assert!(inside(dir, root), "{dir}");
+        }
+        for dir in [
+            r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup2",
+            r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs",
+            r"C:\Users\x\Downloads",
+            r"D:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup",
+        ] {
+            assert!(!inside(dir, root), "{dir}");
+        }
+        assert!(!inside(r"C:\x", ""), "no folder known, nothing refused");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_startup_folders_are_refused_as_download_folders() {
+        let folders = startup_folders();
+        assert_eq!(folders.len(), 2, "{folders:?}");
+        for f in folders {
+            assert!(!valid_dir(f), "{f}");
+            assert!(!valid_dir(&format!("{f}\\")), "{f}");
+            assert!(!valid_dir(&format!("{}\\sub", f.to_uppercase())), "{f}");
+            let mut s = Settings { download_dir: f.clone(), ..Settings::default() };
+            s.sanitize();
+            assert_eq!(s.download_dir, "", "a saved Startup folder is dropped on load");
+        }
+        assert!(valid_dir(&os_downloads().expect("known folder")));
+    }
+
+    #[cfg(windows)]
     #[test]
     fn the_os_downloads_folder_is_a_valid_absolute_path() {
         let d = os_downloads().expect("known folder");

@@ -7,6 +7,20 @@ use super::Proxy;
 use crate::tabs::TabId;
 use wry::WebView;
 
+/// Main navigations kept at most: a completion never seen cannot grow the
+/// list without end (the oldest goes first).
+const MAX_NAVS: usize = 16;
+
+/// Main navigation `id` started (or was redirected) to `uri`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn started(navs: &mut Vec<(u64, String)>, id: u64, uri: String) {
+    navs.retain(|(n, _)| *n != id);
+    if navs.len() >= MAX_NAVS {
+        navs.remove(0);
+    }
+    navs.push((id, uri));
+}
+
 #[cfg(windows)]
 mod imp {
     use super::*;
@@ -24,9 +38,12 @@ mod imp {
     pub fn attach_policy(view: &WebView, tab: TabId, proxy: &Proxy) -> windows::core::Result<()> {
         let wv = view.webview();
         let mut token = 0i64;
-        // Where the tab's main navigation is going (each redirect starts
-        // anew), and whether it has put a document on screen yet.
-        let nav = Rc::new(RefCell::new(String::new()));
+        // Where the tab's main navigations are going: every one started and
+        // not completed yet, by id (a redirect keeps the id and replaces the
+        // address). A later one does not end an earlier one: its error may
+        // still come. And whether a document has been put on screen since
+        // the last one started.
+        let nav: Rc<RefCell<Vec<(u64, String)>>> = Rc::new(RefCell::new(Vec::new()));
         let committed = Rc::new(Cell::new(false));
         unsafe {
             // WebView2 never starts another application by itself: every
@@ -55,8 +72,12 @@ mod imp {
             wv.add_NavigationStarting(
                 &NavigationStartingEventHandler::create(Box::new(move |_, args| {
                     let mut uri = PWSTR::null();
-                    let uri = if args.is_some_and(|a| a.Uri(&mut uri).is_ok()) { take_pwstr(uri) } else { String::new() };
-                    to.replace(uri);
+                    let uri = if args.as_ref().is_some_and(|a| a.Uri(&mut uri).is_ok()) { take_pwstr(uri) } else { String::new() };
+                    let mut id = 0u64;
+                    if let Some(a) = &args {
+                        let _ = a.NavigationId(&mut id);
+                    }
+                    super::started(&mut to.borrow_mut(), id, uri);
                     shown.set(false);
                     Ok(())
                 })),
@@ -73,7 +94,8 @@ mod imp {
                     let Some(args) = args else { return Ok(()) };
                     let mut uri = PWSTR::null();
                     args.RequestUri(&mut uri)?;
-                    let ev = Event::CertError { uri: take_pwstr(uri), nav: to.borrow().clone() };
+                    let navs = to.borrow().iter().map(|(_, u)| u.clone()).collect();
+                    let ev = Event::CertError { uri: take_pwstr(uri), navs };
                     let _ = p.send_event(UserEvent::Policy(tab, ev));
                     Ok(())
                 })),
@@ -97,8 +119,13 @@ mod imp {
             )?;
 
             let p = proxy.clone();
+            let to = nav.clone();
             wv.add_NavigationCompleted(
                 &NavigationCompletedEventHandler::create(Box::new(move |_, args| {
+                    let mut id = 0u64;
+                    if args.as_ref().is_some_and(|a| a.NavigationId(&mut id).is_ok()) {
+                        to.borrow_mut().retain(|(n, _)| *n != id);
+                    }
                     let mut ok = BOOL(0);
                     if args.is_some_and(|a| a.IsSuccess(&mut ok).is_ok()) && ok.as_bool() {
                         let _ = p.send_event(UserEvent::Policy(tab, Event::Loaded));
@@ -153,3 +180,23 @@ mod imp {
 }
 
 pub use imp::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_main_navigation_not_completed_is_kept() {
+        let mut navs = Vec::new();
+        started(&mut navs, 1, "https://bad.example/".into());
+        started(&mut navs, 2, "https://other.example/".into());
+        assert_eq!(navs.len(), 2, "a second navigation does not hide the first");
+        started(&mut navs, 1, "https://moved.example/".into());
+        assert_eq!(navs, [(2, "https://other.example/".into()), (1, "https://moved.example/".into())], "a redirect replaces its own");
+        for id in 10..10 + MAX_NAVS as u64 {
+            started(&mut navs, id, format!("https://n{id}.example/"));
+        }
+        assert_eq!(navs.len(), MAX_NAVS);
+        assert_eq!(navs[0].0, 10, "the oldest went first");
+    }
+}

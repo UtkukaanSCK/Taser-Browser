@@ -29,6 +29,41 @@ cargo build --release     # target/release/x-browser.exe
 cargo run --release -- example.com   # optional start URL
 ```
 
+## Keyboard shortcuts
+
+| Keys | Action |
+| --- | --- |
+| Ctrl+T | new tab |
+| Ctrl+W | close the active tab (closing the last one quits) |
+| Ctrl+Shift+T | reopen the last closed tab |
+| Ctrl+Tab / Ctrl+PgDn | next tab |
+| Ctrl+Shift+Tab / Ctrl+PgUp | previous tab |
+| Ctrl+1 … Ctrl+8 (also numpad) | go to tab 1–8 |
+| Ctrl+9 | go to the last tab |
+| Ctrl+Shift+PgUp / Ctrl+Shift+PgDn | move the active tab left / right |
+| Ctrl+L | focus the address bar |
+| Alt+← / Alt+→ (and the Back/Forward keys) | back / forward |
+| F5 / Ctrl+R / Ctrl+F5 | reload |
+| Ctrl+F | find in page (WebView2's find bar; also in the menu) |
+| Ctrl+P | print preview (WebView2's; also in the menu) |
+| Ctrl+= / Ctrl++ / Ctrl+wheel up | zoom in |
+| Ctrl+- / Ctrl+wheel down | zoom out |
+| Ctrl+0 | reset zoom |
+| F11 | fullscreen on/off; Esc also leaves it |
+| Ctrl+H | history list |
+| Ctrl+D | bookmark the page and open its editor; on a bookmarked page, open the editor with Remove focused (Ctrl+D, Enter removes it) |
+| Ctrl+Shift+O | bookmark list, with a filter |
+| Ctrl+J | downloads (WebView2's flyout) |
+| Alt+F / Alt+E | main menu (also the strip's ⋮ button) |
+
+In the tab strip, with a tab focused: ←/→/Home/End move focus, Enter or Space
+selects it, Delete closes it. In the address bar's suggestion list: ↑/↓
+choose, Enter opens, Esc closes and restores what was typed. In the menu:
+↑/↓/Home/End move, Enter picks, Esc closes.
+
+Shortcuts are Ctrl without Alt only: AltGr (Ctrl+Alt) on e.g. Turkish layouts
+always types its character.
+
 ## Checks
 
 ```sh
@@ -69,8 +104,29 @@ With `XB_TIMING_QUIT=1` also set, the app closes itself once the UI is ready:
 ```sh
 for i in 1 2 3 4 5 6 7 8 9 10; do
   XB_TIMING=timing.txt XB_TIMING_QUIT=1 ./target/release/x-browser.exe
+  sleep 8
 done
 ```
+
+Leave a few seconds between runs: when runs follow each other directly, the
+previous run's WebView2 browser processes are still shutting down and the next
+start waits about 6 s for them (measured 2026-11-15 on WebView2 157.0.4341.46:
+ui-ready ≈6,450 ms back to back, ≈360–420 ms with an 8 s gap, for v0.1 and
+v0.2 alike). To keep a run off the real profile, point `LOCALAPPDATA` **and**
+`APPDATA` at a scratch folder for that command.
+
+Release build, 10 runs after one warm-up, 8 s apart, scratch profile, one
+blank tab, median (ms since process creation):
+
+| | binary | window-shown | ui-webview-created | first-tab-created | ui-ready |
+| --- | --- | --- | --- | --- | --- |
+| v0.1 (33b478e) | 684,544 B | 60 | 320 | 354 | 361 |
+| v0.2 at task 5 (ae74229) | 1,073,152 B | 65 | 338 | 417 | 418 |
+| v0.2 final | | | | | |
+
+<!-- TODO: measure the "v0.2 final" row on the merged release build and fill it in. -->
+
+The first two rows were measured 2026-11-15.
 
 ## Fullscreen
 
@@ -106,14 +162,7 @@ Saved when the app closes and about 1.5 s after any change (in the
 background), so after a crash the last saved state comes back. A window whose
 saved place is on a screen that is no longer there opens on a visible one.
 
-Files, in `%LOCALAPPDATA%\X-Browser` (next to the WebView2 profile):
-
-| File | Contents |
-| --- | --- |
-| `session.json` | tabs: URL, title, zoom; the active tab's index |
-| `window.json` | normal rect (physical px) and maximized flag |
-
-Each file carries `"v": 1` and is written as a temporary file, flushed, then
+The files are listed under "Data files" below. Each file carries `"v": 1` and is written as a temporary file, flushed, then
 renamed over the old one. The first save of a run first copies the previous
 good file to `<name>.bak` (best effort; a failed save is retried by the next
 one). A file that cannot be read is moved to
@@ -159,7 +208,8 @@ picked addresses and link clicks (as WebView2 reports them); a page's own
 script navigations only refresh "recently". ↑/↓ choose one (its address goes into the box), Enter
 opens it, Esc closes the list and restores what was typed. The list never
 takes focus from the address bar, and closes when focus or the window moves,
-the window is resized, the tab changes or a page starts loading.
+the window is resized, the tab changes or a page starts loading (a jump to a
+`#fragment` within the same page does not close it).
 
 Ctrl+H opens the history list (one row per address, newest first, with a
 search box). × then "Sil?" removes every visit to that address; "Tüm geçmişi
@@ -168,6 +218,69 @@ WebView2's cookies and all site data (local storage, IndexedDB, cache
 storage, service workers…), its disk cache and its own browsing history.
 Saved passwords, autofill and the download list are kept. Both also forget
 the recently closed tabs (Ctrl+Shift+T), and both ask for confirmation first.
+
+## Data files
+
+All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
+(`EBWebView\`). A self-test build uses `<XB_SELFTEST_DIR>\profile` instead.
+
+| File | Contents | Written |
+| --- | --- | --- |
+| `session.json` | open tabs (URL, title, zoom) and the active one, at most 500 tabs | ~1.5 s after a change and at exit |
+| `window.json` | normal rect (physical px), maximized | same |
+| `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
+| `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
+| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session or one blank tab), `autofill` (on/off), `download_dir` (empty: the system Downloads folder); file at most 64 KiB | on each change |
+
+The JSON files carry `"v": 1` and are written as tmp → flush → rename, with a
+`.bak` of the previous good file and a `.corrupt` copy of a file that could
+not be read. Everything read back is treated as untrusted (http/https only,
+size and count limits; a settings value this version does not know reads as
+its default). Deleting the folder resets X-Browser to first-start state.
+
+A download folder must be an absolute, existing folder; the Windows Startup
+folders (yours and all users', and anything below them) are refused, so a
+download cannot land where Windows runs it at sign-in.
+
+## Menu, downloads and settings
+
+The strip's ⋮ button, Alt+F or Alt+E opens the main menu: new tab, find, zoom
+(−, +, reset), print, history, bookmarks, downloads and settings. Each item
+calls what its own shortcut calls. Downloads use WebView2's own flyout
+(progress, pause/cancel, "open file", "open folder"); SmartScreen stays on.
+The strip's downloads button appears once the session has had a download.
+Settings (search engine, startup, autofill, download folder) are saved on each
+change and take effect at once.
+
+## Security indicator and external applications
+
+The start of the address box shows the connection of the page on screen: a
+lock for https, "Güvenli değil" for http, "Sertifika hatası" for a host whose
+certificate failed in this run (also after the user chose to proceed on
+WebView2's warning page), and "Sayfa çöktü" with a reload button for a crashed
+tab. Every state has its own icon or text, never colour alone, and is read out
+by screen readers when it changes. After more than 64 hosts with certificate
+errors in one run, no https page counts as secure until the next start; the
+indicator then says "Sertifikalara güvenilmiyor" (told once, not in a dialog).
+
+A page never starts another application by itself. A `mailto:`, `tel:` or
+similar link the user clicked shows a question in the overlay (the scheme, the
+asking site and the whole address). "Aç" counts only after a short pause
+(500 ms) since the question appeared, and anything that closes the question
+(Esc, a click elsewhere, a tab switch, a navigation, 60 s) answers "no".
+Every other `ms-` scheme is refused without a question.
+
+Known limits, left as they are:
+
+- `ms-windows-store:` is the one `ms-` scheme let through (to the same
+  question), because sites link to their Store page and it only shows a page
+  of the Store.
+- The question appears at a random spot near the middle, so a page cannot
+  place a button under "Aç" beforehand. In a narrow or short window there is
+  little room around the middle and the spot hardly moves; the 500 ms pause
+  still holds.
+- WebView2's own find bar (Ctrl+F) is a separate window: whether it follows
+  the window when the window is moved has not been verified.
 
 ## Icon
 
@@ -193,6 +306,16 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/native/audio.rs` | per-tab "playing sound" state and muting |
 | `src/native/zoom.rs` | per-tab zoom factor: Ctrl+wheel on, change events, set/read |
 | `src/native/fullscreen.rs` | a page's element fullscreen (video, `requestFullscreen`) events |
+| `src/native/download.rs` | downloads through WebView2's own flyout; SmartScreen left on |
+| `src/native/policy.rs` | content-tab policy hooks: certificate errors, external launches stopped, navigation outcome |
+| `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, Find, Print |
+| `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
+| `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch question); placement and closing |
+| `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
+| `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
+| `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
+| `src/settings.rs` | `settings.json`: engine, startup, autofill, download folder (with its checks) |
+| `src/policy.rs` | security indicator, certificate-error memory, external-launch question |
 | `src/ui.rs` | embedded UI assets, custom protocol, CSP |
 | `src/store.rs` | versioned JSON files: atomic writes, `.bak`, corrupt-file recovery |
 | `src/session.rs` | what is saved (tabs, window place), when, and restoring it |
@@ -200,6 +323,12 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/timing.rs` | opt-in startup milestones (`XB_TIMING`) |
 | `src/selftest.rs` | in-app scenario test (`--features selftest` only) |
 | `ui/` | UI strip (HTML, vanilla JS, Tailwind source + build) |
+| `ui/overlay.html`, `ui/js/overlay.js` | overlay page: suggestion rows, history list, launch question |
+| `ui/js/suggest.js` | address-bar side of suggestions (keys, selection, restore) |
+| `ui/js/bookmarks.js` | the star (UI page), the editor and list (overlay page); keeps no state |
+| `ui/js/menu.js`, `ui/js/settings.js` | menu and settings pages in the overlay; draw and report only |
+| `ui/js/security.js` | draws the connection indicator Rust decides |
+| `docs/` | v0.2 design notes and the manual test checklist |
 | `assets/` | app icon and the script that draws it |
 | `build.rs` | embeds the icon in the exe |
 

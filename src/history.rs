@@ -53,7 +53,9 @@ const TITLE_QUERY_MIN: usize = 3;
 /// until the next start.
 const RETITLE_WINDOW: u64 = 30;
 /// The same address again within this many seconds (an in-page `#anchor`,
-/// a page reloading itself) is the same visit.
+/// a page reloading itself) is the same visit. The window runs from the
+/// latest repeat, so a page reloading itself every few seconds stays one
+/// visit however long it runs.
 const REPEAT_WINDOW: u64 = 10;
 
 /// Kinds of line (`Visit::k`).
@@ -93,10 +95,16 @@ pub fn recordable(url: &str) -> bool {
 /// An address as kept: without `#fragment` (a jump within the page is the
 /// same page) and without `user:password@` (never written to disk).
 pub fn normalize(url: &str) -> String {
-    let url = url.split('#').next().unwrap_or(url);
+    without_userinfo(url.split('#').next().unwrap_or(url))
+}
+
+/// An address without `user:password@` (never written to disk) and without
+/// an empty trailing `#`; any other `#fragment` stays (bookmarks keep it).
+pub fn without_userinfo(url: &str) -> String {
+    let url = url.strip_suffix('#').unwrap_or(url);
     if let Some(i) = url.find("://") {
         let (scheme, rest) = url.split_at(i + 3);
-        let authority = &rest[..rest.find(['/', '?']).unwrap_or(rest.len())];
+        let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
         if let Some(at) = authority.rfind('@') {
             return format!("{scheme}{}", &rest[at + 1..]);
         }
@@ -500,6 +508,9 @@ pub struct History {
     visits: Vec<Visit>,
     pending: usize,
     index: Index,
+    /// The address last recorded and when it was last seen (repeats
+    /// included): where the repeat window runs from.
+    chain: Option<(String, u64)>,
     /// Bytes in the file (as far as this run wrote or read).
     file_bytes: u64,
     /// When the buffered visits are due to be appended.
@@ -675,11 +686,22 @@ impl History {
         let k = if user { VISIT_USER } else { VISIT_AUTO };
         let Some(v) = clean(Visit { u: url.to_string(), t: title.to_string(), ts: now, k }, now) else { return };
         // Twenty clicks down a table of contents are one visit, not twenty
-        // (unless the earlier one did not count and this one does).
+        // (unless the earlier one did not count and this one does). The
+        // window runs from the latest repeat, so a chain of them is one.
+        let seen = |last: &Visit| match &self.chain {
+            Some((u, ts)) if *u == last.u => last.ts.max(*ts),
+            _ => last.ts,
+        };
         let repeat = self.visits.iter().rev().find(|x| x.k != VISIT_TITLE).is_some_and(|last| {
-            last.u == v.u && now.saturating_sub(last.ts) < REPEAT_WINDOW && (k != VISIT_USER || last.k == VISIT_USER)
+            last.u == v.u && now.saturating_sub(seen(last)) < REPEAT_WINDOW && (k != VISIT_USER || last.k == VISIT_USER)
         });
+        self.chain = Some((v.u.clone(), now));
         if repeat {
+            // Still the newest visit to it: the list shows when it was last seen.
+            if let Some(&i) = self.index.map.get(&v.u) {
+                let page = &mut self.index.pages[i];
+                page.last = page.last.max(now);
+            }
             self.retitle(&v.u, &v.t);
             return;
         }
@@ -762,19 +784,32 @@ impl History {
     }
 
     /// Writes what is buffered and waits (at most `timeout`, the load
-    /// included) until it is on disk. False on timeout.
+    /// included) until it is on disk. False on timeout. With nothing to
+    /// write it never starts (or waits for) the load.
     pub fn flush_now(&mut self, timeout: Duration) -> bool {
         let start = Instant::now();
-        if !self.loaded && (self.pending < self.visits.len() || !self.deleted.is_empty()) {
-            self.wait_loaded(timeout);
+        self.poll();
+        if !self.loaded {
+            let unwritten = self.pending < self.visits.len() || !self.deleted.is_empty();
+            if unwritten {
+                if !self.wait_loaded(timeout) {
+                    return false;
+                }
+            } else if self.cleared.is_none() {
+                // Nothing recorded, deleted or cleared: nothing to write.
+                return true;
+            }
+            // Else only the clear's rewrite is queued (behind the load).
         }
-        self.write_pending();
+        if self.loaded {
+            self.write_pending();
+        }
         if self.tx.is_none() {
             return true;
         }
         let (done_tx, done_rx) = mpsc::channel();
         self.send(Io::Flush(done_tx));
-        done_rx.recv_timeout(timeout.saturating_sub(start.elapsed())).is_ok() && self.loaded
+        done_rx.recv_timeout(timeout.saturating_sub(start.elapsed())).is_ok()
     }
 
     /// Removes every visit to `url` (never waits for the load: the file's
@@ -1270,11 +1305,45 @@ mod tests {
         h.record_at("https://a.com/doc", "Doc, reloaded", false, t + 2);
         assert_eq!((h.visit_count(), count(&h)), (1, 1), "anchor click and self-reload are the same visit");
         assert_eq!(h.list("").0[0].t, "Doc, reloaded", "but the newer title is kept");
-        h.record_at("https://a.com/doc", "Doc", true, t + REPEAT_WINDOW);
-        assert_eq!((h.visit_count(), count(&h)), (2, 2), "after the window it is a new visit");
-        h.record_at("https://b.com/", "B", false, t + REPEAT_WINDOW + 1);
-        h.record_at("https://b.com/", "B", true, t + REPEAT_WINDOW + 2);
+        h.record_at("https://a.com/doc", "Doc", true, t + 2 + REPEAT_WINDOW);
+        assert_eq!((h.visit_count(), count(&h)), (2, 2), "after the window (from the latest repeat) it is a new visit");
+        h.record_at("https://b.com/", "B", false, t + REPEAT_WINDOW + 3);
+        h.record_at("https://b.com/", "B", true, t + REPEAT_WINDOW + 4);
         assert_eq!(h.visit_count(), 4, "a visit that counts is never folded into one that did not");
+    }
+
+    #[test]
+    fn with_nothing_to_write_the_exit_flush_reads_nothing() {
+        let dir = temp_dir("history-exit-idle");
+        let mut h = History::new(Some(&dir));
+        assert!(h.flush_now(Duration::from_secs(2)), "never loaded, nothing recorded: all written");
+        assert!(!h.started && !dir.join(FILE).exists(), "and no load started for it");
+        // A visit recorded before the load still waits for it.
+        h.record("https://a.com/", "A", true);
+        assert!(h.flush_now(Duration::from_secs(5)));
+        assert_eq!(urls_of(&h.reload()), ["https://a.com/"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_page_reloading_itself_for_minutes_is_one_visit() {
+        let t = now_secs() - 1000;
+        let mut h = History::new(None);
+        h.preload();
+        let page = |h: &History| h.index.pages[h.index.map["https://a.com/live"]].clone();
+        h.record_at("https://a.com/live", "Live", true, t);
+        // Every 9 s for three minutes: each within the window of the one before.
+        for i in 1..=20 {
+            h.record_at("https://a.com/live", "Live", false, t + i * (REPEAT_WINDOW - 1));
+        }
+        assert_eq!((h.visit_count(), page(&h).count), (1, 1));
+        assert_eq!(page(&h).last, t + 20 * (REPEAT_WINDOW - 1), "shown as seen last at the latest repeat");
+        // Opened again by the user right after the chain: still the same visit.
+        h.record_at("https://a.com/live", "Live", true, t + 20 * (REPEAT_WINDOW - 1) + 2);
+        assert_eq!((h.visit_count(), page(&h).count), (1, 1));
+        // A pause longer than the window ends the chain.
+        h.record_at("https://a.com/live", "Live", true, t + 20 * (REPEAT_WINDOW - 1) + 2 + REPEAT_WINDOW);
+        assert_eq!((h.visit_count(), page(&h).count), (2, 2));
     }
 
     #[test]
@@ -1283,6 +1352,9 @@ mod tests {
         assert_eq!(normalize("https://example.com/p@x?m=a@b"), "https://example.com/p@x?m=a@b");
         assert_eq!(normalize("http://a@b@host.com"), "http://host.com");
         assert_eq!(normalize("https://example.com/#"), "https://example.com/");
+        assert_eq!(without_userinfo("https://user:pw@example.com/app#/inbox"), "https://example.com/app#/inbox");
+        assert_eq!(without_userinfo("https://example.com#x@evil"), "https://example.com#x@evil", "an @ in the fragment is no userinfo");
+        assert_eq!(without_userinfo("https://example.com/#"), "https://example.com/");
         let mut h = History::new(None);
         h.preload();
         h.record("https://user:secret@example.com/doc", "Doc", true);

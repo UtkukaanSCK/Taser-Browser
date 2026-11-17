@@ -37,6 +37,12 @@
   }
 
   if (starBtn) {
+    // A press while the editor is open is a "close it" press: the editor
+    // loses focus and closes before the click lands, and Rust needs to know
+    // the click belongs to that press so it does not open the editor again.
+    starBtn.addEventListener("pointerdown", (e) => {
+      if (e.button === 0) send("bm-star-press");
+    });
     starBtn.addEventListener("click", () => send("bm-star:" + edge()));
     const report = () => {
       const now = edge();
