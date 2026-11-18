@@ -221,6 +221,9 @@ pub struct State {
     store: Option<Store<Settings>>,
     /// The OS Downloads folder, what an empty setting goes back to.
     system_dir: Option<String>,
+    /// The download folder is still to be set: there was no tab to set it
+    /// through yet (see `on_view_created`).
+    folder_pending: bool,
 }
 
 impl State {
@@ -233,7 +236,7 @@ impl State {
             eprintln!("x-browser: {} restored from its backup", Settings::NAME);
         }
         set_engine(loaded.value.engine);
-        Self { value: loaded.value, store: Some(store), system_dir: None }
+        Self { value: loaded.value, store: Some(store), system_dir: None, folder_pending: false }
     }
 
     fn save(&mut self) {
@@ -256,15 +259,30 @@ fn apply_autofill(app: &App) {
     }
 }
 
-/// The profile is shared by every webview, so the UI's is as good as any.
+/// The download folder belongs to the content tabs' profile (the UI has its
+/// own, `ui::UI_PROFILE`), so it is set through a tab; any tab will do. With
+/// none yet (the restored tab's webview could not be made), the first one
+/// made later does it (`on_view_created`).
 fn apply_folder(app: &mut App) {
     let s = &mut app.settings;
     if s.system_dir.is_none() {
         s.system_dir = os_downloads();
     }
     let chosen = Some(s.value.download_dir.as_str()).filter(|d| valid_dir(d) && Path::new(d).is_dir());
-    if let Some(dir) = chosen.or(s.system_dir.as_deref()) {
-        crate::native::set_download_folder(&app.ui, dir);
+    let Some(dir) = chosen.or(s.system_dir.as_deref()).map(str::to_owned) else { return };
+    match app.content_view() {
+        Some(v) => {
+            crate::native::set_download_folder(v, &dir);
+            app.settings.folder_pending = false;
+        }
+        None => app.settings.folder_pending = true,
+    }
+}
+
+/// A content webview was made: sets the download folder if it waited for one.
+pub fn on_view_created(app: &mut App) {
+    if app.settings.folder_pending {
+        apply_folder(app);
     }
 }
 

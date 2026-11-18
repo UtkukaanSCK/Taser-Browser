@@ -178,6 +178,9 @@ pub fn id_from_hash(hash: &[u8]) -> String {
         .collect()
 }
 
+/// SHA-256 through Windows CNG (also used for manifest keys, see `extensions`).
+pub use cng::sha256;
+
 /// 32 letters `a`–`p`.
 pub fn is_extension_id(id: &str) -> bool {
     id.len() == 32 && id.bytes().all(|c| (b'a'..=b'p').contains(&c))

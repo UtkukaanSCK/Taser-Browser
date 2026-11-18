@@ -677,9 +677,14 @@ pub fn clear_data(app: &mut App) {
     app.history.clear();
     app.closed.clear();
     let proxy = app.proxy().clone();
-    native::clear_browsing_data(&app.ui, move |ok| {
+    let done = move |ok| {
         let _ = proxy.send_event(UserEvent::Ui(UiCommand::Overlay(OverlayCmd::DataCleared(ok))));
-    });
+    };
+    // The pages' profile, not the UI's own (`ui::UI_PROFILE`).
+    match app.content_view() {
+        Some(v) => native::clear_browsing_data(v, done),
+        None => done(false),
+    }
 }
 
 #[cfg(test)]

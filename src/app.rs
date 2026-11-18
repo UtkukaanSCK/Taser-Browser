@@ -41,6 +41,8 @@ pub enum UserEvent {
     BookmarksLoaded,
     /// WebView2's download flyout state changed (see `downloads`).
     Download(crate::downloads::Event),
+    /// A WebView2 extension call has answered (see `extensions`).
+    Extension(crate::extensions::Event),
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -144,6 +146,8 @@ pub struct App {
     pub downloads: crate::downloads::Downloads,
     /// Certificate errors, crashed tabs, external launches (see `policy`).
     pub policy: crate::policy::State,
+    /// extensions.json and the content profile's extensions (see `extensions`).
+    pub extensions: crate::extensions::Extensions,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -215,6 +219,7 @@ impl App {
             downloads: Default::default(),
             overlay: Default::default(),
             policy: Default::default(),
+            extensions: Default::default(),
             quit: false,
         })
     }
@@ -229,6 +234,12 @@ impl App {
 
     pub(crate) fn active_view(&self) -> Option<&WebView> {
         self.view(self.tabs.active()?)
+    }
+
+    /// A webview of the content profile (the tabs' one; the UI has its own,
+    /// `ui::UI_PROFILE`), for profile-wide calls: the active tab's, else any.
+    pub fn content_view(&self) -> Option<&WebView> {
+        self.active_view().or_else(|| self.views.first().map(|(_, v)| v))
     }
 
     pub fn proxy(&self) -> &Proxy {
@@ -327,6 +338,9 @@ impl App {
         // No half-wired tab: without its events it would never update.
         setup(&view)?;
         self.views.push((id, view));
+        // Profile-wide work that found no content webview at start.
+        crate::settings::on_view_created(self);
+        crate::extensions::on_view_created(self);
         if zoom != 100 {
             page_tools::set_zoom(self, id, f64::from(zoom) / 100.0);
         }
@@ -577,6 +591,7 @@ impl App {
             // (The star the same way: `bookmarks::sync_star` takes the file.)
             UserEvent::HistoryLoaded | UserEvent::BookmarksLoaded => {}
             UserEvent::Download(ev) => crate::downloads::on_event(self, ev),
+            UserEvent::Extension(ev) => crate::extensions::on_event(self, ev),
             UserEvent::Policy(tab, ev) => crate::policy::on_event(self, tab, ev),
             UserEvent::OpenFromOtherInstance(url) => {
                 if let Some(url) = url
@@ -619,6 +634,7 @@ impl App {
                 self.tabs.resend_icons();
                 crate::downloads::sync_ui(self);
                 crate::timing::mark("ui-ready");
+                crate::extensions::on_ui_ready(self);
                 if crate::timing::quit_when_ready() {
                     self.quit = true;
                 }

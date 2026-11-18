@@ -68,6 +68,13 @@ pub fn is_ui_url(url: &str) -> bool {
 #[cfg(windows)]
 pub const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,SystemKeyboardLock";
 
+/// The WebView2 profile of the UI strip and the overlay. Content tabs use the
+/// default profile, the only one extensions are ever added to: an extension
+/// in the UI's profile could run a content script in the UI page and reach
+/// its IPC (see `extensions`).
+#[cfg(windows)]
+pub const UI_PROFILE: &str = "XbUi";
+
 fn asset(path: &str) -> Option<(&'static str, &'static str)> {
     Some(match path {
         "/" | "/index.html" => (INDEX_HTML, "text/html; charset=utf-8"),
@@ -143,7 +150,10 @@ fn ui_builder<'a>(
         use wry::WebViewBuilderExtWindows;
         // F5/Ctrl+R etc. must never reload the UI itself; our accelerator
         // handler still sees every key.
-        builder.with_browser_accelerator_keys(false).with_default_context_menus(cfg!(debug_assertions))
+        builder
+            .with_browser_accelerator_keys(false)
+            .with_default_context_menus(cfg!(debug_assertions))
+            .with_profile_name(UI_PROFILE)
     };
     builder
 }
@@ -160,8 +170,9 @@ pub fn build(
     let builder = {
         use wry::WebViewBuilderExtWindows;
         // This builder creates the environment (content tabs reuse it), so
-        // its arguments are the ones every webview runs with.
-        builder.with_additional_browser_args(BROWSER_ARGS)
+        // its arguments are the ones every webview runs with. Extensions are
+        // an environment option too; only the content profile gets any.
+        builder.with_additional_browser_args(BROWSER_ARGS).with_browser_extensions_enabled(true)
     };
     builder.build_as_child(window)
 }

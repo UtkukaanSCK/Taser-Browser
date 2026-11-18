@@ -6,6 +6,7 @@ mod bookmarks;
 mod commands;
 mod crx;
 mod downloads;
+mod extensions;
 mod history;
 mod instance;
 mod menu;
@@ -149,7 +150,7 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
     app.history = history::History::new(dir);
     app.bookmarks = bookmarks::Bookmarks::new(dir);
     app.settings = settings::State::open(dir);
-    settings::apply(&mut app);
+    app.extensions = extensions::Extensions::open(dir);
     session::track_window(&mut app);
     timing::mark("ui-webview-created");
 
@@ -165,6 +166,8 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
         }
         None => {}
     }
+    // The download folder is the content profile's: set through a tab.
+    settings::apply(&mut app);
     timing::mark("first-tab-created");
 
     #[cfg(feature = "selftest")]

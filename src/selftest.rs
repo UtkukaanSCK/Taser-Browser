@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 533;
+const EXPECTED_CHECKS: u32 = 556;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -57,11 +57,12 @@ pub fn prepare_profile(profile: Option<&std::path::Path>) {
         return;
     }
     let Some(profile) = profile else { return };
-    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json", "settings.json"] {
+    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json", "settings.json", "extensions.json"] {
         for suffix in ["", ".bak", ".tmp", ".bak.tmp", ".corrupt", ".bak.corrupt"] {
             let _ = std::fs::remove_file(profile.join(format!("{name}{suffix}")));
         }
     }
+    plant_extensions(profile);
 }
 
 fn log(line: &str) {
@@ -330,7 +331,15 @@ const DELAYS: &[u64] = &[
     900,  // 248 the launch question
     1200, // 249 click the ⋮ button from the strip
     1000, // 250 check the menu has the keyboard; Esc
-    900,  // 251 last tab close quits
+    900,  // 251 extensions: the start's reconcile; UI profile; add v1.1
+    2500, // 252 check (a) the id; load the ad page
+    2500, // 253 check (b) the block and (c) the UI; disable
+    1500, // 254 check disabled; load the ad page
+    2500, // 255 check (d) it loads; enable
+    1500, // 256 check enabled; load the ad page
+    2500, // 257 check (d) blocked again; remove
+    2000, // 258 check (e) removed
+    900,  // 259 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -4302,6 +4311,132 @@ pub fn step(app: &mut App, n: u32) {
             overlay_js(app, &key_js("Escape"));
         }
         251 => {
+            // The start (see `plant_extensions`): leftovers swept, the bad
+            // entries dropped and nothing else, the old file kept as .bak,
+            // the recorded extension in WebView2 again.
+            let root = dir().join("profile").join(crate::extensions::DIR);
+            let left: Vec<String> = ext_leftovers().into_iter().filter(|l| root.join(l).exists()).collect();
+            check(
+                "ext-start-sweeps-unfinished-folders",
+                left.is_empty() && root.join(EXT_ID).join("1.0").join("manifest.json").is_file(),
+                format!("left {left:?}"),
+            );
+            let ids: Vec<&str> = app.extensions.records().iter().map(|e| e.id.as_str()).collect();
+            check("ext-start-drops-only-the-bad-entries", ids == [EXT_ID], format!("{ids:?}"));
+            crate::store::flush(Duration::from_secs(2));
+            let file = dir().join("profile").join(crate::extensions::FILE);
+            let (now, bak) = (read_text(&file), read_text(&crate::store::sibling(&file, ".bak")));
+            check(
+                "ext-start-keeps-the-old-file-as-bak",
+                bak.contains("not an id") && !now.contains("not an id") && now.contains(EXT_ID),
+                format!("file {now}, bak {bak}"),
+            );
+            let list = app.extensions.list();
+            check(
+                "ext-start-reconciled",
+                app.extensions.reconcile == crate::extensions::Reconcile::Done
+                    && list.len() == 1
+                    && list[0].id == EXT_ID
+                    && list[0].installed
+                    && list[0].enabled,
+                format!("{:?}, {list:?}", app.extensions.reconcile),
+            );
+            check("ext-list-hides-the-builtins", !list.iter().any(|l| crate::extensions::is_builtin(&l.id)), format!("{list:?}"));
+            if let Some(v) = app.active_view() {
+                crate::native::list_extensions(v, |r| {
+                    let ids = r.map(|all| all.into_iter().map(|e| e.id).collect::<Vec<_>>());
+                    let ok = ids.as_ref().is_ok_and(|ids| crate::extensions::BUILTIN.iter().all(|b| ids.iter().any(|i| i == b)) && ids.iter().any(|i| i == EXT_ID));
+                    check("ext-content-profile-has-builtins-and-the-extension", ok, format!("{ids:?}"));
+                });
+            } else {
+                check("ext-content-profile-has-builtins-and-the-extension", false, "no content view");
+            }
+            // (c) The UI strip's and the overlay's profile: nothing added.
+            ui_profile_only_builtins(Some(&app.ui), "ext-ui-profile-has-only-the-builtins");
+            ui_profile_only_builtins(app.overlay.view(), "ext-overlay-profile-has-only-the-builtins");
+            match serve_ext_page() {
+                Ok(port) => remember("ext-port", port as i64),
+                Err(e) => check("ext-server-started", false, e),
+            }
+            // A newer version, added over the recorded one.
+            let v2 = root.join(EXT_ID).join("1.1");
+            match write_test_extension(&v2, "1.1") {
+                Ok(()) => remember("ext-op", crate::extensions::add(app, &v2, crate::extensions::Source::Unpacked) as i64),
+                Err(e) => check("ext-test-extension-written", false, e),
+            }
+        }
+        252 => {
+            // (a) The id is the one its key gives.
+            let outcome = ext_outcome(app, "ext-op");
+            let key: serde_json::Value = serde_json::from_str(EXT_MANIFEST).unwrap_or_default();
+            let from_key = key["key"].as_str().and_then(crate::extensions::id_from_key);
+            let rec = app.extensions.records().iter().find(|e| e.id == EXT_ID).map(|e| (e.version.clone(), e.dir.ends_with("1.1")));
+            check(
+                "ext-added-with-the-id-of-its-key",
+                outcome == Some(Ok(EXT_ID.to_string())) && from_key.as_deref() == Some(EXT_ID) && rec == Some(("1.1".into(), true)) && app.extensions.records().len() == 1,
+                format!("outcome {outcome:?}, key {from_key:?}, record {rec:?}"),
+            );
+            ext_load(app, 1);
+        }
+        253 => {
+            // (b) The rule blocks the ad script, the other one loads, and the
+            // content script ran in the page.
+            ext_page_check(app, 1, true);
+            // (c) ... but in neither the UI strip nor the overlay.
+            const MARK_JS: &str = "`mark=${document.documentElement.hasAttribute('data-xbext') || !!document.querySelector('[data-xbext]')};url=${location.protocol}`";
+            ui_eval(app, "ext-content-script-not-in-the-ui", MARK_JS, |r| {
+                check("ext-content-script-not-in-the-ui", field(&r, "mark") == "false", &r);
+            });
+            overlay_eval(app, "ext-content-script-not-in-the-overlay", MARK_JS, |r| {
+                check("ext-content-script-not-in-the-overlay", field(&r, "mark") == "false", &r);
+            });
+            // Those documents were loaded before the add; what keeps any
+            // later one clean is that the add, with the extension installed
+            // and on, still left the UI's profile with only the built-ins.
+            ui_profile_only_builtins(Some(&app.ui), "ext-ui-profile-still-only-builtins-after-the-add");
+            ui_profile_only_builtins(app.overlay.view(), "ext-overlay-profile-still-only-builtins-after-the-add");
+            remember("ext-op", crate::extensions::set_enabled(app, EXT_ID, false) as i64);
+        }
+        254 => {
+            ext_state_check(app, "ext-disabled", false);
+            ext_load(app, 2);
+        }
+        255 => {
+            // (d) Off: the ad script loads and no content script runs.
+            ext_page_check(app, 2, false);
+            remember("ext-op", crate::extensions::set_enabled(app, EXT_ID, true) as i64);
+        }
+        256 => {
+            ext_state_check(app, "ext-enabled-again", true);
+            ext_load(app, 3);
+        }
+        257 => {
+            // (d) On again: blocked again.
+            ext_page_check(app, 3, true);
+            remember("ext-op", crate::extensions::remove(app, EXT_ID) as i64);
+        }
+        258 => {
+            // (e) Gone from the list, the file, WebView2 and the disk.
+            let outcome = ext_outcome(app, "ext-op");
+            let listed = app.extensions.list().iter().any(|l| l.id == EXT_ID) || app.extensions.records().iter().any(|e| e.id == EXT_ID);
+            crate::store::flush(Duration::from_secs(2));
+            let now = read_text(&dir().join("profile").join(crate::extensions::FILE));
+            let folder = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(EXT_ID));
+            check(
+                "ext-removed-from-the-list-file-and-disk",
+                outcome == Some(Ok(EXT_ID.to_string())) && !listed && now.contains("\"items\":[]") && !folder.exists(),
+                format!("outcome {outcome:?}, listed {listed}, file {now}, folder {}", folder.exists()),
+            );
+            if let Some(v) = app.active_view() {
+                crate::native::list_extensions(v, |r| {
+                    let ids = r.map(|all| all.into_iter().map(|e| e.id).collect::<Vec<_>>());
+                    check("ext-removed-from-webview2", ids.as_ref().is_ok_and(|ids| !ids.iter().any(|i| i == EXT_ID)), format!("{ids:?}"));
+                });
+            } else {
+                check("ext-removed-from-webview2", false, "no content view");
+            }
+        }
+        259 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -4316,6 +4451,164 @@ pub fn step(app: &mut App, n: u32) {
         }
         _ => {}
     }
+}
+
+/// The self-test extension (test-assets/selftest-ext), written out by the run.
+const EXT_MANIFEST: &str = include_str!("../test-assets/selftest-ext/manifest.json");
+const EXT_RULES: &str = include_str!("../test-assets/selftest-ext/rules.json");
+const EXT_CS: &str = include_str!("../test-assets/selftest-ext/cs.js");
+/// Its id, as Chrome derives it from the manifest's key.
+const EXT_ID: &str = "mmbkafeccnpmgicaldnppdljpaogpjdm";
+
+/// Writes the self-test extension into `dir`, as `version`.
+fn write_test_extension(dir: &std::path::Path, version: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let manifest = EXT_MANIFEST.replace("\"version\": \"1.0\"", &format!("\"version\": \"{version}\""));
+    std::fs::write(dir.join("manifest.json"), manifest)?;
+    std::fs::write(dir.join("rules.json"), EXT_RULES)?;
+    std::fs::write(dir.join("cs.js"), EXT_CS)
+}
+
+/// Half-written folders under the extensions folder, as an interrupted
+/// unpack, update or remove leaves them.
+fn ext_leftovers() -> [String; 3] {
+    [".selftest.unpack-1-0".into(), format!("{EXT_ID}/0.9.tmp"), format!(".{EXT_ID}.removed-1")]
+}
+
+/// Gives the start something to reconcile: the extension recorded at 1.0
+/// next to two bad entries (WebView2 may not have it: the last run removed
+/// it), and leftovers to sweep.
+fn plant_extensions(profile: &std::path::Path) {
+    let root = profile.join(crate::extensions::DIR);
+    let _ = std::fs::remove_dir_all(&root);
+    let v1 = root.join(EXT_ID).join("1.0");
+    let _ = write_test_extension(&v1, "1.0");
+    for l in ext_leftovers() {
+        let _ = write_test_extension(&root.join(l), "0.9");
+    }
+    let dir = v1.to_string_lossy();
+    let file = serde_json::json!({ "v": 1, "items": [
+        { "id": 7, "dir": dir },
+        { "id": "not an id", "dir": dir, "source": "unpacked" },
+        { "id": EXT_ID, "dir": dir, "source": "unpacked", "version": "1.0", "name": "XB Selftest", "enabled": true, "installed": 1 },
+    ]});
+    let _ = std::fs::write(profile.join(crate::extensions::FILE), file.to_string());
+}
+
+fn read_text(path: &std::path::Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// How the operation remembered under `key` ended.
+fn ext_outcome(app: &App, key: &'static str) -> Option<Result<String, String>> {
+    app.extensions.outcome(recall(key) as u64).cloned()
+}
+
+/// Checks that only the two built-ins are in the profile of `view` (the UI
+/// strip's or the overlay's).
+fn ui_profile_only_builtins(view: Option<&wry::WebView>, name: &'static str) {
+    let Some(v) = view else { return check(name, false, "no webview") };
+    crate::native::list_extensions(v, move |r| {
+        let ids = r.map(|all| {
+            let mut ids: Vec<_> = all.into_iter().map(|e| e.id).collect();
+            ids.sort();
+            ids
+        });
+        let mut want: Vec<String> = crate::extensions::BUILTIN.iter().map(|s| s.to_string()).collect();
+        want.sort();
+        check(name, ids.as_ref() == Ok(&want), format!("{ids:?}"));
+    });
+}
+
+/// Checks the extension's state after a `set_enabled`.
+fn ext_state_check(app: &App, name: &'static str, on: bool) {
+    let outcome = ext_outcome(app, "ext-op");
+    let rec = app.extensions.records().iter().find(|e| e.id == EXT_ID).map(|e| e.enabled);
+    let listed = app.extensions.list().iter().find(|l| l.id == EXT_ID).map(|l| l.enabled);
+    check(
+        name,
+        outcome == Some(Ok(EXT_ID.to_string())) && rec == Some(on) && listed == Some(on),
+        format!("outcome {outcome:?}, record {rec:?}, listed {listed:?}"),
+    );
+}
+
+/// Loads the ad page, round `n`.
+fn ext_load(app: &mut App, n: u32) {
+    let port = recall("ext-port");
+    app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{port}/ext?n={n}"))));
+}
+
+/// Checks round `n` of the ad page: with the extension on, the ad script
+/// never reached the server and the content script marked the page; off,
+/// the ad script ran and nothing marked the page.
+fn ext_page_check(app: &App, n: u32, on: bool) {
+    let hits = ext_hits();
+    let (ok, ad) = (format!("/xb-ok.js?n={n}"), format!("/xb-ad.js?n={n}"));
+    let (got_ok, got_ad) = (hits.contains(&ok), hits.contains(&ad));
+    let name = match n {
+        1 => "ext-rule-blocks-the-ad-script",
+        2 => "ext-disabled-lets-the-ad-script-through",
+        _ => "ext-enabled-again-blocks-it-again",
+    };
+    check(name, got_ok && got_ad != on, format!("ok {got_ok}, ad {got_ad}, hits {hits:?}"));
+    let page = match n {
+        1 => "ext-page-marked-and-ad-not-run",
+        2 => "ext-page-unmarked-and-ad-run",
+        _ => "ext-page-marked-and-ad-not-run-again",
+    };
+    page_eval(
+        app,
+        page,
+        "(() => { const d = document.documentElement.dataset; return `ext=${d.xbext || ''};ok=${d.ok || ''};ad=${d.ad || ''};url=${location.href}`; })()",
+        move |r| {
+            let mark = if on { "1" } else { "" };
+            let want_ad = if on { "" } else { "1" };
+            check(page, field(&r, "ext") == mark && field(&r, "ok") == "1" && field(&r, "ad") == want_ad && field(&r, "url").ends_with(&format!("n={n}")), &r);
+        },
+    );
+}
+
+/// Request paths the ad page's server has seen.
+static EXT_HITS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn ext_hits() -> Vec<String> {
+    EXT_HITS.lock().unwrap().clone()
+}
+
+/// Serves the ad page on a free loopback port until the process ends:
+/// `/ext?<q>` loads `/xb-ok.js?<q>` and `/xb-ad.js?<q>`, each of which marks
+/// the page; every request path is recorded. Nothing is cached.
+fn serve_ext_page() -> std::io::Result<u16> {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let head = String::from_utf8_lossy(&buf[..n]);
+            let path = head.split_whitespace().nth(1).unwrap_or("").to_string();
+            EXT_HITS.lock().unwrap().push(path.clone());
+            let query = path.split_once('?').map_or("", |(_, q)| q);
+            let (kind, body) = if path.starts_with("/ext") {
+                ("text/html", format!("<!doctype html><title>Ext</title><script src=\"/xb-ok.js?{query}\"></script><script src=\"/xb-ad.js?{query}\"></script><body>ext</body>"))
+            } else if path.starts_with("/xb-ok.js") {
+                ("text/javascript", "document.documentElement.dataset.ok = '1';".to_string())
+            } else if path.starts_with("/xb-ad.js") {
+                ("text/javascript", "document.documentElement.dataset.ad = '1';".to_string())
+            } else {
+                ("text/plain", String::new())
+            };
+            let status = if body.is_empty() { "404 Not Found" } else { "200 OK" };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    Ok(port)
 }
 
 /// What the served download contains.
