@@ -49,6 +49,8 @@ pub enum UiCommand {
     Settings(SettingsCmd),
     /// The answer to "open another application?" (see `policy`).
     Launch(LaunchCmd),
+    /// The Web Store button and question (see `webstore`).
+    Store(crate::webstore::StoreCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +93,7 @@ impl UiCommand {
             (n, a) if MenuCmd::NAMES.contains(&n) => Self::Menu(MenuCmd::parse(n, a)?),
             (n, a) if SettingsCmd::NAMES.contains(&n) => Self::Settings(SettingsCmd::parse(n, a)?),
             ("launch-open" | "launch-cancel" | "launch-press", None) => Self::Launch(LaunchCmd::parse(name)?),
+            (n, None) if crate::webstore::StoreCmd::NAMES.contains(&n) => Self::Store(crate::webstore::StoreCmd::parse(n)?),
             _ => return None,
         };
         Some(cmd)

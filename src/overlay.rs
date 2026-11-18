@@ -37,6 +37,9 @@ const LAUNCH_H: f64 = 230.0;
 /// way) and down from under the strip, where the window has the room.
 const LAUNCH_SHIFT_X: f64 = 120.0;
 const LAUNCH_SHIFT_Y: f64 = 60.0;
+/// The Web Store question's size (it moves as the launch question does).
+const STORE_W: f64 = 460.0;
+const STORE_H: f64 = 380.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
@@ -138,6 +141,8 @@ pub enum Mode {
     Settings,
     /// The question before another application is started (see `policy`).
     Launch,
+    /// The Web Store install or removal question (see `webstore`).
+    Store,
 }
 
 impl Mode {
@@ -145,7 +150,7 @@ impl Mode {
     /// the suggestions, which the address bar keeps typing into. The launch
     /// question takes it too: no keystroke may reach it from elsewhere.
     fn owns_keyboard(self) -> bool {
-        matches!(self, Mode::History | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch)
+        matches!(self, Mode::History | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch | Mode::Store)
     }
 }
 
@@ -284,6 +289,10 @@ pub(crate) fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
         // The question is no longer on screen: it is answered "no".
         crate::policy::on_question_closed(app);
     }
+    if was == Mode::Store && mode != Mode::Store {
+        // The same for the Web Store question.
+        crate::webstore::on_question_closed(app);
+    }
     if !app.overlay.ready {
         // The page is (re)loading: whatever focus was handed over went with
         // the old page, so the new one takes the keyboard once it is ready.
@@ -298,8 +307,10 @@ pub(crate) fn show(app: &mut App, mode: Mode, js: String, bounds: Rect) {
 /// Something was just put on screen: the launch question's wait for an
 /// answer starts now (not when it was asked: the page may load long after).
 fn presented(app: &mut App) {
-    if app.overlay.mode == Mode::Launch {
-        crate::policy::on_question_shown(app);
+    match app.overlay.mode {
+        Mode::Launch => crate::policy::on_question_shown(app),
+        Mode::Store => crate::webstore::on_question_shown(app),
+        _ => {}
     }
 }
 
@@ -344,10 +355,15 @@ pub(crate) fn run(app: &App, mode: Mode, js: &str) {
 /// says where in the room around the middle (`LAUNCH_SHIFT_X`, `_Y`), each
 /// from 0 to 1.
 fn launch_rect(size: LogicalSize<f64>, at: (f64, f64)) -> Rect {
-    let w = LAUNCH_W.min(size.width - 16.0);
+    question_rect(size, at, LAUNCH_W, LAUNCH_H)
+}
+
+/// A question of `w` × `h` placed as `launch_rect` says.
+fn question_rect(size: LogicalSize<f64>, at: (f64, f64), w: f64, h: f64) -> Rect {
+    let w = w.min(size.width - 16.0);
     let top = UI_HEIGHT + 4.0;
     let room = size.height - top - 8.0;
-    let h = LAUNCH_H.min(room);
+    let h = h.min(room);
     let free_x = (size.width - w).max(0.0);
     let span_x = free_x.min(2.0 * LAUNCH_SHIFT_X);
     let span_y = (room - h).clamp(0.0, LAUNCH_SHIFT_Y);
@@ -376,6 +392,26 @@ pub fn show_launch(app: &mut App, js: String) {
     // again and again cannot know that "Aç" will be there.
     let bounds = launch_rect(win_size(app), launch_spot());
     show(app, Mode::Launch, js, bounds);
+}
+
+/// A place for the Web Store question, as `launch_spot`; a job keeps one for
+/// all its stages.
+pub fn store_spot() -> (f64, f64) {
+    launch_spot()
+}
+
+/// Shows the Web Store question drawn by `js` (an `xbExt.show(..)` call) at
+/// `spot` and gives it the keyboard. Whatever closes the overlay answers it
+/// "no" (`webstore::on_question_closed`).
+pub fn show_store(app: &mut App, js: String, spot: (f64, f64)) {
+    if app.overlay.mode != Mode::Store {
+        close(app);
+    }
+    if app.fullscreen.on() {
+        crate::page_tools::leave_fullscreen(app);
+    }
+    let bounds = question_rect(win_size(app), spot, STORE_W, STORE_H);
+    show(app, Mode::Store, js, bounds);
 }
 
 /// Hides the overlay. Its last list stays known, so a pick that races the
@@ -424,6 +460,9 @@ fn reset(app: &mut App, hide: bool) {
     }
     if was == Mode::Launch {
         crate::policy::on_question_closed(app);
+    }
+    if was == Mode::Store {
+        crate::webstore::on_question_closed(app);
     }
     let o = &mut app.overlay;
     if let Some(view) = &o.view {
@@ -599,7 +638,7 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
         OverlayCmd::Close => {
             // (The launch question answers its own blur: "launch-cancel",
             // after a moment to see whether the keyboard comes back.)
-            if app.overlay.mode.owns_keyboard() && app.overlay.mode != Mode::Launch {
+            if app.overlay.mode.owns_keyboard() && !matches!(app.overlay.mode, Mode::Launch | Mode::Store) {
                 crate::bookmarks::closing_on_blur(app);
                 close(app);
             }
@@ -667,7 +706,7 @@ pub fn refresh(app: &mut App) {
             suggest(app, x, w, text);
         }
         // The bookmark list is redrawn by `bookmarks` itself on every change.
-        Mode::Suggest | Mode::Hidden | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch => {}
+        Mode::Suggest | Mode::Hidden | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch | Mode::Store => {}
     }
 }
 
@@ -696,7 +735,7 @@ mod tests {
         // Suggest keeps the keyboard in the address input: the page that
         // replaces it must take the focus itself.
         assert!(!Mode::Suggest.owns_keyboard() && !Mode::Hidden.owns_keyboard());
-        for m in [Mode::History, Mode::Bookmarks, Mode::Menu, Mode::Settings, Mode::Launch] {
+        for m in [Mode::History, Mode::Bookmarks, Mode::Menu, Mode::Settings, Mode::Launch, Mode::Store] {
             assert!(m.owns_keyboard());
         }
     }

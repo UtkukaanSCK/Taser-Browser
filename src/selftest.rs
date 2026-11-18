@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 556;
+const EXPECTED_CHECKS: u32 = 561;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -339,7 +339,12 @@ const DELAYS: &[u64] = &[
     1500, // 256 check enabled; load the ad page
     2500, // 257 check (d) blocked again; remove
     2000, // 258 check (e) removed
-    900,  // 259 last tab close quits
+    2500, // 259 Web Store: add the extension again; load an ordinary page
+    1200, // 260 check the store button is off; the page goes to the sentinel
+    900,  // 261 check it was refused; open the remove question
+    900,  // 262 check the question; answer "no"
+    900,  // 263 check it closed
+    900,  // 264 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -4437,6 +4442,69 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         259 => {
+            // The extension back, for the remove question below.
+            let again = dir().join("profile").join(crate::extensions::DIR).join(EXT_ID).join("2.0");
+            match write_test_extension(&again, "2.0") {
+                Ok(()) => remember("ext-op", crate::extensions::add(app, &again, crate::extensions::Source::Unpacked) as i64),
+                Err(e) => check("ext-test-extension-written", false, e),
+            }
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/".into())));
+        }
+        260 => {
+            // Not a store detail page: no store button.
+            eval(Some(&app.ui), "store-button-off-elsewhere", "String(document.getElementById('ext-store').hidden)", |r| {
+                check("store-button-off-elsewhere", r == "true", r);
+            });
+            // Another site's page goes to the sentinel itself: cancelled, never asked.
+            let to = crate::cws::sentinel_url(crate::cws::Action::Install, EXT_ID);
+            page_js(app, &format!("location.href = '{to}'"));
+        }
+        261 => {
+            let id = app.tabs.active().unwrap();
+            let loading = app.tabs.get(id).is_some_and(|t| t.loading);
+            check(
+                "store-sentinel-from-another-page-is-refused",
+                app.overlay.mode != Mode::Store && app.webstore.busy_with().is_none() && !loading && active_url(app).starts_with("https://example.com/"),
+                format!("{:?}, job {:?}, loading {loading}, url {}", app.overlay.mode, app.webstore.busy_with(), active_url(app)),
+            );
+            // The question itself, as the button on a detail page opens it.
+            crate::webstore::on_store_button(app, id, crate::cws::Action::Remove, EXT_ID);
+        }
+        262 => {
+            log(&format!(
+                "INFO step 262: X-Browser is the foreground window: {}; extension added again: {:?}",
+                crate::native::is_foreground(&app.window),
+                ext_outcome(app, "ext-op")
+            ));
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "store-question-opens",
+                app.overlay.mode == Mode::Store && shown && app.webstore.busy_with() == Some(EXT_ID),
+                format!("{:?}, visible {shown}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+            eval(app.overlay.view(), "store-question-shows-the-removal", STORE_ASK_JS, |r| {
+                check(
+                    "store-question-shows-the-removal",
+                    field(&r, "hidden") == "false"
+                        && field(&r, "launch") == "true"
+                        && field(&r, "title") == "Bu uzantı kaldırılsın mı?"
+                        && field(&r, "yes") == "Kaldır"
+                        && field(&r, "meta").contains(EXT_ID)
+                        && field(&r, "perms") == "true"
+                        && field(&r, "focus") == "x-no",
+                    r,
+                );
+            });
+            app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
+        }
+        263 => {
+            check(
+                "store-question-no-closes",
+                overlay_closed(app) && app.webstore.busy_with().is_none(),
+                format!("{:?}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+        }
+        264 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -4715,6 +4783,12 @@ const SECURITY_JS: &str = "(() => { const g = (id) => document.getElementById(id
 /// is "hidden", "disabled" (shown as off, `aria-disabled`) or "on";
 /// `native`: it is a `disabled` button, which would swallow the presses that
 /// restart the wait; `failed`: the failure line is shown.
+/// The Web Store question's fields, read back as `key=value;...`.
+const STORE_ASK_JS: &str = "(() => { const g = (id) => document.getElementById(id); \
+  return [`hidden=${g('ext-ask').hidden}`, `launch=${g('launch').hidden}`, `title=${g('x-title').textContent}`, \
+  `yes=${g('x-yes').hidden ? 'hidden' : g('x-yes').textContent}`, `meta=${g('x-meta').textContent}`, \
+  `perms=${g('x-perms').hidden}`, `focus=${document.activeElement ? document.activeElement.id : ''}`].join(';'); })()";
+
 const LAUNCH_JS: &str = "(() => { const g = (id) => document.getElementById(id), u = g('l-uri'), o = g('l-open'); \
   return [`hidden=${g('launch').hidden}`, `scheme=${g('l-scheme').textContent}`, `origin=${g('l-origin').textContent}`, \
   `markup=${u.children.length}`, `h=${u.getBoundingClientRect().height}`, \

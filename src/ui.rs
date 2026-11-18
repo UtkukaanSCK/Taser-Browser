@@ -24,6 +24,8 @@ const BOOKMARKS_JS: &str = include_str!("../ui/js/bookmarks.js");
 const MENU_JS: &str = include_str!("../ui/js/menu.js");
 const SETTINGS_JS: &str = include_str!("../ui/js/settings.js");
 const SECURITY_JS: &str = include_str!("../ui/js/security.js");
+const WEBSTORE_JS: &str = include_str!("../ui/js/webstore.js");
+const EXTASK_JS: &str = include_str!("../ui/js/extask.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -87,6 +89,8 @@ fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/js/menu.js" => (MENU_JS, "text/javascript; charset=utf-8"),
         "/js/settings.js" => (SETTINGS_JS, "text/javascript; charset=utf-8"),
         "/js/security.js" => (SECURITY_JS, "text/javascript; charset=utf-8"),
+        "/js/webstore.js" => (WEBSTORE_JS, "text/javascript; charset=utf-8"),
+        "/js/extask.js" => (EXTASK_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })
@@ -115,7 +119,13 @@ fn ipc_command(origin: &str, body: &str, overlay: bool) -> Option<UiCommand> {
     if !is_ui_origin(origin) {
         return None;
     }
-    UiCommand::parse(body).filter(|cmd| overlay || !matches!(cmd, UiCommand::Launch(_)))
+    UiCommand::parse(body).filter(|cmd| match cmd {
+        UiCommand::Launch(_) => overlay,
+        // The Web Store question is answered in the overlay; its button is
+        // in the strip.
+        UiCommand::Store(c) => overlay == c.is_answer(),
+        _ => true,
+    })
 }
 
 /// What the UI and overlay webviews share: our assets on the `xb` protocol,
@@ -234,6 +244,14 @@ mod tests {
         assert!(ipc_command(ui, "launch-open", true).is_some(), "the overlay answers the question");
         assert_eq!(ipc_command(ui, "launch-open", false), None, "the strip does not");
         assert_eq!(ipc_command("https://example.com/", "launch-open", true), None);
+        for answer in ["ext-yes", "ext-no", "ext-press"] {
+            assert!(matches!(ipc_command(ui, answer, true), Some(UiCommand::Store(_))), "{answer}");
+            assert_eq!(ipc_command(ui, answer, false), None, "the strip does not answer: {answer}");
+            assert_eq!(ipc_command("https://chromewebstore.google.com/", answer, true), None);
+        }
+        assert!(matches!(ipc_command(ui, "ext-store", false), Some(UiCommand::Store(_))), "the strip's button");
+        assert_eq!(ipc_command(ui, "ext-store", true), None, "not from the overlay");
+        assert_eq!(ipc_command(ui, "ext-yes:1", true), None, "no argument");
     }
 
     #[test]
@@ -313,7 +331,7 @@ mod tests {
 
     #[test]
     fn scripts_never_write_html() {
-        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS, SECURITY_JS] {
+        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS, SECURITY_JS, WEBSTORE_JS, EXTASK_JS] {
             for bad in [".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval("] {
                 assert!(!js.contains(bad), "{bad}");
             }

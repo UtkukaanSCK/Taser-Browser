@@ -382,19 +382,39 @@ pub struct Listed {
     pub installed: bool,
 }
 
+/// The id an add must come back as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expect {
+    /// A reconcile re-add of a recorded entry: another id means its folder
+    /// no longer holds it, so the entry is dropped.
+    Readd(String),
+    /// A store install or update (`webstore`): another id is refused, and
+    /// what is recorded for the id (the version installed before, its
+    /// folder) is left as it was.
+    Install(String),
+}
+
+impl Expect {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Readd(id) | Self::Install(id) => id,
+        }
+    }
+}
+
 /// Answers from `native::extensions`, delivered as `UserEvent::Extension`.
 #[derive(Debug)]
 pub enum Event {
     /// The reconcile's look at the profile.
     Listed(Result<Vec<ExtensionInfo>, String>),
-    /// `expect`: the recorded id a reconcile re-add must come back as.
+    /// `expect`: the id the add must come back as (`Expect`).
     Added {
         op: Op,
         dir: String,
         source: Source,
         enabled: bool,
         manifest: Manifest,
-        expect: Option<String>,
+        expect: Option<Expect>,
         result: Result<ExtensionInfo, String>,
     },
     Enabled { op: Op, id: String, on: bool, result: Result<bool, String> },
@@ -464,26 +484,31 @@ impl Extensions {
     }
 
     /// Records what WebView2 installed from `dir`, replacing the entry with
-    /// the same id. Refused (nothing recorded) when it is not the id a
-    /// reconcile re-add `expect`ed (that entry is dropped) or when the list
-    /// is full; `undo` then says WebView2 did not have it before, so it is
-    /// to be taken out again.
+    /// the same id. Refused (nothing recorded) when it is not the id
+    /// `expect`ed (for a reconcile re-add that entry is dropped; for a store
+    /// install the record is left as it was) or when the list is full;
+    /// `undo` then says WebView2 did not have it before, so it is to be
+    /// taken out again.
     fn record_added(
         &mut self,
         info: &ExtensionInfo,
         dir: String,
         source: Source,
         manifest: Manifest,
-        expect: Option<&str>,
+        expect: Option<&Expect>,
         now: u64,
     ) -> Result<(), Refused> {
         let had = self.live.iter().any(|l| l.id == info.id) || self.file.items.iter().any(|e| e.id == info.id && !e.removed);
         if let Some(want) = expect
-            && want != info.id
+            && want.id() != info.id
         {
-            self.file.items.retain(|e| e.id != want);
-            self.save();
-            return Err(Refused { why: format!("{dir} now holds extension {} instead of {want}; forgotten", info.id), undo: !had });
+            let mut why = format!("{dir} holds extension {} instead of {}", info.id, want.id());
+            if let Expect::Readd(id) = want {
+                self.file.items.retain(|e| e.id != *id);
+                self.save();
+                why.push_str("; forgotten");
+            }
+            return Err(Refused { why, undo: !had });
         }
         let old = self.file.items.iter().position(|e| e.id == info.id);
         if old.is_none() && self.file.items.len() >= MAX_ITEMS {
@@ -649,7 +674,19 @@ pub fn add(app: &mut App, dir: &Path, source: Source) -> Op {
     op
 }
 
-fn add_as(app: &mut App, op: Op, dir: &Path, source: Source, enabled: bool, expect: Option<String>) {
+/// Installs the unpacked store package in `dir` (see `webstore`), which
+/// must come back as extension `id`. Nothing is recorded unless it does; a
+/// version recorded before is then left as it was. Removing the folder of
+/// the version replaced is left to extension management (task 5B).
+pub fn add_from_store(app: &mut App, dir: &Path, id: &str) -> Op {
+    let op = app.extensions.start_op();
+    // An update keeps an extension the user turned off, off.
+    let enabled = app.extensions.list().iter().find(|l| l.id == id).is_none_or(|l| l.enabled);
+    add_as(app, op, dir, Source::Cws, enabled, Some(Expect::Install(id.to_owned())));
+    op
+}
+
+fn add_as(app: &mut App, op: Op, dir: &Path, source: Source, enabled: bool, expect: Option<Expect>) {
     let checked = match dir.to_str() {
         Some(d) if valid_dir(d) => read_manifest(dir).map(|m| (d.to_owned(), m)),
         _ => Err("not an absolute folder path".into()),
@@ -772,7 +809,7 @@ pub fn on_event(app: &mut App, ev: Event) {
                 p.unknown.into_iter().filter(|id| x.live.iter().any(|l| l.id == *id && l.enabled)).collect();
             x.reconcile = Reconcile::Done;
             for e in again {
-                add_as(app, 0, Path::new(&e.dir), e.source, e.enabled, Some(e.id));
+                add_as(app, 0, Path::new(&e.dir), e.source, e.enabled, Some(Expect::Readd(e.id)));
             }
             // Until the extensions page (task 5) can show and remove them.
             for id in unknown_on {
@@ -786,7 +823,7 @@ pub fn on_event(app: &mut App, ev: Event) {
                 eprintln!("x-browser: extension id {} differs from its manifest key's", info.id);
             }
             let now = crate::history::now_secs();
-            match app.extensions.record_added(&info, dir, source, manifest, expect.as_deref(), now) {
+            match app.extensions.record_added(&info, dir, source, manifest, expect.as_ref(), now) {
                 Ok(()) => {
                     app.extensions.finish(op, Ok(info.id.clone()));
                     // A re-added extension that was off stays off.
@@ -1015,13 +1052,19 @@ mod tests {
         assert_eq!((x.records()[1].dir.as_str(), x.records()[1].installed), (r"C:\b", 50));
         // A re-add that came back as another id: the entry is dropped.
         let new = "cccccccccccccccccccccccccccccccc";
-        let r = x.record_added(&info(new), r"C:\a".into(), Source::Unpacked, manifest(), Some(ID), 70);
+        let r = x.record_added(&info(new), r"C:\a".into(), Source::Unpacked, manifest(), Some(&Expect::Readd(ID.into())), 70);
         assert!(r.as_ref().is_err_and(|r| r.undo), "{r:?}");
         let ids: Vec<&str> = x.records().iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, [ID2]);
         // ... but what WebView2 had already is not taken out.
-        let r = x.record_added(&info(ID2), r"C:\a".into(), Source::Unpacked, manifest(), Some(new), 70);
+        let r = x.record_added(&info(ID2), r"C:\a".into(), Source::Unpacked, manifest(), Some(&Expect::Readd(new.into())), 70);
         assert!(r.as_ref().is_err_and(|r| !r.undo), "{r:?}");
+        // A store install that came back as another id: refused, and the
+        // version recorded before keeps its entry and folder.
+        let before = x.records().to_vec();
+        let r = x.record_added(&info(new), r"C:\z".into(), Source::Cws, manifest(), Some(&Expect::Install(ID2.into())), 75);
+        assert!(r.as_ref().is_err_and(|r| r.undo), "{r:?}");
+        assert_eq!(x.records(), &before[..]);
         // Full: refused, nothing dropped to make room.
         x.file.items = (0..MAX_ITEMS).map(|i| entry(&format!("{i:0>32}"), r"C:\x")).collect();
         let r = x.record_added(&info(new), r"C:\n".into(), Source::Unpacked, manifest(), None, 80);

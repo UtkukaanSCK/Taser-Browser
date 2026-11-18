@@ -26,6 +26,7 @@ mod tabs;
 mod timing;
 mod ui;
 mod url;
+mod webstore;
 
 use app::{App, UserEvent};
 use std::path::Path;

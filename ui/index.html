@@ -9,6 +9,7 @@
 <script src="/js/suggest.js" defer></script>
 <script src="/js/bookmarks.js" defer></script>
 <script src="/js/security.js" defer></script>
+<script src="/js/webstore.js" defer></script>
 </head>
 <body class="bg-strip text-ink font-sans text-[13px] leading-none">
 <div id="strip" class="relative flex h-10 items-center gap-1 border-b border-line pl-1.5">
@@ -54,6 +55,13 @@
             class="ml-1 flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-muted hover:bg-hover hover:text-ink">
       <svg class="size-3" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg>
       <span id="zoom-level"></span>
+    </button>
+    <!-- On a Chrome Web Store detail page (webstore.js): add its extension,
+         or remove it if X-Browser has it. Rust asks before either. -->
+    <button id="ext-store" type="button" hidden
+            class="ml-1 flex h-5 shrink-0 items-center gap-1 rounded border border-line px-1.5 text-[11px] text-ink hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent aria-busy:opacity-60">
+      <svg aria-hidden="true" class="size-3 shrink-0" viewBox="0 0 16 16"><path d="M6 2.5h3V4a1 1 0 0 0 2 0V2.5h2.5V6H12a1 1 0 0 0 0 2h1.5v5.5H10V12a1 1 0 0 0-2 0v1.5H2.5V10H4a1 1 0 0 0 0-2H2.5V4.5H6z"/></svg>
+      <span id="ext-store-text"></span>
     </button>
     <!-- Bookmark star (bookmarks.js): filled while the page is bookmarked. -->
     <button id="bm-star" type="button" disabled aria-label="Yer imi" aria-pressed="false" title="Bu sayfayı yer imlerine ekle (Ctrl+D)"

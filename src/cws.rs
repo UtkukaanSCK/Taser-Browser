@@ -108,13 +108,18 @@ pub enum SentinelDecision {
     Ask(Action, String),
 }
 
+/// Whether `url` is under the sentinel root: a navigation the policy handler
+/// always cancels, so it never loads and starts no spinner.
+pub fn is_sentinel(url: &str) -> bool {
+    url.get(..SENTINEL_ROOT.len()).is_some_and(|p| p.eq_ignore_ascii_case(SENTINEL_ROOT))
+}
+
 /// Decides a navigation to `url` from a tab whose committed `Source` is
 /// `current_source`. Pass `is_redirected` from the event args: a redirect hop
 /// is never honoured, because `Source` still shows the old page while any
 /// server answers with a `Location` pointing at the sentinel.
 pub fn sentinel_decision(current_source: &str, url: &str, is_redirected: bool) -> SentinelDecision {
-    let under_root = url.get(..SENTINEL_ROOT.len()).is_some_and(|p| p.eq_ignore_ascii_case(SENTINEL_ROOT));
-    if !under_root {
+    if !is_sentinel(url) {
         return SentinelDecision::Pass;
     }
     if is_redirected {
