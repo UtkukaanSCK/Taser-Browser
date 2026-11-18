@@ -8,6 +8,7 @@ mod crx;
 mod cws;
 mod downloads;
 mod extensions;
+mod firstrun;
 mod history;
 mod instance;
 mod menu;

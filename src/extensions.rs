@@ -32,6 +32,8 @@
 //!   listed or recorded (`BUILTIN`).
 //! - Operations complete asynchronously: each returns an `Op` whose result
 //!   `Extensions::outcome` gives once WebView2 has answered.
+//! - The file also keeps the first-run uBOL state (`first_run_ubol`, see
+//!   `firstrun`); the reconcile's end starts that job.
 // add / list / enable / remove have no caller in the app until the
 // Uzantılar page (task 5); the self-test uses all of them.
 #![cfg_attr(not(feature = "selftest"), allow(dead_code))]
@@ -120,6 +122,8 @@ fn is_false(b: &bool) -> bool {
 pub struct ExtFile {
     #[serde(deserialize_with = "lenient")]
     pub items: Vec<Entry>,
+    /// Missing: pending (see `firstrun::State`).
+    pub first_run_ubol: crate::firstrun::State,
 }
 
 /// The items of an array, each read on its own: one that is not an entry
@@ -399,6 +403,9 @@ pub enum Event {
     },
     Enabled { op: Op, id: String, on: bool, result: Result<bool, String> },
     Removed { op: Op, id: String, result: Result<bool, String> },
+    /// Stand-in for task 4's `UserEvent::StoreInstalled` until the merge;
+    /// only the self-test's fake store sends it (`firstrun::fake`).
+    StoreInstalled { id: String, result: Result<String, crate::firstrun::FailureKind> },
 }
 
 #[derive(Default)]
@@ -412,6 +419,8 @@ pub struct Extensions {
     pub reconcile: Reconcile,
     next_op: Op,
     outcomes: Vec<(Op, Result<String, String>)>,
+    /// What this start's first-run job has done (not saved).
+    pub first_run: crate::firstrun::Session,
 }
 
 impl Extensions {
@@ -531,6 +540,28 @@ impl Extensions {
         }
         self.save();
         result.map(|()| id.to_owned()).map_err(|e| format!("{e} (tried again at the next start)"))
+    }
+
+    /// Whether there is a file to keep anything in.
+    pub fn persists(&self) -> bool {
+        self.store.is_some()
+    }
+
+    /// Whether `id` is recorded (and not on its way out).
+    pub fn has_record(&self, id: &str) -> bool {
+        self.file.items.iter().any(|e| e.id == id && !e.removed)
+    }
+
+    pub fn first_run_ubol(&self) -> crate::firstrun::State {
+        self.file.first_run_ubol
+    }
+
+    /// Sets and saves the first-run uBOL state.
+    pub fn set_first_run_ubol(&mut self, state: crate::firstrun::State) {
+        if self.file.first_run_ubol != state {
+            self.file.first_run_ubol = state;
+            self.save();
+        }
     }
 
     /// Where X-Browser keeps its own unpacked extensions.
@@ -709,6 +740,7 @@ pub fn on_view_created(app: &mut App) {
     if app.ui_ready {
         on_ui_ready(app);
     }
+    crate::firstrun::on_view_created(app);
 }
 
 /// The start-up reconcile, once the UI is up and a content tab exists (else
@@ -752,6 +784,7 @@ pub fn on_event(app: &mut App, ev: Event) {
         Event::Listed(Err(e)) => {
             eprintln!("x-browser: cannot list extensions: {e}");
             app.extensions.reconcile = Reconcile::Done;
+            crate::firstrun::on_reconcile_done(app);
         }
         Event::Listed(Ok(all)) => {
             let x = &mut app.extensions;
@@ -779,6 +812,7 @@ pub fn on_event(app: &mut App, ev: Event) {
                 eprintln!("x-browser: extension {id} was not installed by X-Browser; turned off");
                 set_enabled_as(app, 0, &id, false);
             }
+            crate::firstrun::on_reconcile_done(app);
         }
         Event::Added { op, result: Err(e), .. } => app.extensions.finish(op, Err(e)),
         Event::Added { op, dir, source, enabled, manifest, expect, result: Ok(info) } => {
@@ -821,10 +855,12 @@ pub fn on_event(app: &mut App, ev: Event) {
         }
         Event::Removed { op, result: Err(e), .. } => app.extensions.finish(op, Err(e)),
         Event::Removed { op, id, result: Ok(confirmed) } => {
+            crate::firstrun::on_removed(app, &id);
             let x = &mut app.extensions;
             let result = x.record_removed(&id, confirmed);
             x.finish(op, result);
         }
+        Event::StoreInstalled { id, result } => crate::firstrun::on_install_result(app, &id, result),
     }
 }
 
@@ -908,12 +944,12 @@ mod tests {
     fn an_unreadable_file_falls_back_to_the_backup() {
         let dir = temp_dir("ext-bak");
         let mut store = Store::<ExtFile>::new(&dir);
-        let good = ExtFile { items: vec![entry(ID, r"C:\e\1.0")] };
+        let good = ExtFile { items: vec![entry(ID, r"C:\e\1.0")], ..ExtFile::default() };
         store.save_now(&good).unwrap();
         // A second run: its first save keeps the previous file as `.bak`.
         let mut store = Store::<ExtFile>::new(&dir);
         assert_eq!(store.load().value, good);
-        store.save_now(&ExtFile { items: vec![entry(ID, r"C:\e\1.1")] }).unwrap();
+        store.save_now(&ExtFile { items: vec![entry(ID, r"C:\e\1.1")], ..ExtFile::default() }).unwrap();
         assert!(dir.join(format!("{FILE}.bak")).exists());
         std::fs::write(dir.join(FILE), b"{\"v\":1,\"items\":[{\"id\"").unwrap();
         let loaded = Store::<ExtFile>::new(&dir).load();
@@ -990,7 +1026,7 @@ mod tests {
             entry("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", r"C:\kept"),
         ];
         let mut store = Store::<ExtFile>::new(&dir);
-        store.save_now(&ExtFile { items }).unwrap();
+        store.save_now(&ExtFile { items, ..ExtFile::default() }).unwrap();
         let x = Extensions::open(Some(&dir));
         assert!(!root.join(ID).exists(), "owned: deleted");
         assert!(other.exists(), "not X-Browser's: left alone");

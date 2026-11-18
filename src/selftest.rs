@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 556;
+const EXPECTED_CHECKS: u32 = 564;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -339,7 +339,11 @@ const DELAYS: &[u64] = &[
     1500, // 256 check enabled; load the ad page
     2500, // 257 check (d) blocked again; remove
     2000, // 258 check (e) removed
-    900,  // 259 last tab close quits
+    600,  // 259 first-run uBOL: offline at the start; a next start, busy
+    600,  // 260 check busy waits; another install finishes
+    1500, // 261 check done; a start after it; remove uBOL
+    600,  // 262 check user_removed; a start after it
+    900,  // 263 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -4437,6 +4441,80 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         259 => {
+            // First-run uBOL, against the fake store (`firstrun::fake`). The
+            // planted file has no state (pending), and this start's try,
+            // after the reconcile, was answered offline.
+            use crate::firstrun::{FailureKind, Run, State, fake};
+            crate::store::flush(Duration::from_secs(2));
+            let file = read_text(&dir().join("profile").join(crate::extensions::FILE));
+            let (state, run) = (app.extensions.first_run_ubol(), app.extensions.first_run.run);
+            check(
+                "firstrun-offline-leaves-pending",
+                fake::starts() == 1 && state == State::Pending && run == Run::Over && file.contains(r#""first_run_ubol":"pending""#),
+                format!("starts {}, {state:?}, {run:?}, file {file}", fake::starts()),
+            );
+            crate::firstrun::on_reconcile_done(app);
+            check("firstrun-no-second-try-in-the-same-start", fake::starts() == 1, format!("starts {}", fake::starts()));
+            // The next start: busy, then the one more try succeeds.
+            fake::next_start(app);
+            fake::plan(Err(FailureKind::Busy));
+            fake::plan(Ok("2026.1116.1650".into()));
+            crate::firstrun::on_reconcile_done(app);
+        }
+        260 => {
+            use crate::firstrun::{Run, State, fake};
+            let (state, run) = (app.extensions.first_run_ubol(), app.extensions.first_run.run);
+            check(
+                "firstrun-busy-waits-for-the-next-install",
+                fake::starts() == 2 && state == State::Pending && run == Run::AfterBusy,
+                format!("starts {}, {state:?}, {run:?}", fake::starts()),
+            );
+            // Another store install finishes.
+            fake::send(app, EXT_ID, Ok("1.0".into()));
+        }
+        261 => {
+            use crate::firstrun::{Run, State, fake};
+            let profile = dir().join("profile");
+            crate::store::flush(Duration::from_secs(2));
+            let file = read_text(&profile.join(crate::extensions::FILE));
+            let (state, run) = (app.extensions.first_run_ubol(), app.extensions.first_run.run);
+            check(
+                "firstrun-busy-tries-once-more-and-writes-done",
+                fake::starts() == 3 && state == State::Done && run == Run::Over && file.contains(r#""first_run_ubol":"done""#),
+                format!("starts {}, {state:?}, {run:?}, file {file}", fake::starts()),
+            );
+            let back = crate::store::Store::<crate::extensions::ExtFile>::new(&profile).load().value.first_run_ubol;
+            check("firstrun-done-is-read-back", back == State::Done, format!("{back:?}"));
+            fake::next_start(app);
+            crate::firstrun::on_reconcile_done(app);
+            check("firstrun-done-does-not-download-again", fake::starts() == 3, format!("starts {}", fake::starts()));
+            // The user removes it (WebView2 answers: not installed).
+            remember("ext-op", crate::extensions::remove(app, crate::firstrun::UBOL_ID) as i64);
+        }
+        262 => {
+            use crate::firstrun::{Run, State, UBOL_ID, fake};
+            let outcome = ext_outcome(app, "ext-op");
+            crate::store::flush(Duration::from_secs(2));
+            let file = read_text(&dir().join("profile").join(crate::extensions::FILE));
+            let state = app.extensions.first_run_ubol();
+            check(
+                "firstrun-removal-makes-it-user-removed",
+                outcome == Some(Ok(UBOL_ID.to_string())) && state == State::UserRemoved && file.contains(r#""first_run_ubol":"user_removed""#),
+                format!("outcome {outcome:?}, {state:?}, file {file}"),
+            );
+            fake::next_start(app);
+            fake::plan(Ok("2026.1116.1650".into()));
+            crate::firstrun::on_reconcile_done(app);
+            crate::firstrun::on_view_created(app);
+            crate::firstrun::on_install_result(app, EXT_ID, Ok("1.0".into()));
+            let run = app.extensions.first_run.run;
+            check(
+                "firstrun-user-removed-never-reinstalls",
+                fake::starts() == 3 && run == Run::NotYet && app.extensions.first_run_ubol() == State::UserRemoved,
+                format!("starts {}, {run:?}", fake::starts()),
+            );
+        }
+        263 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
