@@ -18,11 +18,9 @@
 //!   `user_removed`, which is never installed again. Removed while this
 //!   start's install was running, it still lands once and is taken back out.
 //! - The install itself is task 4's (`webstore::install_from_store`): the
-//!   seam is `start_install` out and `on_install_result` back. Until the two
-//!   are joined, a normal build starts nothing and the self-test answers
-//!   with planned results (`fake`).
-// Until the merge, nothing outside the self-test sends a result.
-#![cfg_attr(not(feature = "selftest"), allow(dead_code))]
+//!   seam is `start_install` out and `on_install_result` back
+//!   (`webstore::on_installed`). The self-test answers with planned results
+//!   instead (`fake`), so it never reaches the network.
 
 use crate::app::App;
 use crate::extensions::Extensions;
@@ -57,21 +55,8 @@ impl<'de> Deserialize<'de> for State {
     }
 }
 
-/// Why an install failed: task 4's `webstore::Failure`, by kind. The merge
-/// swaps this for the real type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // Only the self-test and the unit tests make them until then.
-pub enum FailureKind {
-    Cancelled,
-    /// Another install is running.
-    Busy,
-    BadId,
-    /// No content webview to install into.
-    NoView,
-    Net(String),
-    Package(String),
-    Install(String),
-}
+/// Why an install failed (`webstore::Failure`).
+pub type FailureKind = crate::webstore::Failure;
 
 /// What this start has done so far (not saved).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -202,12 +187,11 @@ pub fn on_view_created(app: &mut App) {
 
 /// The seam, out: installs `id` from the Chrome Web Store without asking.
 /// Its result must always come back, asynchronously, as `on_install_result`.
-/// Merge: `crate::webstore::install_from_store(app, id, false)`.
 pub fn start_install(app: &mut App, id: &str) {
     #[cfg(feature = "selftest")]
     fake::start(app, id);
     #[cfg(not(feature = "selftest"))]
-    let _ = (app, id);
+    crate::webstore::install_from_store(app, id, false);
 }
 
 /// The seam, back: called with every store install's result

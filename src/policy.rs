@@ -516,6 +516,10 @@ pub enum Event {
     /// WebView2 was about to open `uri` in another application (and was
     /// stopped). `user`: the page had a user gesture for it.
     ExternalLaunch { uri: String, origin: String, user: bool },
+    /// The Web Store page's own install or remove button was pressed on the
+    /// committed detail page of extension `id` (`cws::sentinel_decision`;
+    /// the navigation was cancelled).
+    Store { action: crate::cws::Action, id: String },
 }
 
 /// Hosts remembered for a bad certificate. None is ever forgotten: see
@@ -627,6 +631,13 @@ pub fn on_event(app: &mut App, tab: TabId, ev: Event) {
             }
             return;
         }
+        Event::Store { action, id } => {
+            // As for a launch: only the page the user is looking at may ask.
+            if app.tabs.active() == Some(tab) {
+                crate::webstore::on_store_button(app, tab, action, &id);
+            }
+            return;
+        }
     }
     app.mark_dirty();
 }
@@ -650,6 +661,7 @@ pub fn on_page(app: &mut App, tab: TabId, ev: &PageEvent) {
 pub fn on_switch(app: &mut App) {
     app.policy.launch.dismiss();
     sync_question(app);
+    crate::webstore::on_switch(app);
 }
 
 /// A content tab's renderer failed. A hung renderer may still answer again;

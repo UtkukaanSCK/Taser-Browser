@@ -8,6 +8,8 @@
 @source "./js/bookmarks.js";
 @source "./js/menu.js";
 @source "./js/settings.js";
+@source "./js/webstore.js";
+@source "./js/extask.js";
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;

@@ -69,10 +69,36 @@ mod imp {
             )?;
 
             let (to, shown) = (nav.clone(), committed.clone());
+            let p = proxy.clone();
             wv.add_NavigationStarting(
-                &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                &NavigationStartingEventHandler::create(Box::new(move |sender, args| {
                     let mut uri = PWSTR::null();
                     let uri = if args.as_ref().is_some_and(|a| a.Uri(&mut uri).is_ok()) { take_pwstr(uri) } else { String::new() };
+                    // The Web Store button's sentinel address (`cws`) never
+                    // loads: it is cancelled here, and only a request from the
+                    // committed detail page of the same id is asked about. A
+                    // redirect flag or `Source` that cannot be read counts
+                    // against it. Still recorded below as started: WebView2
+                    // completes a cancelled navigation like any other.
+                    if let Some(a) = &args {
+                        let mut redirected = BOOL(1);
+                        let redirected = a.IsRedirected(&mut redirected).is_err() || redirected.as_bool();
+                        let mut source = PWSTR::null();
+                        let source = match &sender {
+                            Some(s) if s.Source(&mut source).is_ok() => take_pwstr(source),
+                            _ => String::new(),
+                        };
+                        match crate::cws::sentinel_decision(&source, &uri, redirected) {
+                            crate::cws::SentinelDecision::Pass => {}
+                            crate::cws::SentinelDecision::Cancel => {
+                                let _ = a.SetCancel(true);
+                            }
+                            crate::cws::SentinelDecision::Ask(action, id) => {
+                                let _ = a.SetCancel(true);
+                                let _ = p.send_event(UserEvent::Policy(tab, Event::Store { action, id }));
+                            }
+                        }
+                    }
                     let mut id = 0u64;
                     if let Some(a) = &args {
                         let _ = a.NavigationId(&mut id);

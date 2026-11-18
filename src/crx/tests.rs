@@ -15,7 +15,7 @@ use windows::Win32::Security::Cryptography::{
 
 // --- keys ------------------------------------------------------------------
 
-struct TestKey {
+pub(crate) struct TestKey {
     h: BCRYPT_KEY_HANDLE,
     alg: Alg,
     spki: Vec<u8>,
@@ -30,7 +30,7 @@ impl Drop for TestKey {
 }
 
 impl TestKey {
-    fn rsa() -> Self {
+    pub(crate) fn rsa() -> Self {
         Self::generate(Alg::Rsa, 2048)
     }
 
@@ -102,7 +102,7 @@ impl TestKey {
         cng::sha256(&[&self.spki]).unwrap()[..16].try_into().unwrap()
     }
 
-    fn id(&self) -> String {
+    pub(crate) fn id(&self) -> String {
         id_from_hash(&self.crx_id())
     }
 
@@ -213,14 +213,14 @@ fn crx_signed(zip: &[u8], crx_id: &[u8; 16], keys: &[&TestKey]) -> Vec<u8> {
 }
 
 /// A package for `keys[0]`'s id, signed by every key.
-fn crx(zip: &[u8], keys: &[&TestKey]) -> Vec<u8> {
+pub(crate) fn crx(zip: &[u8], keys: &[&TestKey]) -> Vec<u8> {
     crx_signed(zip, &keys[0].crx_id(), keys)
 }
 
 // --- zip building ----------------------------------------------------------
 
 #[derive(Clone)]
-struct Ent {
+pub(crate) struct Ent {
     name: Vec<u8>,
     data: Vec<u8>,
     method: u16,
@@ -233,7 +233,7 @@ struct Ent {
     csize: Option<u32>,
 }
 
-fn stored(name: &str, data: &[u8]) -> Ent {
+pub(crate) fn stored(name: &str, data: &[u8]) -> Ent {
     Ent {
         name: name.as_bytes().to_vec(),
         data: data.to_vec(),
@@ -255,7 +255,7 @@ fn dir(name: &str) -> Ent {
     Ent { attrs: 0x10, ..stored(name, b"") }
 }
 
-fn zip(ents: &[Ent]) -> Vec<u8> {
+pub(crate) fn zip(ents: &[Ent]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     for e in ents {

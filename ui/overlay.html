@@ -8,6 +8,7 @@
 <script src="/js/overlay.js" defer></script>
 <script src="/js/menu.js" defer></script>
 <script src="/js/settings.js" defer></script>
+<script src="/js/extask.js" defer></script>
 </head>
 <body class="bg-surface text-ink font-sans text-[13px] leading-none border border-line">
 <!-- Address-bar suggestions: 30px rows (ROW_H in overlay.rs), 4px padding. -->
@@ -149,6 +150,24 @@
          must start the wait again. -->
     <button id="l-open" type="button" aria-disabled="true" class="h-7 rounded-md border border-line px-3 hover:bg-hover aria-disabled:opacity-40 aria-disabled:hover:bg-transparent">Aç</button>
     <button id="l-cancel" type="button" class="h-7 rounded-md border border-accent px-3 hover:bg-hover">İptal</button>
+  </div>
+</section>
+
+<!-- The Web Store question (webstore.rs, extask.js): add or remove an
+     extension. Its name and permissions come from the package: written as
+     text, the list scrolls inside its box. -->
+<section id="ext-ask" role="alertdialog" aria-labelledby="x-title" aria-describedby="x-name x-meta x-note x-perms"
+  class="flex h-full flex-col gap-2 p-3" hidden>
+  <h1 id="x-title" class="text-[14px] font-semibold"></h1>
+  <p id="x-name" class="break-words font-semibold leading-snug empty:hidden"></p>
+  <p id="x-meta" class="break-all text-[12px] text-muted empty:hidden"></p>
+  <p id="x-note" role="status" class="leading-snug empty:hidden"></p>
+  <ul id="x-perms" tabindex="0" aria-label="İstediği izinler" hidden
+    class="min-h-0 flex-1 list-disc overflow-y-auto rounded-md border border-line py-1.5 pr-2 pl-6 leading-snug outline-none focus-visible:border-accent"></ul>
+  <div class="mt-auto flex items-center justify-end gap-2">
+    <!-- Off until a pause in pressing (extask.js); Rust has the last word. -->
+    <button id="x-yes" type="button" aria-disabled="true" class="h-7 rounded-md border border-line px-3 hover:bg-hover aria-disabled:opacity-40 aria-disabled:hover:bg-transparent">Ekle</button>
+    <button id="x-no" type="button" class="h-7 rounded-md border border-accent px-3 hover:bg-hover">İptal</button>
   </div>
 </section>
 </body>

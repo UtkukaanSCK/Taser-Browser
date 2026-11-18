@@ -43,6 +43,11 @@ pub enum UserEvent {
     Download(crate::downloads::Event),
     /// A WebView2 extension call has answered (see `extensions`).
     Extension(crate::extensions::Event),
+    /// A Web Store download or unpack has finished (see `webstore`).
+    Store(crate::webstore::Event),
+    /// A Web Store install ended: the version installed, or why not
+    /// (`webstore::install_from_store`).
+    StoreInstalled { id: String, result: Result<String, crate::webstore::Failure> },
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -148,6 +153,8 @@ pub struct App {
     pub policy: crate::policy::State,
     /// extensions.json and the content profile's extensions (see `extensions`).
     pub extensions: crate::extensions::Extensions,
+    /// The Web Store install or removal under way (see `webstore`).
+    pub webstore: crate::webstore::State,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -220,6 +227,7 @@ impl App {
             overlay: Default::default(),
             policy: Default::default(),
             extensions: Default::default(),
+            webstore: Default::default(),
             quit: false,
         })
     }
@@ -289,6 +297,9 @@ impl App {
             .with_bounds(bounds)
             .with_visible(false)
             .with_initialization_script_for_main_only(page_tools::NO_KEYBOARD_LOCK, false)
+            // The Web Store's install and remove buttons (`cws`): in every
+            // frame, so a subframe cannot reach the native dialog either.
+            .with_initialization_script_for_main_only(crate::cws::HOOK_SCRIPT, false)
             .with_document_title_changed_handler(move |title| {
                 let _ = p.send_event(UserEvent::Page(id, PageEvent::Title(title)));
             });
@@ -500,7 +511,12 @@ impl App {
         }
         if self.dirty && self.ui_ready {
             self.dirty = false;
-            let js = format!("xb.render({},{});{}", self.tabs.render_json(), self.window.is_maximized(), crate::policy::render_js(self));
+            let js = format!("xb.render({},{});{};{}",
+                self.tabs.render_json(),
+                self.window.is_maximized(),
+                crate::policy::render_js(self),
+                crate::webstore::render_js(self)
+            );
             if self.ui.evaluate_script(&js).is_ok() {
                 self.tabs.icons_sent();
             }
@@ -591,7 +607,10 @@ impl App {
             // (The star the same way: `bookmarks::sync_star` takes the file.)
             UserEvent::HistoryLoaded | UserEvent::BookmarksLoaded => {}
             UserEvent::Download(ev) => crate::downloads::on_event(self, ev),
-            UserEvent::Extension(ev) => crate::extensions::on_event(self, ev),
+            UserEvent::Extension(ev) => {
+                crate::extensions::on_event(self, ev);
+                crate::webstore::after_extension_event(self);
+            }
             UserEvent::Policy(tab, ev) => crate::policy::on_event(self, tab, ev),
             UserEvent::OpenFromOtherInstance(url) => {
                 if let Some(url) = url
@@ -608,6 +627,8 @@ impl App {
                 }
                 crate::instance::bring_forward(&self.window);
             }
+            UserEvent::Store(ev) => crate::webstore::on_event(self, ev),
+            UserEvent::StoreInstalled { id, result } => crate::webstore::on_installed(self, &id, &result),
             #[cfg(feature = "selftest")]
             UserEvent::Test(step) => crate::selftest::step(self, step),
         }
@@ -685,6 +706,7 @@ impl App {
             UiCommand::Menu(cmd) => crate::menu::on_command(self, cmd),
             UiCommand::Settings(cmd) => crate::settings::on_command(self, cmd),
             UiCommand::Launch(cmd) => crate::policy::on_command(self, cmd),
+            UiCommand::Store(cmd) => crate::webstore::on_command(self, cmd),
         }
     }
 

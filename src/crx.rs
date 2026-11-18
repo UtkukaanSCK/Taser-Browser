@@ -166,6 +166,19 @@ impl ZipPayload<'_> {
     pub fn key_hashes(&self) -> &[[u8; 32]] {
         &self.key_hashes
     }
+
+    /// The bytes of file `name` in the package (`/`-separated, matched
+    /// without regard to case), read before anything is unpacked: the
+    /// install question shows the manifest's name and permissions. None if
+    /// there is no such file. `Err(TooLarge)` if it is over `max` bytes.
+    pub fn file(&self, name: &str, max: u64) -> Result<Option<Vec<u8>>, CrxError> {
+        let entries = read_zip(self.zip)?;
+        let Some(e) = entries.iter().find(|e| !e.is_dir && e.name.eq_ignore_ascii_case(name)) else { return Ok(None) };
+        if e.size > max {
+            return Err(CrxError::TooLarge);
+        }
+        Ok(Some(entry_bytes(e)?.into_owned()))
+    }
 }
 
 /// The id Chrome derives from a key hash (or a `crx_id`): the first 16
@@ -1040,4 +1053,4 @@ fn crc32(data: &[u8]) -> u32 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

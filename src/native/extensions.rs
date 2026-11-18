@@ -171,6 +171,15 @@ mod imp {
         });
     }
 
+    /// The installed WebView2 runtime's version, e.g. `131.0.2903.70` (a
+    /// channel name after it, as in `89.0.774.18 dev`, is left out).
+    pub fn runtime_version() -> Option<String> {
+        let mut out = PWSTR::null();
+        unsafe { GetAvailableCoreWebView2BrowserVersionString(windows::core::PCWSTR::null(), &mut out).ok()? };
+        let text = take_pwstr(out);
+        text.split_whitespace().next().map(str::to_owned)
+    }
+
     /// Uninstalls extension `id` (WebView2 also drops its storage; the
     /// folder stays). `Ok(false)`: it was not installed.
     pub fn remove_extension(view: &WebView, id: &str, done: impl FnOnce(Result<bool, String>) + 'static) {
@@ -209,6 +218,9 @@ mod imp {
     }
     pub fn remove_extension(_: &WebView, _: &str, done: impl FnOnce(Result<bool, String>) + 'static) {
         done(Err(NONE.into()));
+    }
+    pub fn runtime_version() -> Option<String> {
+        None
     }
 }
 

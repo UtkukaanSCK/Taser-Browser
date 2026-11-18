@@ -262,9 +262,12 @@ mod imp {
                     }
                     // A jump to a #fragment of the same page loads nothing:
                     // no spinner, and the popups stay open (`Loading(true)`
-                    // closes them as a real navigation would).
+                    // closes them as a real navigation would). Nor does the
+                    // Web Store sentinel, which the policy handler always
+                    // cancels: the question it may open must stay open.
                     let same_page = args.as_ref().and_then(|a| nav_uri(a).ok()).is_some_and(|to| {
-                        wv.as_ref().and_then(source).is_some_and(|from| crate::url::same_document(&from, &to))
+                        crate::cws::is_sentinel(&to)
+                            || wv.as_ref().and_then(source).is_some_and(|from| crate::url::same_document(&from, &to))
                     });
                     if !same_page {
                         let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(true)));
