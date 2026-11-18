@@ -13,8 +13,10 @@
 //!   more try after the next store install finishes) and no content
 //!   webview (one more try once a content tab is made). Any other failure
 //!   stays `pending` for the next start.
-//! - Removing uBOL by hand (a `Removed` that WebView2 answered) makes it
-//!   `user_removed`, which is never installed again.
+//! - Removing uBOL by hand (a `Removed` that WebView2 answered for
+//!   `extensions::remove`; not X-Browser's own `remove_quietly`) makes it
+//!   `user_removed`, which is never installed again. Removed while this
+//!   start's install was running, it still lands once and is taken back out.
 //! - The install itself is task 4's (`webstore::install_from_store`): the
 //!   seam is `start_install` out and `on_install_result` back. Until the two
 //!   are joined, a normal build starts nothing and the self-test answers
@@ -90,17 +92,20 @@ pub struct Session {
     pub run: Run,
     busy_retried: bool,
     view_retried: bool,
+    /// See `take_out`.
+    take_out: bool,
 }
 
 // ------------------------------------------------------------ pure logic
 
 /// Whether to start the install now; if so it is marked started. Pending
-/// with uBOL already recorded (installed some other way) becomes done.
+/// with uBOL already recorded or already in the profile (installed some
+/// other way) becomes done.
 pub fn begin(x: &mut Extensions) -> bool {
     if !x.persists() || x.first_run_ubol() != State::Pending {
         return false;
     }
-    if x.has_record(UBOL_ID) {
+    if x.has_record(UBOL_ID) || x.is_live(UBOL_ID) {
         x.set_first_run_ubol(State::Done);
         return false;
     }
@@ -127,7 +132,17 @@ pub fn on_result(x: &mut Extensions, id: &str, result: &Result<String, FailureKi
     if id == UBOL_ID && result.is_ok() && x.first_run_ubol() == State::Pending {
         x.set_first_run_ubol(State::Done);
     }
+    // A busy refusal did not finish an install: still waiting.
+    if matches!(result, Err(FailureKind::Busy)) {
+        return false;
+    }
     start_if(x, Run::AfterBusy)
+}
+
+/// Whether this start's own install came in after the user had removed
+/// uBOL meanwhile, so it must be taken back out; true once.
+pub fn take_out(x: &mut Extensions) -> bool {
+    std::mem::take(&mut x.first_run.take_out)
 }
 
 /// The result of this start's own install.
@@ -135,7 +150,9 @@ fn finish(x: &mut Extensions, result: &Result<String, FailureKind>) {
     let s = &mut x.first_run;
     s.run = Run::Over;
     match result {
-        // A removal while it was installing still wins.
+        // Removed while it was installing: the state is already
+        // user_removed, but this install still lands once, so it is taken
+        // back out (`take_out`).
         Ok(_) => {}
         Err(FailureKind::Busy) if !s.busy_retried => {
             s.busy_retried = true;
@@ -148,8 +165,10 @@ fn finish(x: &mut Extensions, result: &Result<String, FailureKind>) {
         // Stays pending: the next start tries again.
         Err(e) => eprintln!("x-browser: uBlock Origin Lite not installed, tried again at the next start: {e:?}"),
     }
-    if result.is_ok() && x.first_run_ubol() == State::Pending {
-        x.set_first_run_ubol(State::Done);
+    match (result.is_ok(), x.first_run_ubol()) {
+        (true, State::Pending) => x.set_first_run_ubol(State::Done),
+        (true, State::UserRemoved) => x.first_run.take_out = true,
+        _ => {}
     }
 }
 
@@ -198,6 +217,9 @@ pub fn start_install(app: &mut App, id: &str) {
 pub fn on_install_result(app: &mut App, id: &str, result: Result<String, FailureKind>) {
     if on_result(&mut app.extensions, id, &result) {
         start_install(app, UBOL_ID);
+    }
+    if take_out(&mut app.extensions) {
+        crate::extensions::remove_quietly(app, UBOL_ID);
     }
 }
 
@@ -373,6 +395,7 @@ mod tests {
         assert!(!begin(&mut x));
         on_result(&mut x, UBOL_ID, &ok());
         assert_eq!(x.first_run_ubol(), State::UserRemoved, "installed again by hand: still never reinstalled");
+        assert!(!take_out(&mut x), "and the user's own install is left alone");
         // Removed while still pending (it never got in): also final.
         let dir = temp_dir("firstrun-removed-pending");
         let mut x = Extensions::open(Some(&dir));
@@ -401,6 +424,47 @@ mod tests {
         let mut x = Extensions::open(Some(&dir));
         on_result(&mut x, UBOL_ID, &Err(FailureKind::Net("x".into())));
         assert!(begin(&mut x), "still this start's one try");
+    }
+
+    #[test]
+    fn another_installs_busy_refusal_does_not_use_up_the_retry() {
+        let dir = temp_dir("firstrun-busy-other");
+        let mut x = Extensions::open(Some(&dir));
+        assert!(begin(&mut x));
+        assert!(!on_result(&mut x, UBOL_ID, &Err(FailureKind::Busy)));
+        let other = "abcdefghijklmnopabcdefghijklmnop";
+        assert!(!on_result(&mut x, other, &Err(FailureKind::Busy)), "another install refused: nothing finished");
+        assert!(!on_result(&mut x, UBOL_ID, &Err(FailureKind::Busy)), "nor a store-page uBOL refused as busy");
+        assert_eq!(x.first_run.run, Run::AfterBusy, "still waiting");
+        assert!(on_result(&mut x, other, &ok()), "the install that held it finished");
+    }
+
+    #[test]
+    fn already_in_the_profile_counts_as_done() {
+        let dir = temp_dir("firstrun-live");
+        let mut x = Extensions::open(Some(&dir));
+        x.set_live_for_test(UBOL_ID);
+        assert!(!begin(&mut x), "in the profile, though not recorded: nothing to download");
+        assert_eq!(x.first_run_ubol(), State::Done);
+    }
+
+    #[test]
+    fn removed_while_installing_is_taken_back_out_once() {
+        let dir = temp_dir("firstrun-removed-installing");
+        let mut x = Extensions::open(Some(&dir));
+        assert!(begin(&mut x));
+        removed(&mut x, UBOL_ID);
+        assert!(!on_result(&mut x, UBOL_ID, &ok()));
+        assert_eq!(x.first_run_ubol(), State::UserRemoved, "the removal wins");
+        assert!(take_out(&mut x), "but the install landed: take it out");
+        assert!(!take_out(&mut x), "once");
+        // A failed install after the removal leaves nothing to take out.
+        let dir = temp_dir("firstrun-removed-installing-failed");
+        let mut x = Extensions::open(Some(&dir));
+        assert!(begin(&mut x));
+        removed(&mut x, UBOL_ID);
+        on_result(&mut x, UBOL_ID, &Err(FailureKind::Net("x".into())));
+        assert!(!take_out(&mut x));
     }
 
     #[test]

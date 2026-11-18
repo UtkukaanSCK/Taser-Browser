@@ -672,7 +672,8 @@ pub fn refresh(app: &mut App) {
 }
 
 /// "Tarama verilerini temizle": the history file, and the profile's cookies
-/// and site data plus the disk cache (see `native::clear_browsing_data`).
+/// and DOM storage plus the disk cache, not the extensions' own storage
+/// (see `native::clear_browsing_data`).
 pub fn clear_data(app: &mut App) {
     app.history.clear();
     app.closed.clear();

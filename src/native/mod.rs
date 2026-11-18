@@ -199,16 +199,21 @@ mod imp {
         unsafe { GetForegroundWindow().0 as isize == window.hwnd() }
     }
 
-    /// Clears the profile's cookies and site data (ALL_SITE: cookies, DOM
-    /// storage, IndexedDB, cache storage, file systems), the disk cache and
-    /// WebView2's own browsing history; `done(true)` once that succeeded,
-    /// `done(false)` if it failed or could not start. Passwords, autofill and
-    /// download history are kept.
+    /// Clears the profile's cookies and DOM storage (ALL_DOM_STORAGE: local
+    /// storage, IndexedDB, Web SQL, cache storage, file systems), the disk
+    /// cache and WebView2's own browsing history; `done(true)` once that
+    /// succeeded, `done(false)` if it failed or could not start. Passwords,
+    /// autofill and download history are kept.
+    ///
+    /// Named kinds, not ALL_SITE: Microsoft may add new kinds to ALL_SITE
+    /// later, and the extensions' own storage (uBOL's settings and rules)
+    /// must survive a clear. Never ALL_PROFILE or ClearBrowsingDataAll.
     pub fn clear_browsing_data(view: &WebView, done: impl FnOnce(bool) + 'static) {
         use std::{cell::Cell, rc::Rc};
         use windows::core::Interface;
         let kinds = COREWEBVIEW2_BROWSING_DATA_KINDS(
-            COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_SITE.0
+            COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_DOM_STORAGE.0
+                | COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES.0
                 | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE.0
                 | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY.0,
         );

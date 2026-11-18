@@ -552,6 +552,17 @@ impl Extensions {
         self.file.items.iter().any(|e| e.id == id && !e.removed)
     }
 
+    /// Whether WebView2 had `id` installed at the last listing.
+    pub fn is_live(&self, id: &str) -> bool {
+        self.live.iter().any(|l| l.id == id)
+    }
+
+    /// As if WebView2 had listed just `id`.
+    #[cfg(test)]
+    pub fn set_live_for_test(&mut self, id: &str) {
+        self.set_live(vec![ExtensionInfo { id: id.into(), name: "n".into(), enabled: true }]);
+    }
+
     pub fn first_run_ubol(&self) -> crate::firstrun::State {
         self.file.first_run_ubol
     }
@@ -719,19 +730,30 @@ fn set_enabled_as(app: &mut App, op: Op, id: &str, on: bool) {
 /// Uninstalls extension `id` from WebView2, drops it from the record and,
 /// once WebView2 confirms, deletes its folder if X-Browser owns it
 /// (`owned_folder`; see `Extensions::record_removed`).
+/// This is the user's removal: a removed uBOL is never installed again by
+/// the first run (`firstrun::on_removed`).
 pub fn remove(app: &mut App, id: &str) -> Op {
     let op = app.extensions.start_op();
+    remove_as(app, op, id);
+    op
+}
+
+/// `remove` for X-Browser's own reasons (op 0: an install taken back out):
+/// the record and folder are handled the same, but it is not the user's
+/// choice, so it does not count as removing uBOL by hand.
+pub fn remove_quietly(app: &mut App, id: &str) {
+    remove_as(app, 0, id);
+}
+
+fn remove_as(app: &mut App, op: Op, id: &str) {
     if is_builtin(id) {
-        app.extensions.finish(op, Err("built-in extension".into()));
-        return op;
+        return app.extensions.finish(op, Err("built-in extension".into()));
     }
     let Some(view) = content_view(app) else {
-        app.extensions.finish(op, Err("no content webview".into()));
-        return op;
+        return app.extensions.finish(op, Err("no content webview".into()));
     };
     let (proxy, owned) = (app.proxy().clone(), id.to_owned());
     native::remove_extension(view, id, move |result| send(&proxy, Event::Removed { op, id: owned, result }));
-    op
 }
 
 /// A content webview was made: runs the reconcile if the UI came up while
@@ -855,7 +877,10 @@ pub fn on_event(app: &mut App, ev: Event) {
         }
         Event::Removed { op, result: Err(e), .. } => app.extensions.finish(op, Err(e)),
         Event::Removed { op, id, result: Ok(confirmed) } => {
-            crate::firstrun::on_removed(app, &id);
+            // Only the user's own removals (op 0 is X-Browser's).
+            if op != 0 {
+                crate::firstrun::on_removed(app, &id);
+            }
             let x = &mut app.extensions;
             let result = x.record_removed(&id, confirmed);
             x.finish(op, result);
