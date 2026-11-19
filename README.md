@@ -95,6 +95,13 @@ differs from `EXPECTED_CHECKS` in `src/selftest.rs` (a check was skipped, e.g.
 a script callback never came back), an `all-expected-checks-ran` FAIL is
 logged first. Update the constant when adding or removing checks.
 
+The self-test build never reaches the Chrome Web Store: its store and update
+service are a fake that answers from a table (`webstore::fake`), and it accepts
+packages signed only by their own developer key (`crx::Policy::SelfSigned`),
+so it can install and update test extensions. That makes it unsafe as a
+browser: **a `--features selftest` build is for testing only and is never
+distributed.** A normal build has neither the fake nor that policy.
+
 ### Startup timing
 
 `XB_TIMING=<file>` appends `<milestone> <ms since the OS created the process>`
@@ -123,6 +130,8 @@ blank tab, median (ms since process creation):
 | v0.1 (33b478e) | 684,544 B | 50 | 276 | 302 | 308 |
 | v0.2 at task 5 (ae74229) | 1,073,152 B | 51 | 293 | 365 | 366 |
 | v0.2 final (e966be7) | 1,260,032 B | 50 | 291 | 361 | 362 |
+| v0.3 final, blank profile () | B | | | | |
+| v0.3 final, uBOL installed () | B | | | | |
 
 All three rows were measured in one session on 2026-11-17 (absolute numbers
 move with machine load: the same builds measured 50–60 ms slower on
@@ -130,6 +139,8 @@ move with machine load: the same builds measured 50–60 ms slower on
 creating the first content tab, which grew at task 5
 (first-tab-created − ui-webview-created: 26 ms in v0.1, 70 ms in v0.2);
 tasks 6–9 added nothing measurable.
+
+v0.3: *to be measured (task 6).*
 
 ## Fullscreen
 
@@ -234,6 +245,8 @@ All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
 | `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
 | `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
 | `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session or one blank tab), `autofill` (on/off), `download_dir` (empty: the system Downloads folder); file at most 64 KiB | on each change |
+| `extensions.json` | extensions X-Browser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
+| `extensions\<id>\<version>\` | unpacked extensions X-Browser owns | on install, update and removal |
 
 The JSON files carry `"v": 1` and are written as tmp → flush → rename, with a
 `.bak` of the previous good file and a `.corrupt` copy of a file that could
@@ -248,22 +261,26 @@ download cannot land where Windows runs it at sign-in.
 ## Menu, downloads and settings
 
 The strip's ⋮ button, Alt+F or Alt+E opens the main menu: new tab, find, zoom
-(−, +, reset), print, history, bookmarks, downloads and settings. Each item
-calls what its own shortcut calls. Downloads use WebView2's own flyout
-(progress, pause/cancel, "open file", "open folder"); SmartScreen stays on.
-The strip's downloads button appears once the session has had a download.
-Settings (search engine, startup, autofill, download folder) are saved on each
-change and take effect at once.
+(−, +, reset), print, history, bookmarks, downloads, settings and "Uzantılar"
+(see "Extensions"). Each item calls what its own shortcut calls. Downloads use
+WebView2's own flyout (progress, pause/cancel, "open file", "open folder");
+SmartScreen stays on. The strip's downloads button appears once the session has
+had a download. Settings (search engine, startup, autofill, download folder)
+are saved on each change and take effect at once.
+
+**Tracker blocking.** *To be written when the setting is merged: Kapalı,
+Temel, Dengeli or Katı, Dengeli by default.*
 
 ## Security indicator and external applications
 
-The start of the address box shows the connection of the page on screen: a
-lock for https, "Güvenli değil" for http, "Sertifika hatası" for a host whose
+The start of the address box shows the connection of the page on screen: a lock
+for https, "Güvenli değil" for http, "Sertifika hatası" for a host whose
 certificate failed in this run, and "Sayfa çöktü" with a reload button for a
-crashed tab (the tab itself stays empty). Every state has its own icon or text, never colour alone, and is read out
-by screen readers when it changes. After more than 64 hosts with certificate
-errors in one run, no https page counts as secure until the next start; the
-indicator then says "Sertifikalara güvenilmiyor" (told once, not in a dialog).
+crashed tab (the tab itself stays empty). Every state has its own icon or text,
+never colour alone, and is read out by screen readers when it changes. After
+more than 64 hosts with certificate errors in one run, no https page counts as
+secure until the next start; the indicator then says "Sertifikalara
+güvenilmiyor" (told once, not in a dialog).
 
 A page never starts another application by itself. A `mailto:`, `tel:` or
 similar link the user clicked shows a question in the overlay (the scheme, the
@@ -295,6 +312,135 @@ Known limits, left as they are:
 - WebView2's own find bar (Ctrl+F) is a separate window: whether it follows
   the window when the window is moved has not been verified.
 
+## Extensions (v0.3)
+
+Content tabs can run Chrome extensions (Manifest V3; MV2 ones may stop working
+on a future WebView2 runtime). They live in the content tabs' WebView2
+profile only: the strip and the overlay run in a separate profile (`XbUi`)
+that no extension reaches. There is no password manager: WebView2 never
+offers to save passwords, whatever the autofill setting says.
+
+**Ad blocking on first start.** uBlock Origin Lite
+(`ddkjiahejlhfcafbddmgiahcphecmpfh`) installs by itself, without a question,
+on the first start that has a data folder: X-Browser downloads it from the
+Chrome Web Store a few seconds after the window is up. If that fails (no
+network, say), it tries again on the next start. It is installed once: after
+the user removes it, X-Browser never installs it again on its own (it can
+still be installed by hand from the store).
+
+**Installing from the Chrome Web Store.** On an extension's store page the
+address box shows "Ekle" (or "Kaldır" when it is installed). The store's own
+"Add to Chrome" and "Remove from Chrome" buttons go through the same flow.
+Every install asks first, in the overlay: name, version, and its permissions
+and site access in Turkish, with "Ekle" or "İptal". Removing asks too.
+WebView2's own "Add … to Microsoft Edge?" dialog is not used. The package is
+checked before anything is unpacked: it must be a CRX3 signed by the Chrome Web
+Store and by the extension's own key, and its id must be the one asked for. The
+signature, not the host it came from, is what makes it trusted.
+
+**Uzantılar page.** The menu's "Uzantılar" lists each extension with its icon,
+name and version, an on/off switch, "Seçenekler" (opens its options page in a
+new tab; only for an extension that has one and is turned on) and "Kaldır"
+(asks in the page first; the extension's own settings are deleted with it).
+Each operation shows on its row until WebView2 answers, and turns into an
+error if it does not answer within 10 s. The two extensions built into
+WebView2 (the PDF viewer among them) are not listed.
+
+An extension that got into the profile without going through X-Browser (Edge's
+own dialog, say) is turned off at the next start and listed as "X-Browser
+dışında kurulmuş", without an icon, options or popup. It can be turned on or
+removed there; turned on, it is still not recorded, so the next start turns it
+off again.
+
+**Toolbar button and popups.** While a turned-on extension has a popup
+(`action.default_popup`), the strip shows a puzzle-piece button. It lists
+those extensions, and a pick opens the popup under the button. The popup
+stays on its extension's pages: other navigations, new windows and downloads
+are refused, and it cannot start another application, not even after a
+question. It closes on Esc, on its own `window.close()`, when the focus goes
+elsewhere (a click outside, another window), on a tab switch and when the
+window moves or is resized.
+
+**Updates.** Extensions installed from the store and turned on are checked for
+updates at most once a day, on their own: a timer looks every minute, and the
+time of the last check is kept in `extensions.json`. A turned-off extension is
+not updated. The Uzantılar page's "Güncellemeleri denetle" runs the same check
+by hand (a check already running counts as it); the button stays disabled
+meanwhile, and the page then says that everything is current, how many updates
+were queued, that there was nothing to check, or that the check failed. A newer
+version is checked like an install (signature, same id and key, and the size
+and SHA-256 the update service gave) and replaces the old one in place, so the
+extension keeps its settings; the old folder is deleted afterwards. It asks
+only when the new version wants a permission or site the installed one did not
+have ("Güncelle" or "İptal", listing only what is new), and only when nothing
+else is on screen: with the overlay open (the Uzantılar page itself included),
+an extension's popup open, in fullscreen or with X-Browser in the background it
+waits for the next check. So an update that wants more is never asked about
+from the page's button; it is counted as queued and asked about at a later
+daily check. Otherwise it goes in without a question. A version whose download
+or install failed is not fetched again until the next start.
+
+An install or update that fails with no question of its own on screen (its
+question already gone, or an update that never asked), so nobody saw why, is
+kept as the last error in `extensions.json`. The Uzantılar page shows it once,
+under its extension's row (or on a line at the top if the extension is gone),
+and then clears it.
+
+Clearing browsing data leaves extensions and their settings alone.
+
+**Network.** Installs and update checks are plain HTTPS GETs over WinHTTP
+(`src/net.rs`), from a worker thread:
+
+- The first request always goes to the Google update service,
+  `https://clients2.google.com/service/update2/crx`, with the extension's id
+  and the WebView2 runtime version (`prodversion`). For an install it asks for
+  a redirect to the package; for an update check, for an XML answer listing
+  each installed store extension's id and version.
+- The package itself comes from wherever that answer points: the install's
+  redirect, or the update answer's `codebase`. In practice that is
+  `clients2.googleusercontent.com` (seen in the v0.3 spike), but the code does
+  not pin the host. It accepts any public DNS name over HTTPS: at most 5
+  redirects, each `Location` checked by hand; no `http`, IP addresses,
+  single-label names or user names in URLs; TLS 1.2 or later.
+- No cookies, no stored credentials and no automatic sign-in are sent. The
+  User-Agent is `X-Browser` and nothing else. The system proxy settings are
+  used.
+
+The store page itself is an ordinary page in a content tab, like any other
+site.
+
+**Licence and credit.** uBlock Origin Lite is by Raymond Hill and
+contributors, under GPLv3 ([source](https://github.com/uBlockOrigin/uBOL-home)).
+X-Browser (MIT) does not ship it, copy it or change it: it downloads the
+publisher's own package from the Chrome Web Store at run time. See
+`docs/v0.3-licensing.md` (not legal advice).
+
+Extensions live in `%LOCALAPPDATA%\X-Browser\extensions\<id>\<version>`
+(uBlock Origin Lite takes about 47 MB once WebView2 has indexed its rules),
+recorded in `extensions.json` (see "Data files"). Nothing is deleted under
+`extensions` if that folder is itself a junction or link.
+
+Known limits, open until checked by hand (`docs/v0.3-manual-checklist.md`):
+
+- Optional permissions an extension asks for at run time: whether a question
+  appears, and whose.
+- Whether WebView2 accepts a newer version of an installed id from the store
+  (an update in place worked with a local test extension).
+- After `extensions.json` and its `.bak` are both lost, whether uBlock Origin
+  Lite stays turned off (unknown to the record) and whether the first-run
+  install runs again. The "removed by the user" choice is lost in that case,
+  and also when an older v0.3 build without that field rewrites the file, or
+  the main file is damaged and the `.bak` predates the removal.
+- The popup matches the active tab by URL; two tabs on the same URL can
+  confuse an extension's per-tab view. `tabs.getCurrent`,
+  `windows.getCurrent` and `lastFocusedWindow` are not covered.
+- The store button hook relies on the store's private browser contract
+  (`chrome.webstorePrivate`). If Google changes it, the strip's "Ekle" still
+  works; the store's own button may then open Edge's dialog, and an extension
+  added that way shows up turned off with an unknown source.
+- Removing an extension when `extensions` is a junction: nothing is deleted
+  through it; what the page shows is not verified yet.
+
 ## Icon
 
 `assets/x-browser.ico` (16, 24, 32, 48 and 256 px) is drawn by
@@ -324,13 +470,22 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/native/error_page.rs` | writes X-Browser's error page into a tab whose load failed |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
-| `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch question); placement and closing |
+| `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch and store questions, Uzantılar); placement and closing |
 | `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
 | `src/settings.rs` | `settings.json`: engine, startup, autofill, download folder (with its checks) |
 | `src/error_page.rs` | error status → Turkish error page text, and the script that shows it |
 | `src/policy.rs` | security indicator, certificate-error memory, external-launch question |
+| `src/extensions.rs` | `extensions.json`, install/remove/enable, start-up reconcile with WebView2's list |
+| `src/native/extensions.rs` | WebView2's extension calls (add, list, enable, remove) on the content profile |
+| `src/ext_ui.rs` | the Uzantılar page and the strip's extensions button; which `chrome-extension://` pages a tab may load |
+| `src/popup.rs`, `src/native/popup.rs` | an extension's popup: its webview, placement, what closes it, what it may not do |
+| `src/webstore.rs` | Web Store install, removal and update jobs, the question, the daily check |
+| `src/firstrun.rs` | first-run uBlock Origin Lite: state, one install, never again after removal |
+| `src/cws.rs` | Chrome Web Store: detail-page ids, download and update-check URLs, update answers, permission text |
+| `src/net.rs` | HTTPS GET over WinHTTP: redirects checked by hand, size and time limits |
+| `src/crx.rs` | CRX3 signature check and safe unpacking |
 | `src/ui.rs` | embedded UI assets, custom protocol, CSP |
 | `src/store.rs` | versioned JSON files: atomic writes, `.bak`, corrupt-file recovery |
 | `src/session.rs` | what is saved (tabs, window place), when, and restoring it |
@@ -343,7 +498,9 @@ dependency, and the window and taskbar icons load that same resource.
 | `ui/js/bookmarks.js` | the star (UI page), the editor and list (overlay page); keeps no state |
 | `ui/js/menu.js`, `ui/js/settings.js` | menu and settings pages in the overlay; draw and report only |
 | `ui/js/security.js` | draws the connection indicator Rust decides |
-| `docs/` | v0.2 design notes and the manual test checklist |
+| `ui/js/extensions.js`, `ui/js/ext-button.js` | Uzantılar page and the extensions button's list (overlay), the button (strip) |
+| `ui/js/extask.js`, `ui/js/webstore.js` | the store question (overlay) and the address box's "Ekle"/"Kaldır" button |
+| `docs/` | v0.2 and v0.3 design notes, manual test checklists, v0.3 licensing note |
 | `assets/` | app icon and the script that draws it |
 | `build.rs` | embeds the icon in the exe |
 
