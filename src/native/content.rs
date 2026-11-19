@@ -247,8 +247,11 @@ mod imp {
                     }
                     // An address that cannot be read is refused like one
                     // that may not be loaded.
+                    // Nor an extension's page unless it is enabled (`ext_ui`).
                     if let Some(args) = &args
-                        && nav_uri(args).map_or(true, |uri| crate::policy::refuses_navigation(&uri))
+                        && nav_uri(args).map_or(true, |uri| {
+                            crate::policy::refuses_navigation(&uri) || crate::ext_ui::refuses_extension_url(&uri)
+                        })
                     {
                         args.SetCancel(true)?;
                         // The address bar may already show the refused URL,
@@ -275,9 +278,12 @@ mod imp {
             )?;
             wv.add_FrameNavigationStarting(
                 &NavigationStartingEventHandler::create(Box::new(move |_, args| {
-                    // Nor local files (`policy::refuses_navigation`).
+                    // Nor local files (`policy::refuses_navigation`), nor
+                    // pages of an extension that is not enabled (`ext_ui`).
                     if let Some(args) = args
-                        && nav_uri(&args).map_or(true, |uri| crate::policy::refuses_navigation(&uri))
+                        && nav_uri(&args).map_or(true, |uri| {
+                            crate::policy::refuses_navigation(&uri) || crate::ext_ui::refuses_extension_url(&uri)
+                        })
                     {
                         args.SetCancel(true)?;
                     }

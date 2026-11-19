@@ -15,7 +15,7 @@ use wry::Rect;
 
 /// Size of the list (logical px); must match overlay.html.
 const MENU_W: f64 = 264.0;
-const MENU_H: f64 = 292.0;
+const MENU_H: f64 = 324.0;
 /// Gap to the window's edges and the strip.
 const EDGE: f64 = 8.0;
 
@@ -31,10 +31,11 @@ pub enum Item {
     Bookmarks,
     Downloads,
     Settings,
+    Extensions,
 }
 
 impl Item {
-    const ALL: [(&'static str, Item); 10] = [
+    const ALL: [(&'static str, Item); 11] = [
         ("new-tab", Item::NewTab),
         ("find", Item::Find),
         ("zoom-out", Item::ZoomOut),
@@ -45,6 +46,7 @@ impl Item {
         ("bookmarks", Item::Bookmarks),
         ("downloads", Item::Downloads),
         ("settings", Item::Settings),
+        ("extensions", Item::Extensions),
     ];
 
     fn from_name(name: &str) -> Option<Self> {
@@ -139,7 +141,7 @@ pub fn pick(app: &mut App, item: Item) {
         return;
     }
     // These draw in the overlay's own webview: it stays up between pages.
-    if matches!(item, Item::History | Item::Bookmarks | Item::Settings) {
+    if matches!(item, Item::History | Item::Bookmarks | Item::Settings | Item::Extensions) {
         overlay::hand_over(app);
     } else {
         overlay::close(app);
@@ -166,6 +168,7 @@ pub fn pick(app: &mut App, item: Item) {
             crate::downloads::toggle(app);
         }
         Item::Settings => crate::settings::open(app),
+        Item::Extensions => crate::ext_ui::open(app),
         Item::ZoomOut | Item::ZoomIn | Item::ZoomReset => {}
     }
 }
@@ -209,7 +212,7 @@ mod tests {
 
     #[test]
     fn menu_sits_at_the_top_right_inside_the_window() {
-        assert_eq!(parts(menu_rect(LogicalSize::new(1200.0, 800.0))), (928.0, 42.0, 264.0, 292.0));
+        assert_eq!(parts(menu_rect(LogicalSize::new(1200.0, 800.0))), (928.0, 42.0, 264.0, 324.0));
         // A short window shortens it (it scrolls); a narrow one narrows it.
         assert_eq!(parts(menu_rect(LogicalSize::new(480.0, 240.0))), (208.0, 42.0, 264.0, 190.0));
         assert_eq!(parts(menu_rect(LogicalSize::new(200.0, 240.0))), (8.0, 42.0, 184.0, 190.0));

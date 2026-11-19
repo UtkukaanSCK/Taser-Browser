@@ -6,6 +6,7 @@
 //!   (settings page), checked in Rust: absolute, no UNC.
 
 use crate::bookmarks::{BookmarkCmd, BookmarkKey};
+use crate::ext_ui::ExtCmd;
 use crate::menu::MenuCmd;
 use crate::overlay::OverlayCmd;
 use crate::page_tools::{PageCmd, PageKey};
@@ -49,6 +50,8 @@ pub enum UiCommand {
     Settings(SettingsCmd),
     /// The answer to "open another application?" (see `policy`).
     Launch(LaunchCmd),
+    /// The extensions page and the strip's extensions button (see `ext_ui`).
+    Ext(ExtCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +94,7 @@ impl UiCommand {
             (n, a) if MenuCmd::NAMES.contains(&n) => Self::Menu(MenuCmd::parse(n, a)?),
             (n, a) if SettingsCmd::NAMES.contains(&n) => Self::Settings(SettingsCmd::parse(n, a)?),
             ("launch-open" | "launch-cancel" | "launch-press", None) => Self::Launch(LaunchCmd::parse(name)?),
+            (n, a) if ExtCmd::NAMES.contains(&n) => Self::Ext(ExtCmd::parse(n, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -236,6 +240,11 @@ mod tests {
             UiCommand::parse("st-autofill:0"),
             Some(UiCommand::Settings(SettingsCmd::Autofill(false)))
         );
+        assert_eq!(UiCommand::parse("ext-actions:900"), Some(UiCommand::Ext(ExtCmd::Actions(900))));
+        assert_eq!(
+            UiCommand::parse("ext-enable:mmbkafeccnpmgicaldnppdljpaogpjdm:0"),
+            Some(UiCommand::Ext(ExtCmd::Enable { id: "mmbkafeccnpmgicaldnppdljpaogpjdm".into(), on: false }))
+        );
     }
 
     #[test]
@@ -247,6 +256,7 @@ mod tests {
             "suggest", "suggest:1", "suggest:x:1:a", "suggest-key:left", "ov-open:1", "ov-close:1", "ov-cleared:1",
             "ov-data-cleared", "menu-toggle:1", "menu-pick", "menu-pick:", "menu-pick:Find", "menu-pick:exit",
             "st-engine", "st-engine:yahoo", "st-startup:x", "st-autofill:2", "st-folder", "st-theme:dark",
+            "ext-actions", "ext-actions:x", "ext-remove", "ext-remove:abc", "ext-popup:", "ext-timeout:1",
         ] {
             assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
         }

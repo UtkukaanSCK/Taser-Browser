@@ -108,6 +108,8 @@ pub struct App {
     pub ui: WebView,
     /// Suggestions and the history list (see `overlay`), made on first use.
     pub overlay: crate::overlay::Overlay,
+    /// An extension's popup, made when it opens (see `popup`).
+    pub popup: crate::popup::Popup,
     #[cfg(windows)]
     pub(crate) environment: webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment,
     pub(crate) context: WebContext,
@@ -148,6 +150,8 @@ pub struct App {
     pub policy: crate::policy::State,
     /// extensions.json and the content profile's extensions (see `extensions`).
     pub extensions: crate::extensions::Extensions,
+    /// The Uzantılar page and the strip's extensions button (see `ext_ui`).
+    pub ext_ui: crate::ext_ui::ExtUi,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -218,8 +222,10 @@ impl App {
             settings: Default::default(),
             downloads: Default::default(),
             overlay: Default::default(),
+            popup: Default::default(),
             policy: Default::default(),
             extensions: Default::default(),
+            ext_ui: Default::default(),
             quit: false,
         })
     }
@@ -409,6 +415,7 @@ impl App {
         }
         page_tools::on_switch(self, want);
         crate::overlay::close(self);
+        crate::popup::close(self, false);
         crate::policy::on_switch(self);
         // A restored tab comes alive on first activation. If its webview
         // cannot be made, it is treated like a tab whose renderer failed: it
@@ -591,7 +598,10 @@ impl App {
             // (The star the same way: `bookmarks::sync_star` takes the file.)
             UserEvent::HistoryLoaded | UserEvent::BookmarksLoaded => {}
             UserEvent::Download(ev) => crate::downloads::on_event(self, ev),
-            UserEvent::Extension(ev) => crate::extensions::on_event(self, ev),
+            UserEvent::Extension(ev) => {
+                crate::extensions::on_event(self, ev);
+                crate::ext_ui::on_changed(self);
+            }
             UserEvent::Policy(tab, ev) => crate::policy::on_event(self, tab, ev),
             UserEvent::OpenFromOtherInstance(url) => {
                 if let Some(url) = url
@@ -635,6 +645,7 @@ impl App {
                 crate::downloads::sync_ui(self);
                 crate::timing::mark("ui-ready");
                 crate::extensions::on_ui_ready(self);
+                crate::ext_ui::on_ui_ready(self);
                 if crate::timing::quit_when_ready() {
                     self.quit = true;
                 }
@@ -685,6 +696,7 @@ impl App {
             UiCommand::Menu(cmd) => crate::menu::on_command(self, cmd),
             UiCommand::Settings(cmd) => crate::settings::on_command(self, cmd),
             UiCommand::Launch(cmd) => crate::policy::on_command(self, cmd),
+            UiCommand::Ext(cmd) => crate::ext_ui::on_command(self, cmd),
         }
     }
 
@@ -761,7 +773,11 @@ impl App {
                 tab.page_url = crate::url::cap_url(&url);
                 return self.history.record(&url, &title, user);
             }
-            PageEvent::Loading(true) if self.tabs.active() == Some(id) => crate::overlay::dismiss(self),
+            // (Not the Uzantılar page: it is about the browser, not this
+            // page, and its own removal loads pages, see `ext_ui::close_pages`.)
+            PageEvent::Loading(true) if self.tabs.active() == Some(id) && self.overlay.mode != crate::overlay::Mode::Extensions => {
+                crate::overlay::dismiss(self)
+            }
             _ => {}
         }
         let Some(tab) = self.tabs.get_mut(id) else { return };
@@ -808,7 +824,14 @@ impl App {
 
     pub fn navigate(&mut self, text: &str) {
         crate::overlay::close(self);
-        match url::resolve_input(text) {
+        // An extension's page opens only while it is enabled, and is never
+        // searched for (see `ext_ui`).
+        let resolved = match crate::ext_ui::typed_url(text) {
+            Some(Some(u)) => Resolved::Url(u),
+            Some(None) => Resolved::Blocked,
+            None => url::resolve_input(text),
+        };
+        match resolved {
             Resolved::Empty => {}
             Resolved::Blocked => {
                 let _ = self.ui.evaluate_script("xb.blocked()");

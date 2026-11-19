@@ -7,6 +7,7 @@ mod commands;
 mod crx;
 mod cws;
 mod downloads;
+mod ext_ui;
 mod extensions;
 mod history;
 mod instance;
@@ -16,6 +17,7 @@ mod net;
 mod overlay;
 mod page_tools;
 mod policy;
+mod popup;
 #[cfg(feature = "selftest")]
 mod selftest;
 mod session;
@@ -184,15 +186,20 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
                 WindowEvent::CloseRequested => app.quit = true,
                 WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
                     overlay::on_window_changed(&mut app);
+                    popup::on_window_changed(&mut app);
                     app.layout();
                     app.mark_dirty(); // maximize state may have changed
                     session::track_window(&mut app);
                 }
                 WindowEvent::Moved(_) => {
                     overlay::on_window_changed(&mut app);
+                    popup::on_window_changed(&mut app);
                     session::track_window(&mut app);
                 }
-                WindowEvent::Focused(false) => overlay::on_window_unfocused(&mut app),
+                WindowEvent::Focused(false) => {
+                    overlay::on_window_unfocused(&mut app);
+                    popup::on_window_unfocused(&mut app);
+                }
                 WindowEvent::ThemeChanged(theme) => app.on_theme(theme),
                 _ => {}
             },
