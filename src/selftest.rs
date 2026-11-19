@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 629;
+const EXPECTED_CHECKS: u32 = 642;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -326,73 +326,80 @@ const DELAYS: &[u64] = &[
     900,  // 238 crash a third time
     1500, // 239 go to an address that cannot load
     2500, // 240 check the crashed mark went with the navigation
-    900,  // 241 v0.2 fixes: a page on example.org
-    2500, // 242 Ctrl+H
-    1000, // 243 a jump within the page
-    1200, // 244 check the history list stayed up; Esc
-    800,  // 245 Ctrl+D: bookmark and editor
-    1000, // 246 press and click the star
-    900,  // 247 check the editor closed; too many certificate errors
-    900,  // 248 the launch question
-    1200, // 249 click the ⋮ button from the strip
-    1000, // 250 check the menu has the keyboard; Esc
-    900,  // 251 extensions: the start's reconcile; UI profile; add v1.1
-    2500, // 252 check (a) the id; load the ad page
-    2500, // 253 check (b) the block and (c) the UI; disable
-    1500, // 254 check disabled; load the ad page
-    2500, // 255 check (d) it loads; enable
-    1500, // 256 check enabled; load the ad page
-    2500, // 257 check (d) blocked again; click ⋮
-    1000, // 258 check the menu; Uzantılar
-    1000, // 259 check the page and the button; switch off
-    1500, // 260 check off; a disabled extension's page in the tab
-    1000, // 261 check refused; switch on
-    1500, // 262 check on; Seçenekler
-    2000, // 263 check the options tab
-    1000, // 264 close the options tab; a web page under it; the strip's button
-    1000, // 265 check its list; pick the popup
-    2000, // 266 check the popup and its tabs.query; window.close()
-    1000, // 267 check closed; tab switch
-    1500, // 268 the popup again; a frame in it
-    1500, // 269 check the frame; click its mail link
-    1000, // 270 check the launch refused; window move
-    1200, // 271 check closed by the move; the page; Kaldır
-    1000, // 272 check the question; Esc; Kaldır, yes
-    2500, // 273 check (e) removed; typed address refused; the UI and overlay try an extension page
-    1000, // 274 check those refused; an extension X-Browser did not install
-    2000, // 275 WebView2 lists it: the reconcile
-    1500, // 276 check it is off; the page
-    1500, // 277 check its row; switch on
-    1500, // 278 check on, not recorded; Kaldır, yes
-    2500, // 279 check removed
-    600,  // 280 first-run uBOL: offline at the start; a next start, busy
-    600,  // 281 check busy waits; another install finishes
-    1500, // 282 check done; a start after it; remove uBOL
-    600,  // 283 check user_removed; a start after it
-    2500, // 284 Web Store: add the extension again; load an ordinary page
-    1200, // 285 check the store button is off; the page goes to the sentinel
-    900,  // 286 check it was refused; open the remove question
-    900,  // 287 check the question; answer "no"
-    900,  // 288 check it closed
-    300,  // 289 store updates: install 1.0 from the fake store
-    2500, // 290 check it; turn it off
-    900,  // 291 check it is off; the check offers 1.1
-    1500, // 292 check nothing was asked; turn it on
-    900,  // 293 check it is on; the check offers 1.1, from the page's button
-    3000, // 294 check 1.1 is in and the page; the check offers 1.1 again
-    1500, // 295 check the old folder is gone and nothing was fetched; a bad hash
-    1500, // 296 check nothing changed; the bad 1.2 again
-    1500, // 297 check it was not fetched; in front; open the menu; 1.3 wants more
-    1500, // 298 check no question over the menu; Escape
-    900,  // 299 check the menu closed; 1.3 again
-    1500, // 300 check the question lists only the new; answer "no"
-    1500, // 301 check 1.1 stays; in the background; 1.3 again
-    900,  // 302 check no question in the background; open the remove question; 1.4
-    1500, // 303 check 1.4 waits; answer "no"
-    3000, // 304 check 1.4 is in; a timer tick, last check long ago
-    1500, // 305 check the tick checked; another tick
-    900,  // 306 check it asked nothing
-    900,  // 307 last tab close quits
+    900,  // 241 error page: a page on example.org first
+    2500, // 242 check it; an address that cannot load
+    2500, // 243 check X-Browser's error page, no lock, address kept
+    600,  // 244 check the tab title; click "Yeniden dene"
+    2500, // 245 check it reloaded in the same entry; Alt+Left
+    2500, // 246 check back on the page before; Alt+Right
+    2500, // 247 check forward on the error page again
+    900,  // 248 v0.2 fixes: a page on example.org
+    2500, // 249 Ctrl+H
+    1000, // 250 a jump within the page
+    1200, // 251 check the history list stayed up; Esc
+    800,  // 252 Ctrl+D: bookmark and editor
+    1000, // 253 press and click the star
+    900,  // 254 check the editor closed; too many certificate errors
+    900,  // 255 the launch question
+    1200, // 256 click the ⋮ button from the strip
+    1000, // 257 check the menu has the keyboard; Esc
+    900,  // 258 extensions: the start's reconcile; UI profile; add v1.1
+    2500, // 259 check (a) the id; load the ad page
+    2500, // 260 check (b) the block and (c) the UI; disable
+    1500, // 261 check disabled; load the ad page
+    2500, // 262 check (d) it loads; enable
+    1500, // 263 check enabled; load the ad page
+    2500, // 264 check (d) blocked again; click ⋮
+    1000, // 265 check the menu; Uzantılar
+    1000, // 266 check the page and the button; switch off
+    1500, // 267 check off; a disabled extension's page in the tab
+    1000, // 268 check refused; switch on
+    1500, // 269 check on; Seçenekler
+    2000, // 270 check the options tab
+    1000, // 271 close the options tab; a web page under it; the strip's button
+    1000, // 272 check its list; pick the popup
+    2000, // 273 check the popup and its tabs.query; window.close()
+    1000, // 274 check closed; tab switch
+    1500, // 275 the popup again; a frame in it
+    1500, // 276 check the frame; click its mail link
+    1000, // 277 check the launch refused; window move
+    1200, // 278 check closed by the move; the page; Kaldır
+    1000, // 279 check the question; Esc; Kaldır, yes
+    2500, // 280 check (e) removed; typed address refused; the UI and overlay try an extension page
+    1000, // 281 check those refused; an extension X-Browser did not install
+    2000, // 282 WebView2 lists it: the reconcile
+    1500, // 283 check it is off; the page
+    1500, // 284 check its row; switch on
+    1500, // 285 check on, not recorded; Kaldır, yes
+    2500, // 286 check removed
+    600,  // 287 first-run uBOL: offline at the start; a next start, busy
+    600,  // 288 check busy waits; another install finishes
+    1500, // 289 check done; a start after it; remove uBOL
+    600,  // 290 check user_removed; a start after it
+    2500, // 291 Web Store: add the extension again; load an ordinary page
+    1200, // 292 check the store button is off; the page goes to the sentinel
+    900,  // 293 check it was refused; open the remove question
+    900,  // 294 check the question; answer "no"
+    900,  // 295 check it closed
+    300,  // 296 store updates: install 1.0 from the fake store
+    2500, // 297 check it; turn it off
+    900,  // 298 check it is off; the check offers 1.1
+    1500, // 299 check nothing was asked; turn it on
+    900,  // 300 check it is on; the check offers 1.1, from the page's button
+    3000, // 301 check 1.1 is in and the page; the check offers 1.1 again
+    1500, // 302 check the old folder is gone and nothing was fetched; a bad hash
+    1500, // 303 check nothing changed; the bad 1.2 again
+    1500, // 304 check it was not fetched; in front; open the menu; 1.3 wants more
+    1500, // 305 check no question over the menu; Escape
+    900,  // 306 check the menu closed; 1.3 again
+    1500, // 307 check the question lists only the new; answer "no"
+    1500, // 308 check 1.1 stays; in the background; 1.3 again
+    900,  // 309 check no question in the background; open the remove question; 1.4
+    1500, // 310 check 1.4 waits; answer "no"
+    3000, // 311 check 1.4 is in; a timer tick, last check long ago
+    1500, // 312 check the tick checked; another tick
+    900,  // 313 check it asked nothing
+    900,  // 314 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -4287,28 +4294,99 @@ pub fn step(app: &mut App, n: u32) {
                 check("indicator-after-crash-and-failed-load", field(&r, "state").is_empty() && field(&r, "reload") == "false" && field(&r, "name").is_empty(), &r);
             });
         }
-        // ---- v0.2 fixes: one contiguous block ----
+        // ---- X-Browser's own error page, not WebView2's ----
         241 => {
-            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?frag".into())));
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?error-page-before".into())));
         }
         242 => {
-            press(app, vk::H, CTRL);
+            check("error-page-before-loaded", active_url(app).starts_with("https://example.org/?error-page-before"), active_url(app));
+            app.handle(UserEvent::Ui(UiCommand::Navigate(ERROR_URL.into())));
         }
         243 => {
+            let t = app.tabs.active().and_then(|id| app.tabs.get(id));
+            let (loading, back) = t.map_or((true, false), |t| (t.loading, t.can_back));
+            check(
+                "error-page-address-kept",
+                active_url(app) == ERROR_URL && page_url(app) == ERROR_URL && !loading && back,
+                format!("url {}, page {}, loading {loading}, back {back}", active_url(app), page_url(app)),
+            );
+            page_eval(app, "error-page-shown", ERROR_PAGE_JS, |r| {
+                log(&format!("INFO error page: {r}"));
+                check(
+                    "error-page-shown",
+                    field(&r, "doc").starts_with("chrome-error:")
+                        && field(&r, "h1") == "Bu siteye ulaşılamıyor"
+                        && field(&r, "url") == ERROR_URL
+                        && field(&r, "retry") == "Yeniden dene"
+                        && field(&r, "retry_vis") == "true"
+                        && field(&r, "lang") == "tr",
+                    &r,
+                );
+                check("error-page-is-not-webview2s", field(&r, "edge") == "false" && field(&r, "only_ours") == "true", &r);
+                remember("error_page_history", num(&r, "hl") as i64);
+            });
+            page_js(app, "window.__xbErrorMark = 1");
+            ui_eval(app, "error-page-no-lock", SECURITY_JS, |r| {
+                check("error-page-no-lock", field(&r, "state").is_empty() && field(&r, "hidden") == "true" && field(&r, "addr") == ERROR_URL, &r);
+            });
+            capture(app, "error-page");
+        }
+        244 => {
+            check("error-page-tab-title", active_title(app) == "Bu siteye ulaşılamıyor", active_title(app));
+            page_js(app, "document.getElementById('xb-error-retry').click()");
+        }
+        245 => {
+            check("error-page-retry-keeps-the-address", active_url(app) == ERROR_URL, active_url(app));
+            let before = recall("error_page_history");
+            page_eval(app, "error-page-retry-reloads", ERROR_PAGE_JS, move |r| {
+                // A new error document (the mark is gone), filled again, in
+                // the same history entry.
+                check(
+                    "error-page-retry-reloads",
+                    field(&r, "mark") == "undefined" && field(&r, "h1") == "Bu siteye ulaşılamıyor" && before > 0 && num(&r, "hl") as i64 == before,
+                    format!("{r}; history before {before}"),
+                );
+            });
+            press(app, vk::LEFT, ALT);
+        }
+        246 => {
+            check("error-page-back", active_url(app).starts_with("https://example.org/?error-page-before"), active_url(app));
+            ui_eval(app, "error-page-back-has-the-lock", SECURITY_JS, |r| {
+                check("error-page-back-has-the-lock", field(&r, "state") == "secure", &r);
+            });
+            press(app, vk::RIGHT, ALT);
+        }
+        247 => {
+            check("error-page-forward", active_url(app) == ERROR_URL, active_url(app));
+            page_eval(app, "error-page-forward-shown", ERROR_PAGE_JS, |r| {
+                check("error-page-forward-shown", field(&r, "doc").starts_with("chrome-error:") && field(&r, "h1") == "Bu siteye ulaşılamıyor", &r);
+            });
+            ui_eval(app, "error-page-forward-no-lock", SECURITY_JS, |r| {
+                check("error-page-forward-no-lock", field(&r, "state").is_empty() && field(&r, "addr") == ERROR_URL, &r);
+            });
+        }
+        // ---- v0.2 fixes: one contiguous block ----
+        248 => {
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?frag".into())));
+        }
+        249 => {
+            press(app, vk::H, CTRL);
+        }
+        250 => {
             // A jump within the page loads nothing: the list stays up.
             page_js(app, "location.hash = 'x'");
         }
-        244 => {
+        251 => {
             check("history-stays-open-on-a-fragment-change", app.overlay.mode == Mode::History, format!("mode {:?}, url {}", app.overlay.mode, active_url(app)));
             page_eval(app, "history-fragment-change-happened", "`hash=${location.hash}`", |r| {
                 check("history-fragment-change-happened", field(&r, "hash") == "#x", &r);
             });
             overlay_js(app, &key_js("Escape"));
         }
-        245 => {
+        252 => {
             press(app, BM_D, CTRL);
         }
-        246 => {
+        253 => {
             check("bm-editor-open-before-star-press", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
             // A press then a click on the star, as a mouse makes them.
             ui_js(
@@ -4317,7 +4395,7 @@ pub fn step(app: &mut App, n: u32) {
                  b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true })); b.click(); })()",
             );
         }
-        247 => {
+        254 => {
             let page = page_url(app);
             check(
                 "bm-star-click-closes-the-open-editor",
@@ -4340,18 +4418,18 @@ pub fn step(app: &mut App, n: u32) {
                 );
             });
         }
-        248 => {
+        255 => {
             let id = app.tabs.active().unwrap();
             app.handle(UserEvent::Policy(id, Event::ExternalLaunch { uri: MAIL_URI.into(), origin: String::new(), user: true }));
         }
-        249 => {
-            log(&format!("INFO step 249: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+        256 => {
+            log(&format!("INFO step 256: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             check("launch-question-up-before-menu-click", app.overlay.mode == Mode::Launch, format!("mode {:?}", app.overlay.mode));
             // A mouse click on ⋮: the strip takes the keyboard first.
             let _ = app.ui.focus();
             ui_js(app, "document.getElementById('menu-btn').click()");
         }
-        250 => {
+        257 => {
             let now = std::time::Instant::now();
             check(
                 "menu-click-answers-the-launch-question-no",
@@ -4363,7 +4441,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_js(app, &key_js("Escape"));
         }
-        251 => {
+        258 => {
             // The start (see `plant_extensions`): leftovers swept, the bad
             // entries dropped and nothing else, the old file kept as .bak,
             // the recorded extension in WebView2 again.
@@ -4418,7 +4496,7 @@ pub fn step(app: &mut App, n: u32) {
                 Err(e) => check("ext-test-extension-written", false, e),
             }
         }
-        252 => {
+        259 => {
             // (a) The id is the one its key gives.
             let outcome = ext_outcome(app, "ext-op");
             let key: serde_json::Value = serde_json::from_str(EXT_MANIFEST).unwrap_or_default();
@@ -4431,7 +4509,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             ext_load(app, 1);
         }
-        253 => {
+        260 => {
             // (b) The rule blocks the ad script, the other one loads, and the
             // content script ran in the page.
             ext_page_check(app, 1, true);
@@ -4450,31 +4528,31 @@ pub fn step(app: &mut App, n: u32) {
             ui_profile_only_builtins(app.overlay.view(), "ext-overlay-profile-still-only-builtins-after-the-add");
             remember("ext-op", crate::extensions::set_enabled(app, EXT_ID, false) as i64);
         }
-        254 => {
+        261 => {
             ext_state_check(app, "ext-disabled", false);
             ext_load(app, 2);
         }
-        255 => {
+        262 => {
             // (d) Off: the ad script loads and no content script runs.
             ext_page_check(app, 2, false);
             remember("ext-op", crate::extensions::set_enabled(app, EXT_ID, true) as i64);
         }
-        256 => {
+        263 => {
             ext_state_check(app, "ext-enabled-again", true);
             ext_load(app, 3);
         }
-        257 => {
+        264 => {
             // (d) On again: blocked again.
             ext_page_check(app, 3, true);
             // The Uzantılar page, from the menu (a click on ⋮ from the strip).
             let _ = app.ui.focus();
             ui_js(app, "document.getElementById('menu-btn').click()");
         }
-        258 => {
+        265 => {
             check("ext-menu-opens", app.overlay.mode == Mode::Menu, format!("mode {:?}", app.overlay.mode));
             overlay_click(app, "[data-item=\"extensions\"]");
         }
-        259 => {
+        266 => {
             check("ext-page-opens-from-the-menu", app.overlay.mode == Mode::Extensions, format!("mode {:?}", app.overlay.mode));
             overlay_eval(app, "ext-page-lists-the-extension", EXT_ROW_JS, |r| {
                 check(
@@ -4500,7 +4578,7 @@ pub fn step(app: &mut App, n: u32) {
             // Off, with the page's switch.
             overlay_click(app, "#x-list [data-ctl=\"switch\"]");
         }
-        260 => {
+        267 => {
             ext_page_state_check(app, "ext-page-switch-turns-it-off", false);
             overlay_eval(app, "ext-page-row-off", EXT_ROW_JS, |r| {
                 check(
@@ -4519,7 +4597,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.load_url(&format!("chrome-extension://{EXT_ID}/options.html"));
             }
         }
-        261 => {
+        268 => {
             page_eval(app, "ext-disabled-page-refused-in-a-tab", "`${location.href}`", |r| {
                 // Refused: the page stays, or Chromium shows its own error
                 // page (it also blocks a disabled extension's pages).
@@ -4527,7 +4605,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_click(app, "#x-list [data-ctl=\"switch\"]");
         }
-        262 => {
+        269 => {
             ext_page_state_check(app, "ext-page-switch-turns-it-on", true);
             overlay_eval(app, "ext-page-row-on", EXT_ROW_JS, |r| {
                 check("ext-page-row-on", field(&r, "on") == "true" && field(&r, "options") == "true" && field(&r, "focus") == "switch", &r);
@@ -4538,7 +4616,7 @@ pub fn step(app: &mut App, n: u32) {
             remember("tabs-before-options", app.tabs.len() as i64);
             overlay_click(app, "#x-list [data-ctl=\"options\"]");
         }
-        263 => {
+        270 => {
             check(
                 "ext-options-open-in-a-new-tab",
                 app.overlay.mode == Mode::Hidden && app.tabs.len() as i64 == recall("tabs-before-options") + 1,
@@ -4549,11 +4627,11 @@ pub fn step(app: &mut App, n: u32) {
                 check("ext-options-page-loaded", r == format!("chrome-extension://{EXT_ID}/options.html|XB Options"), &r);
             });
         }
-        264 => {
+        271 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             // The tab under it tried the disabled extension's page and keeps
             // that address: give it a web page, for the popup's tabs.query.
-            // (Loaded from Rust, as at step 260: no focus moves.)
+            // (Loaded from Rust, as at step 267: no focus moves.)
             if let Some(v) = app.active_view() {
                 let _ = v.load_url(&format!("http://127.0.0.1:{}/ext?n=9", recall("ext-port")));
             }
@@ -4561,7 +4639,7 @@ pub fn step(app: &mut App, n: u32) {
             let _ = app.ui.focus();
             ui_js(app, "document.getElementById('ext-btn').click()");
         }
-        265 => {
+        272 => {
             check("ext-button-opens-its-list", app.overlay.mode == Mode::ExtActions, format!("mode {:?}", app.overlay.mode));
             const JS: &str = "(() => { const b = document.querySelectorAll('#ext-actions button'); return `rows=${b.length};id=${b[0] && b[0].dataset.id};role=${b[0] && b[0].getAttribute('role')};name=${b[0] && b[0].textContent};focus=${document.activeElement === b[0]}`; })()";
             overlay_eval(app, "ext-list-has-the-popup", JS, |r| {
@@ -4573,8 +4651,8 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_click(app, "#ext-actions [data-id]");
         }
-        266 => {
-            log(&format!("INFO step 266: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+        273 => {
+            log(&format!("INFO step 273: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             check(
                 "ext-popup-opens",
                 crate::popup::extension(app) == Some(EXT_ID) && crate::popup::view(app).is_some() && app.overlay.mode == Mode::Hidden,
@@ -4603,7 +4681,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.evaluate_script("window.close()");
             }
         }
-        267 => {
+        274 => {
             check("ext-popup-closes-on-window-close", crate::popup::view(app).is_none(), "still open");
             // A tab switch closes it.
             crate::ext_ui::on_command(app, crate::ext_ui::ExtCmd::Actions(1100));
@@ -4614,7 +4692,7 @@ pub fn step(app: &mut App, n: u32) {
             check("ext-popup-closes-on-tab-switch", opened && crate::popup::view(app).is_none(), format!("opened {opened}"));
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
         }
-        268 => {
+        275 => {
             // Open again (a step after the tab close: the page's focus has
             // arrived), with a frame added once its page is parsed. The
             // frame is added only now, so the checks before do not depend
@@ -4627,8 +4705,8 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.evaluate_script(EXT_FRAME_ADD_JS);
             }
         }
-        269 => {
-            log(&format!("INFO step 269: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+        276 => {
+            log(&format!("INFO step 276: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             eval(crate::popup::view(app), "ext-popup-frame-has-its-link", EXT_FRAME_JS, |r| {
                 check("ext-popup-frame-has-its-link", field(&r, "frame") == "true" && field(&r, "link") == "true" && num(&r, "w") > 0.0 && num(&r, "h") > 0.0, &r);
             });
@@ -4638,7 +4716,7 @@ pub fn step(app: &mut App, n: u32) {
                 cdp_click(v, 40.0, 40.0);
             }
         }
-        270 => {
+        277 => {
             // The frame's mail link: nothing started, nothing asked, the
             // popup still open. (Whether WebView2 raised its launch event
             // for the frame is only logged: a CDP click did not make it.)
@@ -4666,7 +4744,7 @@ pub fn step(app: &mut App, n: u32) {
                 app.window.set_outer_position(tao::dpi::PhysicalPosition::new(p.x + 40, p.y + 30));
             }
         }
-        271 => {
+        278 => {
             check(
                 "ext-popup-closes-on-window-move",
                 recall("ext-popup-reopened") == 1 && crate::popup::view(app).is_none(),
@@ -4680,7 +4758,7 @@ pub fn step(app: &mut App, n: u32) {
             crate::ext_ui::open(app);
             overlay_click(app, "#x-list [data-ctl=\"remove\"]");
         }
-        272 => {
+        279 => {
             const ASK_JS: &str = "(() => { const no = document.querySelector('#x-list [data-ctl=\"no\"]'); return `ask=${!!no};text=${no ? no.parentElement.textContent : ''};focus=${document.activeElement.dataset.ctl}`; })()";
             overlay_eval(app, "ext-remove-asks-first", ASK_JS, |r| {
                 check(
@@ -4696,7 +4774,7 @@ pub fn step(app: &mut App, n: u32) {
             overlay_click(app, "#x-list [data-ctl=\"remove\"]");
             overlay_click(app, "#x-list [data-ctl=\"yes\"]");
         }
-        273 => {
+        280 => {
             // (e) Gone from the list, the file, WebView2 and the disk.
             let listed = app.extensions.list().iter().any(|l| l.id == EXT_ID) || app.extensions.records().iter().any(|e| e.id == EXT_ID);
             crate::store::flush(Duration::from_secs(2));
@@ -4745,7 +4823,7 @@ pub fn step(app: &mut App, n: u32) {
                 let _ = v.load_url(&to);
             }
         }
-        274 => {
+        281 => {
             ui_eval(app, "ext-page-refused-in-the-ui", "`${location.href}`", |r| {
                 check("ext-page-refused-in-the-ui", r.starts_with("http://xb.ui/"), &r);
             });
@@ -4761,9 +4839,9 @@ pub fn step(app: &mut App, n: u32) {
                 crate::native::add_extension(v, &folder, |r| log(&format!("INFO the unknown extension added: {:?}", r.map(|i| i.id))));
             }
         }
-        275 => {
+        282 => {
             // The keyboard in the strip, as when the menu is used. (The
-            // typed address at 273 closed the page with the keyboard still
+            // typed address at 280 closed the page with the keyboard still
             // in the hidden overlay.)
             let _ = app.ui.focus();
             // The start's reconcile, as WebView2 lists it.
@@ -4774,7 +4852,7 @@ pub fn step(app: &mut App, n: u32) {
                 });
             }
         }
-        276 => {
+        283 => {
             let l = app.extensions.list().into_iter().find(|l| l.id == EXT_ID);
             let recorded = app.extensions.records().iter().any(|e| e.id == EXT_ID);
             check(
@@ -4784,7 +4862,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             crate::ext_ui::open(app);
         }
-        277 => {
+        284 => {
             overlay_eval(app, "ext-unknown-listed-and-marked", EXT_ROW_JS, |r| {
                 check(
                     "ext-unknown-listed-and-marked",
@@ -4798,7 +4876,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_click(app, "#x-list [data-ctl=\"switch\"]");
         }
-        278 => {
+        285 => {
             // On, and so allowed, but still not recorded (v0.3 task 5B).
             let on = app.extensions.list().iter().any(|l| l.id == EXT_ID && l.enabled);
             let recorded = app.extensions.records().iter().any(|e| e.id == EXT_ID);
@@ -4810,7 +4888,7 @@ pub fn step(app: &mut App, n: u32) {
             overlay_click(app, "#x-list [data-ctl=\"remove\"]");
             overlay_click(app, "#x-list [data-ctl=\"yes\"]");
         }
-        279 => {
+        286 => {
             let listed = app.extensions.list().iter().any(|l| l.id == EXT_ID);
             check(
                 "ext-unknown-removed",
@@ -4829,7 +4907,7 @@ pub fn step(app: &mut App, n: u32) {
                 check("ext-unknown-removed-from-webview2", false, "no content view");
             }
         }
-        280 => {
+        287 => {
             // The Uzantılar page is still open from the last steps; the
             // keys go back to the strip.
             crate::overlay::close(app);
@@ -4854,7 +4932,7 @@ pub fn step(app: &mut App, n: u32) {
             fake::plan(Ok("2026.1116.1650".into()));
             crate::firstrun::on_reconcile_done(app);
         }
-        281 => {
+        288 => {
             use crate::firstrun::{Run, State, fake};
             let (state, run) = (app.extensions.first_run_ubol(), app.extensions.first_run.run);
             check(
@@ -4865,7 +4943,7 @@ pub fn step(app: &mut App, n: u32) {
             // Another store install finishes.
             fake::send(app, EXT_ID, Ok("1.0".into()));
         }
-        282 => {
+        289 => {
             use crate::firstrun::{Run, State, fake};
             let profile = dir().join("profile");
             crate::store::flush(Duration::from_secs(2));
@@ -4884,7 +4962,7 @@ pub fn step(app: &mut App, n: u32) {
             // The user removes it (WebView2 answers: not installed).
             remember("ext-op", crate::extensions::remove(app, crate::firstrun::UBOL_ID) as i64);
         }
-        283 => {
+        290 => {
             use crate::firstrun::{Run, State, UBOL_ID, fake};
             let outcome = ext_outcome(app, "ext-op");
             crate::store::flush(Duration::from_secs(2));
@@ -4907,7 +4985,7 @@ pub fn step(app: &mut App, n: u32) {
                 format!("starts {}, {run:?}", fake::starts()),
             );
         }
-        284 => {
+        291 => {
             // The extension back, for the remove question below.
             let again = dir().join("profile").join(crate::extensions::DIR).join(EXT_ID).join("2.0");
             match write_test_extension(&again, "2.0", false) {
@@ -4916,7 +4994,7 @@ pub fn step(app: &mut App, n: u32) {
             }
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/".into())));
         }
-        285 => {
+        292 => {
             // Not a store detail page: no store button.
             eval(Some(&app.ui), "store-button-off-elsewhere", "String(document.getElementById('ext-store').hidden)", |r| {
                 check("store-button-off-elsewhere", r == "true", r);
@@ -4925,7 +5003,7 @@ pub fn step(app: &mut App, n: u32) {
             let to = crate::cws::sentinel_url(crate::cws::Action::Install, EXT_ID);
             page_js(app, &format!("location.href = '{to}'"));
         }
-        286 => {
+        293 => {
             let id = app.tabs.active().unwrap();
             let loading = app.tabs.get(id).is_some_and(|t| t.loading);
             check(
@@ -4936,9 +5014,9 @@ pub fn step(app: &mut App, n: u32) {
             // The question itself, as the button on a detail page opens it.
             crate::webstore::on_store_button(app, id, crate::cws::Action::Remove, EXT_ID);
         }
-        287 => {
+        294 => {
             log(&format!(
-                "INFO step 287: X-Browser is the foreground window: {}; extension added again: {:?}",
+                "INFO step 294: X-Browser is the foreground window: {}; extension added again: {:?}",
                 crate::native::is_foreground(&app.window),
                 ext_outcome(app, "ext-op")
             ));
@@ -4963,14 +5041,14 @@ pub fn step(app: &mut App, n: u32) {
             });
             app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
         }
-        288 => {
+        295 => {
             check(
                 "store-question-no-closes",
                 overlay_closed(app) && app.webstore.busy_with().is_none(),
                 format!("{:?}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
             );
         }
-        289 => {
+        296 => {
             // Store updates (task 5B), against the fake store
             // (`webstore::fake`): a fresh self-signed key, its packages at
             // 1.0 to 1.4, the 1.0 one behind the store URL and the others at
@@ -4995,7 +5073,7 @@ pub fn step(app: &mut App, n: u32) {
             UPDATES.with(|u| *u.borrow_mut() = Some((id.clone(), sums)));
             crate::webstore::install_from_store(app, &id, false);
         }
-        290 => {
+        297 => {
             let id = update_id();
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.source, e.dir.clone()));
             check(
@@ -5007,7 +5085,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             remember("ext-op", crate::extensions::set_enabled(app, &id, false) as i64);
         }
-        291 => {
+        298 => {
             let id = update_id();
             let outcome = ext_outcome(app, "ext-op");
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.enabled);
@@ -5017,7 +5095,7 @@ pub fn step(app: &mut App, n: u32) {
             serve_update_check(&id, "1.1", None);
             crate::webstore::check_updates(app);
         }
-        292 => {
+        299 => {
             let id = update_id();
             let asked = crate::webstore::fake::asked();
             let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
@@ -5029,7 +5107,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             remember("ext-op", crate::extensions::set_enabled(app, &id, true) as i64);
         }
-        293 => {
+        300 => {
             let id = update_id();
             let outcome = ext_outcome(app, "ext-op");
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.enabled);
@@ -5048,7 +5126,7 @@ pub fn step(app: &mut App, n: u32) {
             crate::ext_ui::open(app);
             overlay_click(app, "#x-check");
         }
-        294 => {
+        301 => {
             // A newer version: fetched from its address, in without a
             // question, and still on.
             let id = update_id();
@@ -5102,7 +5180,7 @@ pub fn step(app: &mut App, n: u32) {
             serve_update_check(&id, "1.1", None);
             crate::webstore::check_updates(app);
         }
-        295 => {
+        302 => {
             let id = update_id();
             let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
             check(
@@ -5121,7 +5199,7 @@ pub fn step(app: &mut App, n: u32) {
             serve_update_check(&id, "1.2", Some(&"00".repeat(32)));
             crate::webstore::check_updates(app);
         }
-        296 => {
+        303 => {
             let id = update_id();
             let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
@@ -5140,7 +5218,7 @@ pub fn step(app: &mut App, n: u32) {
             serve_update_check(&id, "1.2", Some(&"00".repeat(32)));
             crate::webstore::check_updates(app);
         }
-        297 => {
+        304 => {
             let asked = crate::webstore::fake::asked();
             let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
             check(
@@ -5150,15 +5228,15 @@ pub fn step(app: &mut App, n: u32) {
             );
             // A version that wants more, while the menu is open: no
             // question over it. X-Browser counts as in front from here to
-            // step 301 whoever uses the desktop (`App::in_front`), so the
+            // step 308 whoever uses the desktop (`App::in_front`), so the
             // menu does not close itself either.
             app.foreground = Some(true);
             let sc = press(app, vk::F, ALT);
-            log(&format!("INFO step 297: X-Browser is really the foreground window: {}; Alt+F {sc:?}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 304: X-Browser is really the foreground window: {}; Alt+F {sc:?}", crate::native::is_foreground(&app.window)));
             serve_update_check(&update_id(), "1.3", None);
             crate::webstore::check_updates(app);
         }
-        298 => {
+        305 => {
             let id = update_id();
             let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
@@ -5174,13 +5252,13 @@ pub fn step(app: &mut App, n: u32) {
             );
             overlay_js(app, &key_js("Escape"));
         }
-        299 => {
+        306 => {
             check("update-menu-closes", overlay_closed(app), format!("{:?}", app.overlay.mode));
-            // In front (step 297), nothing else on screen: it asks.
+            // In front (step 304), nothing else on screen: it asks.
             serve_update_check(&update_id(), "1.3", None);
             crate::webstore::check_updates(app);
         }
-        300 => {
+        307 => {
             let id = update_id();
             let shown = app.overlay.view().is_some_and(visible);
             check(
@@ -5206,7 +5284,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
         }
-        301 => {
+        308 => {
             let id = update_id();
             let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
@@ -5223,7 +5301,7 @@ pub fn step(app: &mut App, n: u32) {
             serve_update_check(&id, "1.3", None);
             crate::webstore::check_updates(app);
         }
-        302 => {
+        309 => {
             let id = update_id();
             let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
@@ -5244,7 +5322,7 @@ pub fn step(app: &mut App, n: u32) {
             serve_update_check(&id, "1.4", None);
             crate::webstore::check_updates(app);
         }
-        303 => {
+        310 => {
             let id = update_id();
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
             let asked = crate::webstore::fake::asked();
@@ -5258,7 +5336,7 @@ pub fn step(app: &mut App, n: u32) {
             );
             app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
         }
-        304 => {
+        311 => {
             let id = update_id();
             let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
             let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
@@ -5276,7 +5354,7 @@ pub fn step(app: &mut App, n: u32) {
             remember("upd-asked", crate::webstore::fake::asked().len() as i64);
             app.handle(UserEvent::UpdateTimer);
         }
-        305 => {
+        312 => {
             let asked = crate::webstore::fake::asked();
             let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
             let now = crate::history::now_secs();
@@ -5290,12 +5368,12 @@ pub fn step(app: &mut App, n: u32) {
             remember("upd-asked", asked.len() as i64);
             app.handle(UserEvent::UpdateTimer);
         }
-        306 => {
+        313 => {
             let asked = crate::webstore::fake::asked();
             let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
             check("update-timer-waits-a-day", new.is_empty() && app.webstore.busy_with().is_none(), format!("asked {new:?}"));
         }
-        307 => {
+        314 => {
             crate::overlay::close(app);
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
@@ -5357,10 +5435,10 @@ const EXT_POPUP_HTML: &str = include_str!("../test-assets/selftest-ext/popup.htm
 const EXT_POPUP_JS: &str = include_str!("../test-assets/selftest-ext/popup.js");
 const EXT_OPTIONS_HTML: &str = include_str!("../test-assets/selftest-ext/options.html");
 const EXT_FRAME_HTML: &str = include_str!("../test-assets/selftest-ext/frame.html");
-/// Adds a frame with `frame.html` over the whole popup, once the popup's
-/// page is parsed (a script queued during its load runs before `body`).
 /// The last error the Extensions page is given to show (update steps).
 const EXT_LAST_ERROR: &str = "Uzantı paketi doğrulanamadı (self-test).";
+/// Adds a frame with `frame.html` over the whole popup, once the popup's
+/// page is parsed (a script queued during its load runs before `body`).
 const EXT_FRAME_ADD_JS: &str = "(() => { const add = () => document.body.insertAdjacentHTML('beforeend', \
   '<iframe src=\"frame.html\" title=\"frame\" style=\"position:fixed;inset:0;width:100%;height:100%;border:0\"></iframe>'); \
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add); else add(); return 1; })()";
@@ -5372,7 +5450,7 @@ const EXT_ID: &str = "mmbkafeccnpmgicaldnppdljpaogpjdm";
 
 /// Writes the self-test extension into `dir`, as `version`. Without
 /// `popup` its manifest declares no `action`: the strip's extensions button
-/// then stays hidden, as it is for the steps before 251 (the tab strip's
+/// then stays hidden, as it is for the steps before 258 (the tab strip's
 /// width checks).
 fn write_test_extension(dir: &std::path::Path, version: &str, popup: bool) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -5600,6 +5678,21 @@ fn overlay_click(app: &App, selector: &str) {
 fn tab_zoom(app: &App) -> u16 {
     app.tabs.active().and_then(|id| app.tabs.get(id)).map_or(0, |t| t.zoom)
 }
+
+/// An address whose host never resolves (`.invalid`): its load fails.
+const ERROR_URL: &str = "https://xb-error-page.invalid/yol?q=1";
+
+/// The error page as the tab's document has it. `only_ours`: the body holds
+/// nothing but X-Browser's page; `retry_vis`: the button is on top at its
+/// centre; `mark` is set by the test in the document it last saw.
+const ERROR_PAGE_JS: &str = "(() => { const g = (id) => document.getElementById(id), h = document.querySelector('h1'), b = g('xb-error-retry'); \
+  const r = b ? b.getBoundingClientRect() : null; \
+  const hit = r && r.width > 0 ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null; \
+  return [`doc=${document.URL}`, `h1=${h ? h.textContent : ''}`, `url=${g('xb-error-url') ? g('xb-error-url').textContent : ''}`, \
+  `retry=${b ? b.textContent : ''}`, `retry_vis=${!!b && hit === b}`, `lang=${document.documentElement.lang}`, \
+  `edge=${/edge|microsoft/i.test(document.documentElement.innerText)}`, \
+  `only_ours=${!!document.body && document.body.children.length === 1 && document.body.firstElementChild.id === 'xb-error'}`, \
+  `title=${document.title}`, `hl=${history.length}`, `mark=${typeof window.__xbErrorMark}`].join(';'); })()";
 
 /// What the policy steps ask to open. Never opened: `record_launch` stands
 /// in for the launcher, and the address is not a real one.

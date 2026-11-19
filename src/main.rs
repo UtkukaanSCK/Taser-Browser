@@ -7,6 +7,7 @@ mod commands;
 mod crx;
 mod cws;
 mod downloads;
+mod error_page;
 mod ext_ui;
 mod extensions;
 mod firstrun;

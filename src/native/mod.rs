@@ -20,6 +20,7 @@ pub enum ProfileBusy {
 mod audio;
 mod content;
 mod download;
+mod error_page;
 mod extensions;
 mod favicon;
 mod fullscreen;
@@ -30,6 +31,7 @@ mod zoom;
 pub use audio::*;
 pub use content::*;
 pub use download::*;
+pub use error_page::*;
 pub use extensions::*;
 pub use favicon::*;
 pub use fullscreen::*;

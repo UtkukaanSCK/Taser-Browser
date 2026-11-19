@@ -162,12 +162,15 @@ mod imp {
     }
 
     /// Content pages get no host bridge at all: no `chrome.webview.postMessage`
-    /// and no host objects. Call before the first navigation.
+    /// and no host objects. Nor WebView2's own (Edge-branded) error page: a
+    /// failed load gets X-Browser's (`attach_error_page`). Call before the
+    /// first navigation.
     pub fn harden_content(view: &WebView) -> windows::core::Result<()> {
         unsafe {
             let settings = view.webview().Settings()?;
             settings.SetIsWebMessageEnabled(false)?;
             settings.SetAreHostObjectsAllowed(false)?;
+            settings.SetIsBuiltInErrorPageEnabled(false)?;
         }
         Ok(())
     }
@@ -184,6 +187,9 @@ mod imp {
         let mut token = 0i64;
         attach_process_failed(view, Some(tab), proxy)?;
         crate::native::attach_policy(view, tab, proxy)?;
+        if let Err(e) = crate::native::attach_error_page(view) {
+            eprintln!("x-browser: tab {tab}: no error page: {e}");
+        }
         // Icons and the sound mark are extras: a tab without them still works.
         if let Err(e) = crate::native::attach_favicon(view, tab, proxy) {
             eprintln!("x-browser: tab {tab}: no favicon events: {e}");
