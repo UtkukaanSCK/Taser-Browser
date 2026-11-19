@@ -9,6 +9,8 @@
 
 use std::ffi::c_void;
 use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Sent on every request. Names the client and nothing about the user.
@@ -28,6 +30,16 @@ pub struct Limits {
     pub receive_timeout: Duration,
     /// The whole call, all hops included.
     pub deadline: Duration,
+    /// Set from another thread to stop the call. Checked before each hop,
+    /// before connecting and before each read, so a stopped call ends within
+    /// one read; a read already waiting ends at `receive_timeout` at worst.
+    pub cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Limits {
+    fn check_cancel(&self) -> Result<(), NetError> {
+        if self.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) { Err(NetError::Cancelled) } else { Ok(()) }
+    }
 }
 
 impl Default for Limits {
@@ -37,6 +49,7 @@ impl Default for Limits {
             connect_timeout: Duration::from_secs(15),
             receive_timeout: Duration::from_secs(30),
             deadline: Duration::from_secs(300),
+            cancel: None,
         }
     }
 }
@@ -59,6 +72,8 @@ pub enum NetError {
     /// The body ended before its `Content-Length`.
     Truncated,
     Timeout,
+    /// [`Limits::cancel`] was set.
+    Cancelled,
     /// A WinHTTP or Win32 error code and the step that failed.
     Os { stage: &'static str, code: u32 },
 }
@@ -73,6 +88,7 @@ impl fmt::Display for NetError {
             Self::TooLarge => write!(f, "response is too large"),
             Self::Truncated => write!(f, "response was cut short"),
             Self::Timeout => write!(f, "timed out"),
+            Self::Cancelled => write!(f, "cancelled"),
             Self::Os { stage, code } => write!(f, "{stage} failed ({code})"),
         }
     }
@@ -250,8 +266,10 @@ fn is_redirect(status: u16) -> bool {
 pub fn get(url: &str, limits: &Limits) -> Result<Response, NetError> {
     let start = Instant::now();
     let mut target = parse_https(url)?;
+    limits.check_cancel()?;
     let session = Session::open()?;
     for _ in 0..=MAX_REDIRECTS {
+        limits.check_cancel()?;
         match session.fetch(&target, limits, start)? {
             Fetched::Redirect(location) => {
                 target = resolve(&target, &location).map_err(|e| match e {
@@ -340,6 +358,7 @@ impl Session {
         // SAFETY: plain FFI on live handles; strings outlive the calls.
         unsafe {
             WinHttpSetTimeouts(self.0.0, connect_ms, connect_ms, io_ms, io_ms).map_err(os_err("timeouts"))?;
+            limits.check_cancel()?;
             let connect = Handle::new(WinHttpConnect(self.0.0, &HSTRING::from(&*t.host), t.port, 0), "WinHttpConnect")?;
             let req = Handle::new(
                 WinHttpOpenRequest(
@@ -385,6 +404,7 @@ impl Session {
             let mut body = Vec::with_capacity(declared.map_or(0, |n| n as usize));
             let mut buf = vec![0u8; READ_CHUNK];
             loop {
+                limits.check_cancel()?;
                 req.set_u32(WINHTTP_OPTION_RECEIVE_TIMEOUT, ms(limits.receive_timeout, left()?) as u32, "timeouts")?;
                 // Wait for some data, then read only what has arrived, so one
                 // read never waits to fill the whole buffer and the deadline is
@@ -611,6 +631,15 @@ mod tests {
         // A spent deadline stops before connecting (no network needed).
         let spent = Limits { deadline: Duration::ZERO, ..Limits::default() };
         assert_eq!(get("https://example.invalid/", &spent).unwrap_err(), NetError::Timeout);
+        // So does a call already cancelled; an unset flag changes nothing.
+        let flag = Arc::new(AtomicBool::new(true));
+        let stopped = Limits { cancel: Some(flag.clone()), ..Limits::default() };
+        assert_eq!(get("https://example.invalid/", &stopped).unwrap_err(), NetError::Cancelled);
+        assert_eq!(NetError::Cancelled.to_string(), "cancelled");
+        flag.store(false, Ordering::Relaxed);
+        assert_eq!(stopped.check_cancel(), Ok(()));
+        let spent_too = Limits { deadline: Duration::ZERO, ..stopped };
+        assert_eq!(get("https://example.invalid/", &spent_too).unwrap_err(), NetError::Timeout);
     }
 
     // --- the real store ---------------------------------------------------------

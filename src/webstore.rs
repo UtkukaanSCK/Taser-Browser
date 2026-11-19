@@ -50,9 +50,11 @@ use crate::crx::{self, Policy};
 use crate::cws::{self, Action};
 use crate::overlay::Mode;
 use crate::tabs::TabId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// How long the question waits for an answer once it is on screen.
@@ -125,6 +127,44 @@ impl Failure {
             Self::Package(e) => format!("Uzantı paketi doğrulanamadı ({e})."),
             Self::Install(e) => format!("Uzantı eklenemedi ({e})."),
         }
+    }
+}
+
+/// Longest `LastError::message` kept, in characters.
+const MAX_ERROR_TEXT: usize = 300;
+
+/// The last install that failed after its question was gone, so nobody saw
+/// why (`finish`). Kept in `extensions.json` (`ExtFile::last_error`, one
+/// record) for the Extensions page to show at the next start.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct LastError {
+    pub id: String,
+    /// `Failure::message`: Turkish, without control characters.
+    pub message: String,
+    /// Seconds since the epoch.
+    pub at: u64,
+}
+
+impl LastError {
+    /// `None` unless `id` is an extension id and some text is left once
+    /// control characters are taken out.
+    pub fn new(id: &str, message: &str, at: u64) -> Option<Self> {
+        let message: String = message.chars().filter(|c| !c.is_control()).take(MAX_ERROR_TEXT).collect();
+        let message = message.trim();
+        (crx::is_extension_id(id) && !message.is_empty()).then(|| Self { id: id.to_owned(), message: message.to_owned(), at })
+    }
+
+    /// Reads the field leniently: anything but a valid record (a wrong type,
+    /// a missing part, a bad id) is `None`, never an error that would cost
+    /// the rest of the file.
+    pub fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Self>, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        let (Some(id), Some(message), Some(at)) =
+            (v.get("id").and_then(|x| x.as_str()), v.get("message").and_then(|x| x.as_str()), v.get("at").and_then(|x| x.as_u64()))
+        else {
+            return Ok(None);
+        };
+        Ok(Self::new(id, message, at))
     }
 }
 
@@ -207,14 +247,18 @@ struct Job {
     /// The folder recorded for the id when unpacking began, deleted once the
     /// new version is in (`retire`).
     replaced: Option<PathBuf>,
+    /// Set when the job ends (`finish`): its download, if still running,
+    /// stops at its next read (`net::Limits::cancel`).
+    cancel: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
 pub struct State {
     job: Option<Job>,
     next: u64,
-    /// Downloads still running, cancelled ones included (a thread cannot be
-    /// stopped): a page that keeps asking cannot stack them up.
+    /// Downloads still running, cancelled ones included: a cancelled one
+    /// stops at its next read, but a read already waiting runs to its
+    /// timeout, so a page that keeps asking cannot stack them up meanwhile.
     fetching: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Updates offered and not started yet, oldest first.
     queue: VecDeque<(String, Source)>,
@@ -325,9 +369,10 @@ fn start_job(app: &mut App, id: &str, confirm: bool, tab: Option<TabId>, source:
     let prodversion = prodversion();
     let (proxy, owned) = (app.proxy().clone(), id.to_owned());
     let running = app.webstore.fetching.clone();
+    let cancel = app.webstore.job.as_ref().map(|j| j.cancel.clone()).unwrap_or_default();
     running.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let spawned = std::thread::Builder::new().name("xb-store-fetch".into()).spawn(move || {
-        let result = fetch(&owned, &prodversion, &source, installed.as_deref(), STORE_POLICY);
+        let result = fetch(&owned, &prodversion, &source, installed.as_deref(), STORE_POLICY, cancel);
         running.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         let _ = proxy.send_event(UserEvent::Store(Event::Fetched { serial, result }));
     });
@@ -357,6 +402,7 @@ fn new_job(app: &mut App, id: &str, action: Action, confirm: bool, tab: Option<T
         spot: crate::overlay::store_spot(),
         offered: None,
         replaced: None,
+        cancel: Arc::default(),
     });
     w.next
 }
@@ -403,13 +449,14 @@ fn has(app: &App, id: &str) -> bool {
 
 /// Downloads and checks the package (worker thread). For an update,
 /// `installed` is the folder of the version installed now, whose manifest
-/// the new one's permissions are compared with.
-fn fetch(id: &str, prodversion: &str, source: &Source, installed: Option<&Path>, policy: Policy) -> Result<Fetched, Failure> {
+/// the new one's permissions are compared with. `cancel`: the job's flag,
+/// set once it ends; the download then stops at its next read.
+fn fetch(id: &str, prodversion: &str, source: &Source, installed: Option<&Path>, policy: Policy, cancel: Arc<AtomicBool>) -> Result<Fetched, Failure> {
     let (url, max_body) = match source {
         Source::Store => (cws::crx_url(id, prodversion).ok_or(Failure::BadId)?, crx::MAX_CRX_BYTES),
         Source::Update { codebase, size, .. } => (codebase.clone(), body_cap(*size)),
     };
-    let limits = crate::net::Limits { max_body, ..Default::default() };
+    let limits = crate::net::Limits { max_body, cancel: Some(cancel), ..Default::default() };
     let resp = http_get(&url, &limits).map_err(Failure::Net)?;
     if resp.status != 200 {
         return Err(Failure::Net(format!("HTTP {}", resp.status)));
@@ -831,6 +878,8 @@ fn end(app: &mut App, result: Result<String, Failure>) {
 }
 
 fn finish(app: &mut App, job: Job, result: Result<String, Failure>) {
+    // A download still running for this job is no longer wanted.
+    job.cancel.store(true, Ordering::Relaxed);
     match &result {
         Ok(_) => {
             if app.overlay.mode == Mode::Store {
@@ -840,7 +889,13 @@ fn finish(app: &mut App, job: Job, result: Result<String, Failure>) {
         Err(Failure::Cancelled) => {}
         Err(f) => {
             eprintln!("x-browser: extension {} not installed: {f:?}", job.id);
-            show_error(app, &f.message(), job.spot);
+            // The question is gone: kept for the Extensions page to show at
+            // the next start.
+            if !show_error(app, &f.message(), job.spot)
+                && let Some(e) = LastError::new(&job.id, &f.message(), crate::history::now_secs())
+            {
+                app.extensions.set_last_error(e);
+            }
         }
     }
     // A package or install that failed fails the same way again: that
@@ -1139,13 +1194,16 @@ fn show(app: &mut App) {
 
 /// Shows `text` with "Kapat" if the question is still on screen; a question
 /// the user already closed does not come back for it.
-fn show_error(app: &mut App, text: &str, spot: (f64, f64)) {
+/// Shows `text` in the question, if it is still on screen. `false`: it was
+/// gone, and nobody saw the error.
+fn show_error(app: &mut App, text: &str, spot: (f64, f64)) -> bool {
     if app.overlay.mode != Mode::Store {
-        return;
+        return false;
     }
     let view = View { stage: "error", action: "", id: "", name: "", version: "", permissions: &[], update: false, text, ms: 0, guard: 0 };
-    let Ok(json) = serde_json::to_string(&view) else { return };
+    let Ok(json) = serde_json::to_string(&view) else { return false };
     crate::overlay::show_store(app, format!("xbExt.show({json})"), spot);
+    true
 }
 
 /// The overlay put a stage of the question on screen (`overlay::presented`).
@@ -1256,6 +1314,7 @@ pub fn render_js(app: &App) -> String {
 #[cfg(feature = "selftest")]
 pub mod fake {
     use std::sync::Mutex;
+    use std::sync::atomic::Ordering;
 
     type Answer = (String, u16, Vec<u8>);
     static ANSWERS: Mutex<Vec<Answer>> = Mutex::new(Vec::new());
@@ -1281,6 +1340,10 @@ pub mod fake {
     }
 
     pub(super) fn get(url: &str, limits: &crate::net::Limits) -> Result<crate::net::Response, String> {
+        // A cancelled call stops before asking, as `net::get` does.
+        if limits.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(crate::net::NetError::Cancelled.to_string());
+        }
         ASKED.lock().unwrap_or_else(|e| e.into_inner()).push(url.to_owned());
         let answers = ANSWERS.lock().unwrap_or_else(|e| e.into_inner());
         let (_, status, body) = answers.iter().find(|(p, ..)| url.starts_with(p.as_str())).ok_or("fake store: offline")?;

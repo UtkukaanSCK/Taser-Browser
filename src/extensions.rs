@@ -128,6 +128,10 @@ pub struct ExtFile {
     /// epoch (`webstore::update_check_due`). Missing or unreadable: never.
     #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_secs")]
     pub last_update_check: Option<u64>,
+    /// The last install error nobody saw (`webstore::LastError`), one
+    /// record. Missing or unreadable: none.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "crate::webstore::LastError::lenient")]
+    pub last_error: Option<crate::webstore::LastError>,
 }
 
 /// A time in seconds, or None for anything else (a string, a negative or
@@ -621,6 +625,18 @@ impl Extensions {
     /// Sets and saves when the last update check started.
     pub fn set_last_update_check(&mut self, secs: u64) {
         self.file.last_update_check = Some(secs);
+        self.save();
+    }
+
+    /// The last install error nobody saw, for the Extensions page.
+    #[cfg_attr(not(test), allow(dead_code))] // Wired up to the page at the merge.
+    pub fn last_error(&self) -> Option<&crate::webstore::LastError> {
+        self.file.last_error.as_ref()
+    }
+
+    /// Keeps and saves `e` in place of the one before.
+    pub fn set_last_error(&mut self, e: crate::webstore::LastError) {
+        self.file.last_error = Some(e);
         self.save();
     }
 

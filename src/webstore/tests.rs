@@ -399,3 +399,111 @@ fn reads_the_installed_manifest_within_its_cap() {
     assert_eq!(read_manifest_bytes(&dir), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The install flow without an `App`: download, check, unpack, for a first
+/// install and then an update, through the pieces the worker threads run.
+#[test]
+fn installs_and_updates_through_the_pure_pieces() {
+    let root = temp_dir("webstore-flow").join("ext");
+    let key = TestKey::rsa();
+    let id = key.id();
+    let perms = r#","permissions":["storage"]"#;
+
+    // Download: the body as `fetch` gets it from `http_get`.
+    let first = package(&key, &[("manifest.json", &manifest("A", "1.0", perms)), ("a.js", "1")]);
+    // Check: a store install reads the package, nothing is compared.
+    let f = verify_update(first, &id, &Source::Store, None, Policy::SelfSigned).unwrap();
+    assert!(!f.widened);
+    assert_eq!((f.info.name.as_str(), f.info.version.as_str()), ("A", "1.0"));
+    // Unpack: into a fresh version folder.
+    let u = unpack_to(&root, &f.bytes, &id, &f.info.version, None, Policy::SelfSigned).unwrap();
+    assert!(u.fresh);
+    assert_eq!(u.dir, root.join(&id).join("1.0"));
+    assert_eq!(std::fs::read_to_string(u.dir.join("a.js")).unwrap(), "1");
+
+    // The update compares with the manifest just unpacked.
+    let installed = read_manifest_bytes(&u.dir).unwrap();
+    let second = package(&key, &[("manifest.json", &manifest("A", "1.1", perms)), ("a.js", "2")]);
+    let offer = update_for(&second, "1.1");
+    let f = verify_update(second.clone(), &id, &offer, Some(&installed), Policy::SelfSigned).unwrap();
+    assert!(!f.widened, "the same permissions do not ask");
+    let u2 = unpack_to(&root, &f.bytes, &id, &f.info.version, Some(&u.dir), Policy::SelfSigned).unwrap();
+    assert_eq!(u2.dir, root.join(&id).join("1.1"));
+    assert_eq!(std::fs::read_to_string(u2.dir.join("a.js")).unwrap(), "2");
+    // The old version may go once the new one is in; the new one may not.
+    assert!(retirable(&root, &id, &u.dir, &u2.dir));
+    assert!(!retirable(&root, &id, &u2.dir, &u2.dir));
+
+    // A download that is not the one offered stops at the check: no folder.
+    let other = package(&key, &[("manifest.json", &manifest("A", "1.2", perms))]);
+    let e = verify_update(other, &id, &update_for(&second, "1.2"), Some(&installed), Policy::SelfSigned).unwrap_err();
+    assert_eq!(e, Failure::Package("özet uyuşmuyor".into()));
+    assert!(!root.join(&id).join("1.2").exists());
+
+    // A download whose job has ended stops before the network (or the
+    // self-test's fake store) is asked.
+    let cancel = Arc::new(AtomicBool::new(true));
+    let r = fetch(&id, "157.0.4341.46", &Source::Store, None, Policy::SelfSigned, cancel.clone());
+    assert!(matches!(&r, Err(Failure::Net(e)) if e == "cancelled"), "{r:?}");
+    let r = fetch(&id, "157.0.4341.46", &offer, Some(&u.dir), Policy::SelfSigned, cancel);
+    assert!(matches!(&r, Err(Failure::Net(e)) if e == "cancelled"), "{r:?}");
+    let _ = std::fs::remove_dir_all(root.parent().unwrap());
+}
+
+#[test]
+fn keeps_the_last_unseen_error_leniently() {
+    use crate::extensions::{ExtFile, Extensions};
+    let id = TestKey::rsa().id();
+
+    // Cleaned: no control characters, trimmed, capped; nothing for a bad id
+    // or no text.
+    let e = LastError::new(&id, "  Uzantı indirilemedi\n(x).\u{7} ", 5).unwrap();
+    assert_eq!((e.id.as_str(), e.message.as_str(), e.at), (id.as_str(), "Uzantı indirilemedi(x).", 5));
+    assert_eq!(LastError::new(&id, &"ş".repeat(1000), 1).unwrap().message.chars().count(), MAX_ERROR_TEXT);
+    assert_eq!(LastError::new("not-an-id", "x", 1), None);
+    assert_eq!(LastError::new(&id, " \n\u{7}", 1), None);
+
+    // Written only when there is one, and read back as written.
+    assert!(!serde_json::to_string(&ExtFile::default()).unwrap().contains("last_error"));
+    let file = ExtFile { last_error: Some(e.clone()), ..ExtFile::default() };
+    let back: ExtFile = serde_json::from_str(&serde_json::to_string(&file).unwrap()).unwrap();
+    assert_eq!(back.last_error, Some(e.clone()));
+
+    // Anything else is no record, and costs nothing else in the file.
+    let bad = [
+        "null".to_string(),
+        r#""x""#.into(),
+        "1".into(),
+        "[]".into(),
+        r#"{"id":"abc","message":"m","at":1}"#.into(),
+        format!(r#"{{"id":"{id}","message":5,"at":1}}"#),
+        format!(r#"{{"id":"{id}","message":"m","at":-1}}"#),
+        format!(r#"{{"id":"{id}","message":"m","at":"1"}}"#),
+        format!(r#"{{"id":"{id}","message":"m"}}"#),
+        format!(r#"{{"id":"{id}","message":"\u0007","at":1}}"#),
+    ];
+    for b in bad {
+        let text = format!(r#"{{"items":[],"last_update_check":7,"last_error":{b}}}"#);
+        let f: ExtFile = serde_json::from_str(&text).unwrap_or_else(|err| panic!("{b}: {err}"));
+        assert_eq!((f.last_error, f.last_update_check), (None, Some(7)), "{b}");
+    }
+    // Text read back is cleaned as when written.
+    let raw = format!(r#"{{"last_error":{{"id":"{id}","message":"a\nb","at":3}}}}"#);
+    let f: ExtFile = serde_json::from_str(&raw).unwrap();
+    assert_eq!(f.last_error.map(|e| e.message), Some("ab".to_string()));
+
+    // One record: a later error takes the place of the one before, and the
+    // next start reads it.
+    let dir = temp_dir("webstore-last-error");
+    let mut x = Extensions::open(Some(&dir));
+    assert_eq!(x.last_error(), None);
+    x.set_last_error(e);
+    let later = LastError::new(&id, "Uzantı eklenemedi (y).", 9).unwrap();
+    x.set_last_error(later.clone());
+    drop(x);
+    assert!(crate::store::flush(Duration::from_secs(5)));
+    let x = Extensions::open(Some(&dir));
+    assert_eq!(x.last_error(), Some(&later));
+    drop(x);
+    let _ = std::fs::remove_dir_all(&dir);
+}
