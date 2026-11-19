@@ -48,6 +48,9 @@ pub enum UserEvent {
     /// A Web Store install ended: the version installed, or why not
     /// (`webstore::install_from_store`).
     StoreInstalled { id: String, result: Result<String, crate::webstore::Failure> },
+    /// The update timer's tick (`webstore::start_update_timer`): a check
+    /// may be due.
+    UpdateTimer,
     #[cfg(feature = "selftest")]
     Test(u32),
 }
@@ -125,6 +128,10 @@ pub struct App {
     title: String,
     #[cfg(feature = "selftest")]
     pub title_sets: u32,
+    /// Self-test only: what `in_front` answers instead of asking Windows
+    /// (None = ask Windows), so checks do not depend on who uses the desktop.
+    #[cfg(feature = "selftest")]
+    pub foreground: Option<bool>,
     /// Set when the app must quit with an error dialog (after the loop ends).
     pub fatal: Option<&'static str>,
     /// Recent UI renderer failures (see `ui_failed_too_often`).
@@ -203,6 +210,8 @@ impl App {
             title: window.title(),
             #[cfg(feature = "selftest")]
             title_sets: 0,
+            #[cfg(feature = "selftest")]
+            foreground: None,
             fatal: None,
             ui_failures: Vec::new(),
             window,
@@ -464,6 +473,16 @@ impl App {
         }
     }
 
+    /// Whether X-Browser is the foreground window (not some other program).
+    /// The self-test can fix the answer with `foreground`.
+    pub fn in_front(&self) -> bool {
+        #[cfg(feature = "selftest")]
+        if let Some(fg) = self.foreground {
+            return fg;
+        }
+        crate::native::is_foreground(&self.window)
+    }
+
     pub fn focus_after_switch(&self) {
         let blank = self
             .tabs
@@ -629,6 +648,7 @@ impl App {
             }
             UserEvent::Store(ev) => crate::webstore::on_event(self, ev),
             UserEvent::StoreInstalled { id, result } => crate::webstore::on_installed(self, &id, &result),
+            UserEvent::UpdateTimer => crate::webstore::on_update_timer(self),
             #[cfg(feature = "selftest")]
             UserEvent::Test(step) => crate::selftest::step(self, step),
         }

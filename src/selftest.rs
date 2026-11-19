@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 569;
+const EXPECTED_CHECKS: u32 = 588;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -348,7 +348,25 @@ const DELAYS: &[u64] = &[
     900,  // 265 check it was refused; open the remove question
     900,  // 266 check the question; answer "no"
     900,  // 267 check it closed
-    900,  // 268 last tab close quits
+    300,  // 268 store updates: install 1.0 from the fake store
+    2500, // 269 check it; turn it off
+    900,  // 270 check it is off; the check offers 1.1
+    1500, // 271 check nothing was asked; turn it on
+    900,  // 272 check it is on; the check offers 1.1
+    3000, // 273 check 1.1 is in; the check offers 1.1 again
+    1500, // 274 check the old folder is gone and nothing was fetched; a bad hash
+    1500, // 275 check nothing changed; the bad 1.2 again
+    1500, // 276 check it was not fetched; in front; open the menu; 1.3 wants more
+    1500, // 277 check no question over the menu; Escape
+    900,  // 278 check the menu closed; 1.3 again
+    1500, // 279 check the question lists only the new; answer "no"
+    1500, // 280 check 1.1 stays; in the background; 1.3 again
+    900,  // 281 check no question in the background; open the remove question; 1.4
+    1500, // 282 check 1.4 waits; answer "no"
+    3000, // 283 check 1.4 is in; a timer tick, last check long ago
+    1500, // 284 check the tick checked; another tick
+    900,  // 285 check it asked nothing
+    900,  // 286 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -4583,6 +4601,290 @@ pub fn step(app: &mut App, n: u32) {
             );
         }
         268 => {
+            // Store updates (task 5B), against the fake store
+            // (`webstore::fake`): a fresh self-signed key, its packages at
+            // 1.0 to 1.4, the 1.0 one behind the store URL and the others at
+            // their own addresses. All want storage; 1.3 also wants a site.
+            use crate::crx::testpkg::{TestKey, crx, stored, zip};
+            use crate::webstore::fake;
+            fake::clear();
+            let key = TestKey::rsa();
+            let id = key.id();
+            let mut sums = Vec::new();
+            for v in ["1.0", "1.1", "1.2", "1.3", "1.4"] {
+                let hosts = if v == "1.3" { r#","host_permissions":["https://example.com/*"]"# } else { "" };
+                let manifest = format!(r#"{{"manifest_version":3,"name":"XB Update","version":"{v}","permissions":["storage"]{hosts}}}"#);
+                let body = crx(&zip(&[stored("manifest.json", manifest.as_bytes())]), &[&key]);
+                let hex: String = crate::crx::sha256(&[&body]).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
+                sums.push((v.to_owned(), hex, body.len()));
+                if v == "1.0" {
+                    fake::serve(&format!("{STORE_URL}?response=redirect"), 200, body.clone());
+                }
+                fake::serve(&update_codebase(v), 200, body);
+            }
+            UPDATES.with(|u| *u.borrow_mut() = Some((id.clone(), sums)));
+            crate::webstore::install_from_store(app, &id, false);
+        }
+        269 => {
+            let id = update_id();
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.source, e.dir.clone()));
+            check(
+                "update-fixture-installed-from-the-fake-store",
+                rec.as_ref().is_some_and(|(v, s, d)| v == "1.0" && *s == crate::extensions::Source::Cws && d.ends_with("1.0"))
+                    && app.overlay.mode != Mode::Store
+                    && app.webstore.busy_with().is_none(),
+                format!("record {rec:?}, {:?}, asked {:?}", app.overlay.mode, crate::webstore::fake::asked()),
+            );
+            remember("ext-op", crate::extensions::set_enabled(app, &id, false) as i64);
+        }
+        270 => {
+            let id = update_id();
+            let outcome = ext_outcome(app, "ext-op");
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.enabled);
+            check("update-fixture-turned-off", outcome == Some(Ok(id.clone())) && rec == Some(false), format!("outcome {outcome:?}, enabled {rec:?}"));
+            // An extension that is off is not checked at all.
+            remember("upd-asked", crate::webstore::fake::asked().len() as i64);
+            serve_update_check(&id, "1.1", None);
+            crate::webstore::check_updates(app);
+        }
+        271 => {
+            let id = update_id();
+            let asked = crate::webstore::fake::asked();
+            let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
+            check(
+                "update-leaves-an-extension-that-is-off-alone",
+                new.is_empty() && rec == Some(("1.0".into(), false)) && app.webstore.busy_with().is_none(),
+                format!("asked {new:?}, record {rec:?}, job {:?}", app.webstore.busy_with()),
+            );
+            remember("ext-op", crate::extensions::set_enabled(app, &id, true) as i64);
+        }
+        272 => {
+            let id = update_id();
+            let outcome = ext_outcome(app, "ext-op");
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.enabled);
+            let listed = app.extensions.list().iter().find(|l| l.id == id).map(|l| l.enabled);
+            check(
+                "update-fixture-turned-on",
+                outcome == Some(Ok(id.clone())) && rec == Some(true) && listed == Some(true),
+                format!("outcome {outcome:?}, enabled {rec:?}, listed {listed:?}"),
+            );
+            serve_update_check(&id, "1.1", None);
+            crate::webstore::check_updates(app);
+        }
+        273 => {
+            // A newer version: fetched from its address, in without a
+            // question, and still on.
+            let id = update_id();
+            let asked = crate::webstore::fake::asked();
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled, e.dir.ends_with("1.1")));
+            check(
+                "update-newer-version-goes-in-silently",
+                rec.as_ref().is_some_and(|(v, on, d)| v == "1.1" && *on && *d)
+                    && asked.iter().any(|u| *u == update_codebase("1.1"))
+                    && app.overlay.mode != Mode::Store
+                    && app.webstore.busy_with().is_none(),
+                format!("record {rec:?}, {:?}, job {:?}, asked {asked:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+            // The same version offered again: nothing to fetch.
+            remember("upd-asked", asked.len() as i64);
+            serve_update_check(&id, "1.1", None);
+            crate::webstore::check_updates(app);
+        }
+        274 => {
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            check(
+                "update-deletes-the-old-version-folder",
+                !home.join("1.0").exists() && home.join("1.1").join("manifest.json").is_file(),
+                format!("1.0 {}, 1.1 {}", home.join("1.0").exists(), home.join("1.1").exists()),
+            );
+            let asked = crate::webstore::fake::asked();
+            let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
+            check(
+                "update-same-version-fetches-nothing",
+                new.len() == 1 && new[0].contains("response=updatecheck") && app.webstore.busy_with().is_none(),
+                format!("asked {new:?}, job {:?}", app.webstore.busy_with()),
+            );
+            // A download that is not the one the check named.
+            serve_update_check(&id, "1.2", Some(&"00".repeat(32)));
+            crate::webstore::check_updates(app);
+        }
+        275 => {
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
+            let asked = crate::webstore::fake::asked();
+            check(
+                "update-hash-mismatch-changes-nothing",
+                rec.as_deref() == Some("1.1")
+                    && asked.iter().any(|u| *u == update_codebase("1.2"))
+                    && !home.join("1.2").exists()
+                    && app.overlay.mode != Mode::Store
+                    && app.webstore.busy_with().is_none(),
+                format!("record {rec:?}, 1.2 {}, {:?}, asked {asked:?}", home.join("1.2").exists(), app.overlay.mode),
+            );
+            // The same broken version offered again: not fetched again.
+            remember("upd-asked", asked.len() as i64);
+            serve_update_check(&id, "1.2", Some(&"00".repeat(32)));
+            crate::webstore::check_updates(app);
+        }
+        276 => {
+            let asked = crate::webstore::fake::asked();
+            let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
+            check(
+                "update-failed-version-is-not-fetched-again",
+                new.len() == 1 && new[0].contains("response=updatecheck") && app.webstore.busy_with().is_none(),
+                format!("asked {new:?}, job {:?}", app.webstore.busy_with()),
+            );
+            // A version that wants more, while the menu is open: no
+            // question over it. X-Browser counts as in front from here to
+            // step 280 whoever uses the desktop (`App::in_front`), so the
+            // menu does not close itself either.
+            app.foreground = Some(true);
+            let sc = press(app, vk::F, ALT);
+            log(&format!("INFO step 276: X-Browser is really the foreground window: {}; Alt+F {sc:?}", crate::native::is_foreground(&app.window)));
+            serve_update_check(&update_id(), "1.3", None);
+            crate::webstore::check_updates(app);
+        }
+        277 => {
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
+            let asked = crate::webstore::fake::asked();
+            check(
+                "update-does-not-ask-over-the-menu",
+                app.overlay.mode == Mode::Menu
+                    && app.webstore.busy_with().is_none()
+                    && rec.as_deref() == Some("1.1")
+                    && asked.iter().any(|u| *u == update_codebase("1.3"))
+                    && !home.join("1.3").exists(),
+                format!("{:?}, job {:?}, record {rec:?}, 1.3 {}, asked {asked:?}", app.overlay.mode, app.webstore.busy_with(), home.join("1.3").exists()),
+            );
+            overlay_js(app, &key_js("Escape"));
+        }
+        278 => {
+            check("update-menu-closes", overlay_closed(app), format!("{:?}", app.overlay.mode));
+            // In front (step 276), nothing else on screen: it asks.
+            serve_update_check(&update_id(), "1.3", None);
+            crate::webstore::check_updates(app);
+        }
+        279 => {
+            let id = update_id();
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "update-with-new-permissions-asks",
+                app.overlay.mode == Mode::Store && shown && app.webstore.busy_with() == Some(id.as_str()),
+                format!("{:?}, visible {shown}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+            // Only the site is new: storage was there before.
+            eval(app.overlay.view(), "update-question-lists-only-new-permissions", STORE_ASK_JS, move |r| {
+                check(
+                    "update-question-lists-only-new-permissions",
+                    field(&r, "hidden") == "false"
+                        && field(&r, "title") == "Bu uzantı güncellensin mi?"
+                        && field(&r, "yes") == "Güncelle"
+                        && field(&r, "meta").contains("Sürüm 1.3")
+                        && field(&r, "meta").contains(&id)
+                        && field(&r, "note") == "Yeni sürüm şu yeni izinleri istiyor:"
+                        && field(&r, "perms") == "false"
+                        && field(&r, "items") == "1"
+                        && field(&r, "list").contains("example.com"),
+                    r,
+                );
+            });
+            app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
+        }
+        280 => {
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
+            check(
+                "update-question-no-keeps-the-old-version",
+                overlay_closed(app) && app.webstore.busy_with().is_none() && rec == Some(("1.1".into(), true)) && !home.join("1.3").exists(),
+                format!("{:?}, job {:?}, record {rec:?}, 1.3 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.3").exists()),
+            );
+            // The same version with X-Browser in the background: fetched,
+            // but no question, and the job ends.
+            app.foreground = Some(false);
+            let asked = crate::webstore::fake::asked();
+            remember("upd-asked", asked.iter().filter(|u| **u == update_codebase("1.3")).count() as i64);
+            serve_update_check(&id, "1.3", None);
+            crate::webstore::check_updates(app);
+        }
+        281 => {
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
+            let fetched = crate::webstore::fake::asked().iter().filter(|u| **u == update_codebase("1.3")).count() as i64;
+            check(
+                "update-does-not-ask-in-the-background",
+                overlay_closed(app)
+                    && app.webstore.busy_with().is_none()
+                    && rec.as_deref() == Some("1.1")
+                    && fetched > recall("upd-asked")
+                    && !home.join("1.3").exists(),
+                format!("{:?}, job {:?}, record {rec:?}, 1.3 fetched {fetched} times, 1.3 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.3").exists()),
+            );
+            app.foreground = None;
+            // An update found while the remove question is open waits for it.
+            let tab = app.tabs.active().unwrap();
+            crate::webstore::on_store_button(app, tab, crate::cws::Action::Remove, &id);
+            serve_update_check(&id, "1.4", None);
+            crate::webstore::check_updates(app);
+        }
+        282 => {
+            let id = update_id();
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| e.version.clone());
+            let asked = crate::webstore::fake::asked();
+            check(
+                "update-waits-for-the-open-question",
+                app.overlay.mode == Mode::Store
+                    && app.webstore.busy_with() == Some(id.as_str())
+                    && rec.as_deref() == Some("1.1")
+                    && !asked.iter().any(|u| *u == update_codebase("1.4")),
+                format!("{:?}, job {:?}, record {rec:?}, asked {asked:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+            app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
+        }
+        283 => {
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
+            check(
+                "update-runs-after-the-question-closes",
+                overlay_closed(app)
+                    && app.webstore.busy_with().is_none()
+                    && rec == Some(("1.4".into(), true))
+                    && home.join("1.4").join("manifest.json").is_file()
+                    && !home.join("1.1").exists(),
+                format!("{:?}, job {:?}, record {rec:?}, 1.1 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.1").exists()),
+            );
+            // The daily timer, with the last check long ago.
+            app.extensions.set_last_update_check(0);
+            remember("upd-asked", crate::webstore::fake::asked().len() as i64);
+            app.handle(UserEvent::UpdateTimer);
+        }
+        284 => {
+            let asked = crate::webstore::fake::asked();
+            let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
+            let now = crate::history::now_secs();
+            let last = app.extensions.last_update_check();
+            check(
+                "update-timer-checks-when-due",
+                new.len() == 1 && new[0].contains("response=updatecheck") && last.is_some_and(|l| l + 60 >= now && l <= now + 60),
+                format!("asked {new:?}, last {last:?}, now {now}"),
+            );
+            // A tick right after: not due.
+            remember("upd-asked", asked.len() as i64);
+            app.handle(UserEvent::UpdateTimer);
+        }
+        285 => {
+            let asked = crate::webstore::fake::asked();
+            let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
+            check("update-timer-waits-a-day", new.is_empty() && app.webstore.busy_with().is_none(), format!("asked {new:?}"));
+        }
+        286 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -4597,6 +4899,42 @@ pub fn step(app: &mut App, n: u32) {
         }
         _ => {}
     }
+}
+
+/// The update service, as the fake store answers it (`cws::UPDATE_SERVICE`).
+const STORE_URL: &str = "https://clients2.google.com/service/update2/crx";
+
+/// The update steps' extension: its id, and `(version, sha256 hex, size)`
+/// of each package the fake store holds.
+type UpdateFixture = (String, Vec<(String, String, usize)>);
+
+thread_local! {
+    static UPDATES: std::cell::RefCell<Option<UpdateFixture>> = const { std::cell::RefCell::new(None) };
+}
+
+fn update_id() -> String {
+    UPDATES.with(|u| u.borrow().as_ref().map(|(id, _)| id.clone()).unwrap_or_default())
+}
+
+/// Where the fake store keeps the update steps' package of `version`.
+fn update_codebase(version: &str) -> String {
+    format!("https://fake.example/xb-update-{version}.crx")
+}
+
+/// Makes the fake update service offer `version` of extension `id`, with
+/// the package's own hash unless `hash` says otherwise.
+fn serve_update_check(id: &str, version: &str, hash: Option<&str>) {
+    let (sum, size) = UPDATES.with(|u| {
+        let u = u.borrow();
+        let found = u.as_ref().and_then(|(_, s)| s.iter().find(|(v, ..)| v == version).cloned());
+        found.map(|(_, h, n)| (h, n)).unwrap_or_default()
+    });
+    let hash = hash.unwrap_or(&sum);
+    let codebase = update_codebase(version);
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><gupdate xmlns="http://www.google.com/update2/response" protocol="2.0" server="prod"><app appid="{id}" status="ok"><updatecheck codebase="{codebase}" hash_sha256="{hash}" size="{size}" status="ok" version="{version}"/></app></gupdate>"#
+    );
+    crate::webstore::fake::serve(&format!("{STORE_URL}?response=updatecheck"), 200, xml.into_bytes());
 }
 
 /// The self-test extension (test-assets/selftest-ext), written out by the run.
@@ -4865,7 +5203,8 @@ const SECURITY_JS: &str = "(() => { const g = (id) => document.getElementById(id
 const STORE_ASK_JS: &str = "(() => { const g = (id) => document.getElementById(id); \
   return [`hidden=${g('ext-ask').hidden}`, `launch=${g('launch').hidden}`, `title=${g('x-title').textContent}`, \
   `yes=${g('x-yes').hidden ? 'hidden' : g('x-yes').textContent}`, `meta=${g('x-meta').textContent}`, \
-  `perms=${g('x-perms').hidden}`, `focus=${document.activeElement ? document.activeElement.id : ''}`].join(';'); })()";
+  `perms=${g('x-perms').hidden}`, `items=${g('x-perms').children.length}`, \
+  `list=${g('x-perms').textContent}`, `note=${g('x-note').textContent}`, `focus=${document.activeElement ? document.activeElement.id : ''}`].join(';'); })()";
 
 const LAUNCH_JS: &str = "(() => { const g = (id) => document.getElementById(id), u = g('l-uri'), o = g('l-open'); \
   return [`hidden=${g('launch').hidden}`, `scheme=${g('l-scheme').textContent}`, `origin=${g('l-origin').textContent}`, \

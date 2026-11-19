@@ -22,6 +22,25 @@
 //! Whoever called `install_from_store` hears the end of it as
 //! `UserEvent::StoreInstalled` (`on_installed`), never during the call.
 //!
+//! Updates (`check_updates`, task 5B): one update check for every extension
+//! installed from the store and turned on, then each newer version offered,
+//! one job at a time (the queue moves on whenever a job ends, `job_ended`).
+//! An update job fetches the `codebase` the check named, capped at the size
+//! it stated, and checks the download's SHA-256 against the check's before
+//! the CRX checks above; its manifest must carry the version offered
+//! (`verify_update`). It asks only when the new version wants a permission
+//! the installed one did not have ("Güncelle", listing only what is new),
+//! and only when nothing else is on screen: with the overlay open, in
+//! fullscreen or in the background it is left for the next check. Else it
+//! goes on unseen. Once WebView2 has the new version, the folder of the old
+//! one is deleted (`retire`). A version whose package or install failed is
+//! not fetched again this start (`State::failed`).
+//!
+//! The check runs at most once a day (`update_check_due`, the time kept in
+//! `extensions.json`), asked for by a timer (`start_update_timer`) and run
+//! once the start-up reconcile and its re-adds are over and no job runs
+//! (`run_pending_check`).
+//!
 //! The store page's own buttons reach here through the hook script and its
 //! sentinel address (`cws`, `policy::Event::Store`); the strip's button does
 //! the same for the page shown (`StoreCmd::Button`).
@@ -32,6 +51,7 @@ use crate::cws::{self, Action};
 use crate::overlay::Mode;
 use crate::tabs::TabId;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -46,12 +66,30 @@ pub const ANSWER_DELAY: Duration = crate::policy::ANSWER_DELAY;
 /// `prodversion` when the WebView2 runtime's version cannot be read.
 const FALLBACK_PRODVERSION: &str = "157.0.0.0";
 
-/// The longest name the question shows, in characters.
 /// Downloads that may run at once, cancelled ones included.
 const MAX_FETCHES: usize = 2;
 /// How many folders of one version `unpack_to` tries before giving up.
 const MAX_VERSION_FOLDERS: u32 = 9;
+/// Extensions asked about in one update-check request (its URL stays well
+/// under `net::MAX_URL`).
+const CHECK_BATCH: usize = 50;
+
+/// The packages this build accepts: the Web Store's only. The self-test
+/// build also takes the fake store's self-signed ones; it is never
+/// distributed (README).
+#[cfg(not(feature = "selftest"))]
+const STORE_POLICY: Policy = Policy::WebStore;
+#[cfg(feature = "selftest")]
+const STORE_POLICY: Policy = Policy::SelfSigned;
+
+/// The longest name the question shows, in characters.
 const MAX_NAME_CHARS: usize = 75;
+
+/// Seconds between two update checks.
+pub const UPDATE_CHECK_EVERY: u64 = 24 * 60 * 60;
+/// How often the timer asks whether a check is due.
+#[cfg(not(feature = "selftest"))]
+const UPDATE_TIMER_TICK: Duration = Duration::from_secs(60);
 
 /// The largest `_locales/<l>/messages.json` read for the name.
 const MAX_MESSAGES_BYTES: u64 = 1024 * 1024;
@@ -99,11 +137,13 @@ pub struct Info {
     pub permissions: Vec<String>,
 }
 
-/// A checked download.
+/// A checked download. `widened`: an update that wants a permission the
+/// installed version did not have, so the user is asked.
 #[derive(Debug)]
 pub struct Fetched {
     bytes: Vec<u8>,
     info: Info,
+    widened: bool,
 }
 
 /// An unpacked version folder. `fresh`: made by this job, so a failed add
@@ -119,6 +159,18 @@ pub struct Unpacked {
 pub enum Event {
     Fetched { serial: u64, result: Result<Fetched, Failure> },
     Unpacked { serial: u64, result: Result<Unpacked, Failure> },
+    /// The update check's answer (`check_updates`).
+    Checked { result: Result<Vec<cws::Update>, Failure> },
+}
+
+/// Where a job's package comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Source {
+    /// The update service's redirect to the current CRX (`cws::crx_url`).
+    Store,
+    /// A newer version the update check offered: fetched from `codebase`,
+    /// at most `size` bytes (`body_cap`), with this SHA-256 and version.
+    Update { codebase: String, sha256: [u8; 32], version: String, size: Option<usize> },
 }
 
 #[derive(Debug)]
@@ -149,6 +201,12 @@ struct Job {
     /// Where the question goes (`overlay::show_store`), the same for every
     /// stage of the job.
     spot: (f64, f64),
+    /// An update the update check offered, at this version: the question
+    /// says "Güncelle".
+    offered: Option<String>,
+    /// The folder recorded for the id when unpacking began, deleted once the
+    /// new version is in (`retire`).
+    replaced: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -158,14 +216,27 @@ pub struct State {
     /// Downloads still running, cancelled ones included (a thread cannot be
     /// stopped): a page that keeps asking cannot stack them up.
     fetching: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Updates offered and not started yet, oldest first.
+    queue: VecDeque<(String, Source)>,
+    /// An update check is running.
+    checking: bool,
+    /// The timer asked for a check (`run_pending_check`).
+    check_pending: bool,
+    /// `(id, version)` of updates whose package or install failed this
+    /// start, one per id: not fetched again until a newer one is offered.
+    failed: Vec<(String, String)>,
 }
 
 impl State {
-    /// The id of the extension being installed or removed. For the update
-    /// check (task 3), which is wired in at the merge.
-    #[allow(dead_code)]
+    /// The id of the extension being installed, updated or removed.
+    #[cfg(feature = "selftest")]
     pub fn busy_with(&self) -> Option<&str> {
         self.job.as_ref().map(|j| j.id.as_str())
+    }
+
+    fn remember_failed(&mut self, id: &str, version: &str) {
+        self.failed.retain(|(i, _)| i != id);
+        self.failed.push((id.to_owned(), version.to_owned()));
     }
 }
 
@@ -209,13 +280,26 @@ impl StoreCmd {
 /// first, showing the package's name and permissions. The result always
 /// comes later, as `UserEvent::StoreInstalled` (`on_installed`): `Ok` with
 /// the version installed, or why not. Called by the first-run uBOL install
-/// (`firstrun`); the self-test uses a fake store instead.
-#[cfg_attr(feature = "selftest", allow(dead_code))]
+/// (`firstrun`) and by the self-test, against its fake store (`fake`).
 pub fn install_from_store(app: &mut App, id: &str, confirm: bool) {
     start_install(app, id, confirm, None);
 }
 
 fn start_install(app: &mut App, id: &str, confirm: bool, tab: Option<TabId>) {
+    start_job(app, id, confirm, tab, Source::Store);
+}
+
+/// The WebView2 runtime's version, as the update service wants it.
+fn prodversion() -> String {
+    crate::native::runtime_version().filter(|v| cws::is_version(v)).unwrap_or_else(|| FALLBACK_PRODVERSION.to_owned())
+}
+
+/// The folder recorded for `id` now, if any.
+fn recorded_dir(app: &App, id: &str) -> Option<PathBuf> {
+    app.extensions.records().iter().find(|e| e.id == id && !e.removed).map(|e| PathBuf::from(&e.dir))
+}
+
+fn start_job(app: &mut App, id: &str, confirm: bool, tab: Option<TabId>, source: Source) {
     let refused = if app.webstore.job.is_some() || app.webstore.fetching.load(std::sync::atomic::Ordering::Relaxed) >= MAX_FETCHES {
         Some(Failure::Busy)
     } else if !crx::is_extension_id(id) || crate::extensions::is_builtin(id) {
@@ -228,15 +312,22 @@ fn start_install(app: &mut App, id: &str, confirm: bool, tab: Option<TabId>) {
     if let Some(f) = refused {
         return report(app, id, Err(f));
     }
+    let offered = match &source {
+        Source::Update { version, .. } => Some(version.clone()),
+        Source::Store => None,
+    };
+    // An update compares its permissions with the version installed now.
+    let installed = if offered.is_some() { recorded_dir(app, id) } else { None };
     let serial = new_job(app, id, Action::Install, confirm, tab, Stage::Fetching);
-    let prodversion = crate::native::runtime_version()
-        .filter(|v| cws::is_version(v))
-        .unwrap_or_else(|| FALLBACK_PRODVERSION.to_owned());
+    if let Some(job) = app.webstore.job.as_mut() {
+        job.offered = offered;
+    }
+    let prodversion = prodversion();
     let (proxy, owned) = (app.proxy().clone(), id.to_owned());
     let running = app.webstore.fetching.clone();
     running.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let spawned = std::thread::Builder::new().name("xb-store-fetch".into()).spawn(move || {
-        let result = fetch(&owned, &prodversion);
+        let result = fetch(&owned, &prodversion, &source, installed.as_deref(), STORE_POLICY);
         running.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         let _ = proxy.send_event(UserEvent::Store(Event::Fetched { serial, result }));
     });
@@ -264,6 +355,8 @@ fn new_job(app: &mut App, id: &str, action: Action, confirm: bool, tab: Option<T
         asked: None,
         guard: None,
         spot: crate::overlay::store_spot(),
+        offered: None,
+        replaced: None,
     });
     w.next
 }
@@ -308,16 +401,78 @@ fn has(app: &App, id: &str) -> bool {
 
 // --- the workers ------------------------------------------------------------------
 
-/// Downloads and checks the package (worker thread).
-fn fetch(id: &str, prodversion: &str) -> Result<Fetched, Failure> {
-    let url = cws::crx_url(id, prodversion).ok_or(Failure::BadId)?;
-    let limits = crate::net::Limits { max_body: crx::MAX_CRX_BYTES, ..Default::default() };
-    let resp = crate::net::get(&url, &limits).map_err(|e| Failure::Net(e.to_string()))?;
+/// Downloads and checks the package (worker thread). For an update,
+/// `installed` is the folder of the version installed now, whose manifest
+/// the new one's permissions are compared with.
+fn fetch(id: &str, prodversion: &str, source: &Source, installed: Option<&Path>, policy: Policy) -> Result<Fetched, Failure> {
+    let (url, max_body) = match source {
+        Source::Store => (cws::crx_url(id, prodversion).ok_or(Failure::BadId)?, crx::MAX_CRX_BYTES),
+        Source::Update { codebase, size, .. } => (codebase.clone(), body_cap(*size)),
+    };
+    let limits = crate::net::Limits { max_body, ..Default::default() };
+    let resp = http_get(&url, &limits).map_err(Failure::Net)?;
     if resp.status != 200 {
         return Err(Failure::Net(format!("HTTP {}", resp.status)));
     }
-    let info = inspect(&resp.body, id, Policy::WebStore)?;
-    Ok(Fetched { bytes: resp.body, info })
+    let old = installed.and_then(read_manifest_bytes);
+    verify_update(resp.body, id, source, old.as_deref(), policy)
+}
+
+/// Checks a download for `source` (worker thread). From the store: a
+/// package of `id`. An update, in this order: no larger than the check
+/// stated (`body_cap`), the check's SHA-256 (nothing else is read from a
+/// download that is not the one offered), a package of `id`, the version
+/// offered. `installed_manifest`: the manifest of the version installed
+/// now; when it cannot be read, the update counts as widening, and the
+/// question lists every permission instead of only the new ones.
+fn verify_update(bytes: Vec<u8>, id: &str, source: &Source, installed_manifest: Option<&[u8]>, policy: Policy) -> Result<Fetched, Failure> {
+    let Source::Update { sha256, version, size, .. } = source else {
+        let (info, _) = read_package(&bytes, id, policy)?;
+        return Ok(Fetched { bytes, info, widened: false });
+    };
+    if bytes.len() > body_cap(*size) {
+        return Err(Failure::Package("boyut uyuşmuyor".into()));
+    }
+    if crx::sha256(&[&bytes]).as_ref() != Some(sha256) {
+        return Err(Failure::Package("özet uyuşmuyor".into()));
+    }
+    let (mut info, manifest) = read_package(&bytes, id, policy)?;
+    if !cws::same_version(&info.version, version) {
+        return Err(Failure::Package("sürüm uyuşmuyor".into()));
+    }
+    let widened = installed_manifest.is_none_or(|old| cws::widens_permissions(old, &manifest));
+    if widened && let Some(old) = installed_manifest {
+        info.permissions = cws::added_permissions(old, &manifest);
+    }
+    Ok(Fetched { bytes, info, widened })
+}
+
+/// The download cap for an update: the size the check stated, never above
+/// `crx::MAX_CRX_BYTES`; the cap alone when it stated none.
+fn body_cap(size: Option<usize>) -> usize {
+    size.map_or(crx::MAX_CRX_BYTES, |n| n.min(crx::MAX_CRX_BYTES))
+}
+
+/// `dir\manifest.json`, if it is a file of at most
+/// `extensions::MAX_MANIFEST_BYTES` (worker thread).
+fn read_manifest_bytes(dir: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let path = dir.join("manifest.json");
+    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
+        return None;
+    }
+    let mut out = Vec::new();
+    std::fs::File::open(&path).ok()?.take(crate::extensions::MAX_MANIFEST_BYTES + 1).read_to_end(&mut out).ok()?;
+    (out.len() as u64 <= crate::extensions::MAX_MANIFEST_BYTES).then_some(out)
+}
+
+/// A GET through `net` (worker thread); the self-test build asks its fake
+/// store instead, so it never reaches the network.
+fn http_get(url: &str, limits: &crate::net::Limits) -> Result<crate::net::Response, String> {
+    #[cfg(feature = "selftest")]
+    return fake::get(url, limits);
+    #[cfg(not(feature = "selftest"))]
+    return crate::net::get(url, limits).map_err(|e| e.to_string());
 }
 
 fn package_error(e: crx::CrxError) -> Failure {
@@ -326,7 +481,13 @@ fn package_error(e: crx::CrxError) -> Failure {
 
 /// Checks `bytes` as a package of `id` under `policy` and reads what the
 /// question shows.
+#[cfg(test)]
 fn inspect(bytes: &[u8], id: &str, policy: Policy) -> Result<Info, Failure> {
+    read_package(bytes, id, policy).map(|(info, _)| info)
+}
+
+/// `inspect`, and the package's manifest as it is.
+fn read_package(bytes: &[u8], id: &str, policy: Policy) -> Result<(Info, Vec<u8>), Failure> {
     let payload = crx::verify_crx3(bytes, id, policy).map_err(package_error)?;
     let manifest = payload
         .file("manifest.json", crate::extensions::MAX_MANIFEST_BYTES)
@@ -343,7 +504,8 @@ fn inspect(bytes: &[u8], id: &str, policy: Policy) -> Result<Info, Failure> {
     let raw = m.get("name").and_then(|v| v.as_str()).unwrap_or_default();
     let locale = m.get("default_locale").and_then(|v| v.as_str());
     let name = clean_name(&resolve_name(raw, locale, |path| payload.file(path, MAX_MESSAGES_BYTES).ok().flatten()));
-    Ok(Info { name, version: version.to_owned(), permissions: cws::describe_permissions(&manifest) })
+    let permissions = cws::describe_permissions(&manifest);
+    Ok((Info { name, version: version.to_owned(), permissions }, manifest))
 }
 
 /// A locale folder name: `en`, `pt_BR`, `zh_CN`.
@@ -447,8 +609,12 @@ pub fn on_event(app: &mut App, ev: Event) {
     match ev {
         Event::Fetched { serial, result } if Some(serial) == current => fetched(app, result),
         Event::Unpacked { serial, result } if Some(serial) == current => unpacked(app, result),
-        // A job that was cancelled meanwhile.
-        _ => {}
+        Event::Checked { result } => checked(app, result),
+        // The download of a job cancelled meanwhile: one fewer running,
+        // which may let the next update start.
+        Event::Fetched { .. } => job_ended(app),
+        // The unpacking of a job cancelled meanwhile.
+        Event::Unpacked { .. } => {}
     }
     app.mark_dirty();
 }
@@ -458,10 +624,25 @@ fn fetched(app: &mut App, result: Result<Fetched, Failure>) {
     if !matches!(job.stage, Stage::Fetching) {
         return;
     }
-    let confirm = job.confirm;
+    let (confirm, update) = (job.confirm, job.offered.is_some());
     match result {
         Err(f) => end(app, Err(f)),
-        Ok(Fetched { bytes, info }) if confirm => {
+        // New permissions: the update waits for the user's yes, from now on
+        // like an install that asks. Never over something else on screen
+        // (a menu, a question, a page in fullscreen) or while X-Browser is
+        // in the background: then it is left for the next check (Cancelled
+        // is not remembered as failed).
+        Ok(Fetched { bytes, info, widened: true }) if update => {
+            let free = app.overlay.mode == Mode::Hidden && !app.fullscreen.on() && app.in_front();
+            if !free {
+                return end(app, Err(Failure::Cancelled));
+            }
+            let Some(job) = app.webstore.job.as_mut() else { return };
+            job.confirm = true;
+            job.stage = Stage::Asking { bytes: Some(bytes), info };
+            show(app);
+        }
+        Ok(Fetched { bytes, info, .. }) if confirm => {
             job.stage = Stage::Asking { bytes: Some(bytes), info };
             if app.overlay.mode == Mode::Store {
                 show(app);
@@ -470,24 +651,21 @@ fn fetched(app: &mut App, result: Result<Fetched, Failure>) {
                 end(app, Err(Failure::Cancelled));
             }
         }
-        Ok(Fetched { bytes, info }) => start_unpack(app, bytes, info),
+        Ok(Fetched { bytes, info, .. }) => start_unpack(app, bytes, info),
     }
 }
 
 fn start_unpack(app: &mut App, bytes: Vec<u8>, info: Info) {
     let Some(root) = app.extensions.root().map(Path::to_path_buf) else { return end(app, Err(Failure::NoView)) };
+    let Some(id) = app.webstore.job.as_ref().map(|j| j.id.clone()) else { return };
+    let recorded = recorded_dir(app, &id);
     let Some(job) = app.webstore.job.as_mut() else { return };
-    let (serial, id, version) = (job.serial, job.id.clone(), info.version.clone());
+    let (serial, version) = (job.serial, info.version.clone());
     job.stage = Stage::Unpacking { info };
-    let recorded = app
-        .extensions
-        .records()
-        .iter()
-        .find(|e| e.id == id && !e.removed)
-        .map(|e| PathBuf::from(&e.dir));
+    job.replaced = recorded.clone();
     let proxy = app.proxy().clone();
     let spawned = std::thread::Builder::new().name("xb-store-unpack".into()).spawn(move || {
-        let result = unpack_to(&root, &bytes, &id, &version, recorded.as_deref(), Policy::WebStore);
+        let result = unpack_to(&root, &bytes, &id, &version, recorded.as_deref(), STORE_POLICY);
         let _ = proxy.send_event(UserEvent::Store(Event::Unpacked { serial, result }));
     });
     if let Err(e) = spawned {
@@ -506,7 +684,14 @@ fn unpacked(app: &mut App, result: Result<Unpacked, Failure>) {
         Ok(u) => u,
         Err(f) => return end(app, Err(f)),
     };
-    let id = job.id.clone();
+    let (id, update) = (job.id.clone(), job.offered.is_some());
+    // An update of an extension removed meanwhile does not install it again.
+    if update && recorded_dir(app, &id).is_none() {
+        if unpacked.fresh {
+            discard(app, unpacked.dir);
+        }
+        return end(app, Err(Failure::Cancelled));
+    }
     let op = crate::extensions::add_from_store(app, &unpacked.dir, &id);
     if let Some(job) = app.webstore.job.as_mut() {
         job.stage = Stage::Adding { op, unpacked, info };
@@ -516,8 +701,14 @@ fn unpacked(app: &mut App, result: Result<Unpacked, Failure>) {
 }
 
 /// Called after every `UserEvent::Extension`: an add or removal of the job
-/// may have ended (`extensions` answers through `Extensions::outcome`).
+/// may have ended (`extensions` answers through `Extensions::outcome`), or
+/// the start-up reconcile and its re-adds, which a check waits for.
 pub fn after_extension_event(app: &mut App) {
+    job_progress(app);
+    run_pending_check(app);
+}
+
+fn job_progress(app: &mut App) {
     let Some(job) = app.webstore.job.as_ref() else { return };
     let op = match &job.stage {
         Stage::Adding { op, .. } | Stage::Removing { op } => *op,
@@ -525,10 +716,14 @@ pub fn after_extension_event(app: &mut App) {
     };
     let Some(result) = app.extensions.outcome(op).cloned() else { return };
     let Some(mut job) = app.webstore.job.take() else { return };
+    let removal = job.action == Action::Remove;
     match std::mem::replace(&mut job.stage, Stage::Fetching) {
         Stage::Adding { unpacked, info, .. } => match result {
             Ok(_) => {
                 reload_store_tab(app, job.tab, &job.id);
+                if let Some(old) = job.replaced.take() {
+                    retire(app, &job.id, old, &unpacked.dir);
+                }
                 finish(app, job, Ok(info.version));
             }
             Err(e) => {
@@ -554,7 +749,20 @@ pub fn after_extension_event(app: &mut App) {
         },
         _ => {}
     }
+    // A removal has no `on_installed`; an add reaches it through `finish`.
+    if removal {
+        job_ended(app);
+    }
     app.mark_dirty();
+}
+
+/// A job ended, or a download of a cancelled one: the next queued update,
+/// else a check the timer asked for. Installs come here from
+/// `on_installed`, after first-run has had its turn at the free slot (its
+/// one retry after a busy answer), removals and stale downloads directly.
+fn job_ended(app: &mut App) {
+    next_update(app);
+    run_pending_check(app);
 }
 
 /// Deletes a version folder this job unpacked, after a failed add, off the
@@ -569,6 +777,40 @@ fn discard(app: &App, dir: PathBuf) {
             eprintln!("x-browser: cannot delete {}: {e}", dir.display());
         }
     });
+}
+
+/// Deletes the version folder a newer one replaced, off the UI thread, now
+/// that WebView2 loads the new one. Only `root\<id>\<name>`, never the
+/// folder now recorded, and only while `root` and `root\<id>` are plain
+/// folders; one that cannot be deleted yet (a file still open) is renamed
+/// aside for the next start's sweep (`extensions::delete_folder`).
+fn retire(app: &App, id: &str, old: PathBuf, new: &Path) {
+    let Some(root) = app.extensions.root().map(Path::to_path_buf) else { return };
+    if !retirable(&root, id, &old, new) {
+        return;
+    }
+    let home = root.join(id);
+    let _ = std::thread::Builder::new().name("xb-store-retire".into()).spawn(move || {
+        // Checked again here: the folders may have changed since.
+        if !crate::extensions::is_plain_folder(&home) || !crate::extensions::is_plain_folder(&old) {
+            return eprintln!("x-browser: old version {} not deleted: a link or unreadable", old.display());
+        }
+        if let Err(e) = crate::extensions::delete_folder(&root, &old) {
+            eprintln!("x-browser: old version {} not deleted: {e}", old.display());
+        }
+    });
+}
+
+/// Whether `old` may be deleted once `new` is in: a version folder
+/// (`<version>` or `<version>_<n>`, as `unpack_to` names them) right inside
+/// `root\<id>`, and not `new`.
+fn retirable(root: &Path, id: &str, old: &Path, new: &Path) -> bool {
+    let same = old.components().eq(new.components());
+    let Some(name) = old.file_name().and_then(|n| n.to_str()) else { return false };
+    let version_name = cws::is_version(name)
+        || name.rsplit_once('_').is_some_and(|(v, n)| cws::is_version(v) && (2..=MAX_VERSION_FOLDERS).any(|k| k.to_string() == n));
+    let home = root.join(id);
+    !same && version_name && old.parent().is_some_and(|p| p.components().eq(home.components()))
 }
 
 /// The store page still shows the extension's detail page: reloads it so its
@@ -601,8 +843,16 @@ fn finish(app: &mut App, job: Job, result: Result<String, Failure>) {
             show_error(app, &f.message(), job.spot);
         }
     }
-    if job.action == Action::Install {
-        report(app, &job.id, result);
+    // A package or install that failed fails the same way again: that
+    // version is not fetched again this start. A network failure, a "no"
+    // or a busy answer may go another way next time.
+    if let (Some(version), Err(Failure::Package(_) | Failure::Install(_))) = (&job.offered, &result) {
+        app.webstore.remember_failed(&job.id, version);
+    }
+    match job.action {
+        // `on_installed` moves the queue on, after first-run.
+        Action::Install => report(app, &job.id, result),
+        Action::Remove => job_ended(app),
     }
     app.mark_dirty();
 }
@@ -622,9 +872,222 @@ pub fn on_installed(app: &mut App, id: &str, result: &Result<String, Failure>) {
     }
     // First-run uBOL waits on every install's result, not only its own.
     crate::firstrun::on_install_result(app, id, result.clone());
-    // Görev 5 (uzantı yönetimi) buraya bağlanacak:
-
+    // Then the next update, or a check the timer asked for, if first-run
+    // did not start an install.
+    job_ended(app);
     app.mark_dirty();
+}
+
+// --- updates ----------------------------------------------------------------------
+
+/// Asks the update service whether the extensions installed from the store
+/// and turned on have newer versions, and updates them one at a time
+/// (module notes). Nothing shows unless an update wants new permissions.
+/// Does nothing while a check is running. The daily check comes here
+/// (`run_pending_check`); so may a button that asks for one now.
+pub fn check_updates(app: &mut App) {
+    if app.webstore.checking {
+        return;
+    }
+    let installed = store_installed(app.extensions.records(), &app.extensions.list());
+    if installed.is_empty() {
+        return;
+    }
+    let prodversion = prodversion();
+    let proxy = app.proxy().clone();
+    let spawned = std::thread::Builder::new().name("xb-store-check".into()).spawn(move || {
+        let result = check(&installed, &prodversion);
+        let _ = proxy.send_event(UserEvent::Store(Event::Checked { result }));
+    });
+    match spawned {
+        Ok(_) => app.webstore.checking = true,
+        Err(e) => eprintln!("x-browser: update check not started: {e}"),
+    }
+}
+
+/// Sends `UserEvent::UpdateTimer` every `UPDATE_TIMER_TICK` until the event
+/// loop is gone. The self-test build has no timer: it sends the event
+/// itself.
+#[cfg(not(feature = "selftest"))]
+pub fn start_update_timer(proxy: crate::native::Proxy) {
+    let spawned = std::thread::Builder::new().name("xb-store-timer".into()).spawn(move || {
+        loop {
+            std::thread::sleep(UPDATE_TIMER_TICK);
+            if proxy.send_event(UserEvent::UpdateTimer).is_err() {
+                break;
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        eprintln!("x-browser: update timer not started: {e}");
+    }
+}
+
+/// The timer's tick: asks for a check, which runs once nothing is in its
+/// way (`run_pending_check`). Nothing while X-Browser is closing.
+pub fn on_update_timer(app: &mut App) {
+    if app.quit {
+        return;
+    }
+    app.webstore.check_pending = true;
+    run_pending_check(app);
+}
+
+/// Runs the check the timer asked for once the start-up reconcile and its
+/// re-adds are over (`Extensions::settled`), no job or check runs and
+/// first-run is not installing; then only if one is due
+/// (`update_check_due`). The time is kept as the check starts, whatever
+/// comes of it.
+fn run_pending_check(app: &mut App) {
+    let w = &app.webstore;
+    let blocked = w.checking
+        || w.job.is_some()
+        || app.quit
+        || !app.extensions.settled()
+        || app.extensions.first_run.run == crate::firstrun::Run::Installing;
+    if !w.check_pending || blocked {
+        return;
+    }
+    app.webstore.check_pending = false;
+    let now = crate::history::now_secs();
+    if !update_check_due(app.extensions.last_update_check(), now) {
+        return;
+    }
+    app.extensions.set_last_update_check(now);
+    check_updates(app);
+}
+
+/// Whether a check is due at `now` (seconds) after the last one at `last`:
+/// never checked, a day or more since, or the clock went back.
+pub fn update_check_due(last: Option<u64>, now: u64) -> bool {
+    last.is_none_or(|last| now < last || now - last >= UPDATE_CHECK_EVERY)
+}
+
+/// `(id, version)` of every extension recorded as from the store, with a
+/// folder and a valid version, and turned on (in the record and, in
+/// `listed`, in WebView2): one turned off is not changed behind its back.
+fn store_installed(records: &[crate::extensions::Entry], listed: &[crate::extensions::Listed]) -> Vec<(String, String)> {
+    records
+        .iter()
+        .filter(|e| {
+            matches!(e.source, crate::extensions::Source::Cws)
+                && !e.removed
+                && e.enabled
+                && listed.iter().find(|l| l.id == e.id).is_some_and(|l| l.enabled)
+                && !e.dir.is_empty()
+                && crx::is_extension_id(&e.id)
+                && !crate::extensions::is_builtin(&e.id)
+                && cws::is_version(&e.version)
+        })
+        .map(|e| (e.id.clone(), e.version.clone()))
+        .collect()
+}
+
+/// The update check (worker thread): one request per `CHECK_BATCH`. A batch
+/// that fails is left out of the answer; only when every batch failed is
+/// the check a failure.
+fn check(installed: &[(String, String)], prodversion: &str) -> Result<Vec<cws::Update>, Failure> {
+    let (mut out, mut answered, mut failure) = (Vec::new(), false, None);
+    for batch in installed.chunks(CHECK_BATCH) {
+        match check_batch(batch, prodversion) {
+            Ok(updates) => {
+                answered = true;
+                out.extend(updates);
+            }
+            Err(f) => {
+                eprintln!("x-browser: update check of {} extension(s) failed: {f:?}", batch.len());
+                failure = Some(f);
+            }
+        }
+    }
+    match failure {
+        Some(f) if !answered => Err(f),
+        _ => Ok(out),
+    }
+}
+
+fn check_batch(batch: &[(String, String)], prodversion: &str) -> Result<Vec<cws::Update>, Failure> {
+    let pairs: Vec<(&str, &str)> = batch.iter().map(|(i, v)| (i.as_str(), v.as_str())).collect();
+    let url = cws::update_check_url(&pairs, prodversion).ok_or_else(|| Failure::Net("adres çok uzun".into()))?;
+    let limits = crate::net::Limits { max_body: cws::MAX_UPDATE_RESPONSE, ..Default::default() };
+    let resp = http_get(&url, &limits).map_err(Failure::Net)?;
+    if resp.status != 200 {
+        return Err(Failure::Net(format!("HTTP {}", resp.status)));
+    }
+    Ok(cws::parse_update_response(&resp.body))
+}
+
+/// Whether the update of `id` to `version` failed this start
+/// (`State::failed`).
+fn failed_before(failed: &[(String, String)], id: &str, version: &str) -> bool {
+    failed.iter().any(|(i, v)| i == id && cws::same_version(v, version))
+}
+
+/// The updates worth fetching: offered (`ok`, with version, URL and hash)
+/// for an extension `store_installed` keeps, at a version newer than the
+/// one recorded, that did not fail this start.
+fn wanted(
+    records: &[crate::extensions::Entry],
+    listed: &[crate::extensions::Listed],
+    offered: &[cws::Update],
+    failed: &[(String, String)],
+) -> Vec<(String, Source)> {
+    let installed = store_installed(records, listed);
+    offered
+        .iter()
+        .filter(|u| u.status == "ok")
+        .filter_map(|u| {
+            let (version, codebase, sha256) = (u.version.as_ref()?, u.codebase.as_ref()?, u.hash_sha256?);
+            let (_, have) = installed.iter().find(|(id, _)| *id == u.id)?;
+            (cws::is_newer(version, have) && !failed_before(failed, &u.id, version)).then(|| {
+                let source = Source::Update { codebase: codebase.clone(), sha256, version: version.clone(), size: u.size };
+                (u.id.clone(), source)
+            })
+        })
+        .collect()
+}
+
+fn checked(app: &mut App, result: Result<Vec<cws::Update>, Failure>) {
+    app.webstore.checking = false;
+    match result {
+        Ok(offered) => {
+            let listed = app.extensions.list();
+            for (id, source) in wanted(app.extensions.records(), &listed, &offered, &app.webstore.failed) {
+                let w = &mut app.webstore;
+                // An update of it under way already; a removal is not one.
+                if w.job.as_ref().is_some_and(|j| j.id == id && j.offered.is_some()) {
+                    continue;
+                }
+                match w.queue.iter_mut().find(|(q, _)| *q == id) {
+                    Some(queued) => queued.1 = source,
+                    None => w.queue.push_back((id, source)),
+                }
+            }
+        }
+        Err(f) => eprintln!("x-browser: update check failed: {f:?}"),
+    }
+    job_ended(app);
+}
+
+/// Starts the next queued update that is still wanted, unless a job is
+/// under way or too many downloads still run: then the next `job_ended`
+/// tries again.
+fn next_update(app: &mut App) {
+    let w = &app.webstore;
+    if w.job.is_some() || w.fetching.load(std::sync::atomic::Ordering::Relaxed) >= MAX_FETCHES {
+        return;
+    }
+    while let Some((id, source)) = app.webstore.queue.pop_front() {
+        // The record may have changed since the check (removed, updated,
+        // turned off).
+        let listed = app.extensions.list();
+        let still = matches!(&source, Source::Update { version, .. }
+            if !failed_before(&app.webstore.failed, &id, version)
+                && store_installed(app.extensions.records(), &listed).iter().any(|(i, have)| *i == id && cws::is_newer(version, have)));
+        if still {
+            return start_job(app, &id, false, None, source);
+        }
+    }
 }
 
 // --- the question -----------------------------------------------------------------
@@ -639,6 +1102,8 @@ struct View<'a> {
     name: &'a str,
     version: &'a str,
     permissions: &'a [String],
+    /// An update: "Güncelle" instead of "Ekle".
+    update: bool,
     text: &'a str,
     ms: u64,
     guard: u64,
@@ -662,6 +1127,7 @@ fn show(app: &mut App) {
         name: &info.name,
         version: &info.version,
         permissions: &info.permissions,
+        update: job.offered.is_some(),
         text: "",
         ms: left.as_millis() as u64,
         guard: ANSWER_DELAY.as_millis() as u64,
@@ -677,7 +1143,7 @@ fn show_error(app: &mut App, text: &str, spot: (f64, f64)) {
     if app.overlay.mode != Mode::Store {
         return;
     }
-    let view = View { stage: "error", action: "", id: "", name: "", version: "", permissions: &[], text, ms: 0, guard: 0 };
+    let view = View { stage: "error", action: "", id: "", name: "", version: "", permissions: &[], update: false, text, ms: 0, guard: 0 };
     let Ok(json) = serde_json::to_string(&view) else { return };
     crate::overlay::show_store(app, format!("xbExt.show({json})"), spot);
 }
@@ -783,6 +1249,46 @@ pub fn render_js(app: &App) -> String {
         Some(_) => "add",
     };
     format!("window.xbStore&&xbStore.render(\"{state}\")")
+}
+
+/// The self-test's fake store: answers `http_get` from a table instead of
+/// the network, and notes every URL asked for.
+#[cfg(feature = "selftest")]
+pub mod fake {
+    use std::sync::Mutex;
+
+    type Answer = (String, u16, Vec<u8>);
+    static ANSWERS: Mutex<Vec<Answer>> = Mutex::new(Vec::new());
+    static ASKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// URLs starting with `prefix` get `status` and `body` (the latest
+    /// `serve` for a prefix wins); any other URL fails as offline.
+    pub fn serve(prefix: &str, status: u16, body: Vec<u8>) {
+        let mut a = ANSWERS.lock().unwrap_or_else(|e| e.into_inner());
+        a.retain(|(p, ..)| p != prefix);
+        a.insert(0, (prefix.to_owned(), status, body));
+    }
+
+    /// Forgets every answer and every URL asked for.
+    pub fn clear() {
+        ANSWERS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        ASKED.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// The URLs asked for since the last `clear`, in order.
+    pub fn asked() -> Vec<String> {
+        ASKED.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub(super) fn get(url: &str, limits: &crate::net::Limits) -> Result<crate::net::Response, String> {
+        ASKED.lock().unwrap_or_else(|e| e.into_inner()).push(url.to_owned());
+        let answers = ANSWERS.lock().unwrap_or_else(|e| e.into_inner());
+        let (_, status, body) = answers.iter().find(|(p, ..)| url.starts_with(p.as_str())).ok_or("fake store: offline")?;
+        if body.len() > limits.max_body {
+            return Err("fake store: body over the cap".into());
+        }
+        Ok(crate::net::Response { final_url: url.to_owned(), status: *status, body: body.clone() })
+    }
 }
 
 #[cfg(test)]

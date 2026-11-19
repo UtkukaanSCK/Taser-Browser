@@ -502,7 +502,7 @@ pub fn on_window_changed(app: &mut App) {
 /// tao also reports a child webview taking focus; so only close when another
 /// window really is in front.
 pub fn on_window_unfocused(app: &mut App) {
-    if app.overlay.mode != Mode::Hidden && !native::is_foreground(&app.window) {
+    if app.overlay.mode != Mode::Hidden && !app.in_front() {
         close(app);
     }
 }
@@ -638,7 +638,14 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
         OverlayCmd::Close => {
             // (The launch question answers its own blur: "launch-cancel",
             // after a moment to see whether the keyboard comes back.)
-            if app.overlay.mode.owns_keyboard() && !matches!(app.overlay.mode, Mode::Launch | Mode::Store) {
+            // While the self-test has X-Browser count as in front
+            // (`App::foreground`), a blur that only comes from the window
+            // really being behind another program is no focus move.
+            #[cfg(feature = "selftest")]
+            let pretend = app.foreground == Some(true) && !native::is_foreground(&app.window);
+            #[cfg(not(feature = "selftest"))]
+            let pretend = false;
+            if !pretend && app.overlay.mode.owns_keyboard() && !matches!(app.overlay.mode, Mode::Launch | Mode::Store) {
                 crate::bookmarks::closing_on_blur(app);
                 close(app);
             }

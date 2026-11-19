@@ -1,5 +1,5 @@
 use super::*;
-use crate::crx::tests::{TestKey, crx, stored, zip};
+use crate::crx::testpkg::{TestKey, crx, stored, zip};
 use crate::store::tests::temp_dir;
 
 fn package(key: &TestKey, files: &[(&str, &str)]) -> Vec<u8> {
@@ -158,4 +158,244 @@ fn unpacks_into_a_version_folder() {
     assert!(matches!(unpack_to(&root, &bytes, &id, "4.0", None, Policy::SelfSigned), Err(Failure::Install(_))));
     assert_eq!(std::fs::read_to_string(root.join(&id).join("4.0")).unwrap(), "file");
     let _ = std::fs::remove_dir_all(root.parent().unwrap());
+}
+
+fn record(id: &str, version: &str, source: crate::extensions::Source, removed: bool) -> crate::extensions::Entry {
+    crate::extensions::Entry {
+        id: id.to_owned(),
+        dir: format!(r"C:\x\{id}\{version}"),
+        source,
+        version: version.to_owned(),
+        name: String::new(),
+        enabled: true,
+        installed: 0,
+        removed,
+    }
+}
+
+fn offer(id: &str, status: &str, version: &str) -> cws::Update {
+    cws::Update {
+        id: id.to_owned(),
+        status: status.to_owned(),
+        version: Some(version.to_owned()),
+        codebase: Some(format!("https://example.com/{id}-{version}.crx")),
+        hash_sha256: Some([7; 32]),
+        size: Some(1000),
+    }
+}
+
+#[test]
+fn wants_only_newer_store_versions() {
+    use crate::extensions::Source::{Cws, Unpacked};
+    let (a, b, c, d, e) = ("a".repeat(32), "b".repeat(32), "c".repeat(32), "d".repeat(32), "e".repeat(32));
+    let records = [
+        record(&a, "1.0", Cws, false),
+        record(&b, "2.0", Cws, false),
+        record(&c, "1.0", Unpacked, false),
+        record(&d, "1.0", Cws, true),
+    ];
+    let mut no_hash = offer(&a, "ok", "1.1");
+    no_hash.hash_sha256 = None;
+    let offered = [
+        offer(&a, "ok", "1.1"),
+        offer(&b, "ok", "2.0"),       // the same version
+        offer(&b, "ok", "1.9"),       // older
+        offer(&c, "ok", "9.0"),       // unpacked, not from the store
+        offer(&d, "ok", "9.0"),       // removed
+        offer(&e, "ok", "9.0"),       // not installed
+        offer(&a, "noupdate", "9.0"), // not offered
+        no_hash,
+    ];
+    let got = wanted(&records, &listed(&records), &offered, &[]);
+    assert_eq!(got.len(), 1, "{got:?}");
+    let (id, Source::Update { codebase, sha256, version, size }) = &got[0] else { panic!("{got:?}") };
+    assert_eq!((id.as_str(), version.as_str(), sha256, *size), (a.as_str(), "1.1", &[7; 32], Some(1000)));
+    assert_eq!(codebase, &format!("https://example.com/{a}-1.1.crx"));
+    // A record without a folder or a valid version is never checked.
+    let mut bad = record(&a, "1.0", Cws, false);
+    bad.dir.clear();
+    let mut odd = record(&b, "1.0", Cws, false);
+    odd.version = "x".into();
+    let both = [bad, odd];
+    assert!(store_installed(&both, &listed(&both)).is_empty());
+}
+
+fn listed(records: &[crate::extensions::Entry]) -> Vec<crate::extensions::Listed> {
+    records
+        .iter()
+        .map(|e| crate::extensions::Listed {
+            id: e.id.clone(),
+            name: e.name.clone(),
+            version: e.version.clone(),
+            enabled: e.enabled,
+            source: Some(e.source),
+            installed: true,
+        })
+        .collect()
+}
+
+#[test]
+fn leaves_extensions_turned_off_alone() {
+    use crate::extensions::Source::Cws;
+    let (a, b) = ("a".repeat(32), "b".repeat(32));
+    let mut off = record(&a, "1.0", Cws, false);
+    off.enabled = false;
+    let records = [off, record(&b, "1.0", Cws, false)];
+    let offered = [offer(&a, "ok", "1.1"), offer(&b, "ok", "1.1")];
+    let got: Vec<String> = wanted(&records, &listed(&records), &offered, &[]).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(got, std::slice::from_ref(&b));
+    // Off in WebView2 though on in the record (turned off since): left alone too.
+    let mut live = listed(&records);
+    live[1].enabled = false;
+    assert!(wanted(&records, &live, &offered, &[]).is_empty());
+    // Not listed at all: left alone.
+    assert!(store_installed(&records, &[]).is_empty());
+}
+
+#[test]
+fn a_failed_version_is_not_fetched_again() {
+    use crate::extensions::Source::Cws;
+    let a = "a".repeat(32);
+    let records = [record(&a, "1.0", Cws, false)];
+    let failed = [(a.clone(), "1.1.0".to_owned())];
+    // "1.1" is the version that failed ("1.1.0"); a newer one is fetched.
+    assert!(wanted(&records, &listed(&records), &[offer(&a, "ok", "1.1")], &failed).is_empty());
+    assert_eq!(wanted(&records, &listed(&records), &[offer(&a, "ok", "1.2")], &failed).len(), 1);
+    let mut state = State::default();
+    state.remember_failed(&a, "1.1");
+    state.remember_failed(&a, "1.2");
+    assert_eq!(state.failed, [(a.clone(), "1.2".to_owned())], "one per id");
+}
+
+#[test]
+fn update_checks_are_daily() {
+    let day = UPDATE_CHECK_EVERY;
+    assert!(update_check_due(None, 0));
+    assert!(update_check_due(None, 1_000_000));
+    let last = 1_700_000_000;
+    assert!(!update_check_due(Some(last), last));
+    assert!(!update_check_due(Some(last), last + 23 * 3600));
+    assert!(!update_check_due(Some(last), last + day - 1));
+    assert!(update_check_due(Some(last), last + day));
+    assert!(update_check_due(Some(last), last + 30 * day));
+    // The clock went back: due now, and not again once that time is kept.
+    let back = last - 3600;
+    assert!(update_check_due(Some(last), back));
+    assert!(!update_check_due(Some(back), back + 60));
+    assert!(update_check_due(Some(0), u64::MAX));
+}
+
+#[test]
+fn old_versions_are_retired_only_from_their_own_folder() {
+    let root = Path::new(r"C:\data\extensions");
+    let id = "a".repeat(32);
+    let home = root.join(&id);
+    let new = home.join("2.0");
+    assert!(retirable(root, &id, &home.join("1.0"), &new));
+    assert!(retirable(root, &id, &home.join("1.0_2"), &new));
+    assert!(retirable(root, &id, &home.join(format!("1.0_{MAX_VERSION_FOLDERS}")), &new));
+    // Not a version folder's name.
+    for name in ["..", ".", "x", "1.0.", "1.0_1", "1.0_02", "1.0_99", "1.0_", "_2", ".1.0.removed-1"] {
+        assert!(!retirable(root, &id, &home.join(name), &new), "{name}");
+    }
+    assert!(!retirable(root, &id, &home.join("..").join("1.0"), &new));
+    // A "." part names the same folder (`Path::components` drops it).
+    assert!(retirable(root, &id, &home.join(".").join("1.0"), &new));
+    // Another id's folder, a folder deeper down, the id folder itself.
+    assert!(!retirable(root, &id, &root.join("b".repeat(32)).join("1.0"), &new));
+    assert!(!retirable(root, &id, &home.join("1.0").join("1.0"), &new));
+    assert!(!retirable(root, &id, &home, &new));
+    assert!(!retirable(root, &id, root, &new));
+    // The folder now in use, however it is written.
+    assert!(!retirable(root, &id, &new, &new));
+    assert!(!retirable(root, &id, Path::new(&format!("{}\\", new.display())), &new));
+}
+
+/// An update source for `bytes` as offered at `version`.
+fn update_for(bytes: &[u8], version: &str) -> Source {
+    Source::Update {
+        codebase: "https://example.com/x.crx".into(),
+        sha256: crx::sha256(&[bytes]).unwrap(),
+        version: version.into(),
+        size: Some(bytes.len()),
+    }
+}
+
+#[test]
+fn verifies_an_update() {
+    let key = TestKey::rsa();
+    let id = key.id();
+    let old = manifest("A", "1.0", r#","permissions":["storage"]"#);
+    let same = package(&key, &[("manifest.json", &manifest("A", "1.1", r#","permissions":["storage"]"#))]);
+    let wider = manifest("A", "1.1", r#","permissions":["storage","history"],"host_permissions":["https://b.example/*"]"#);
+    let wide = package(&key, &[("manifest.json", &wider)]);
+
+    // The same permissions: not widened.
+    let f = verify_update(same.clone(), &id, &update_for(&same, "1.1"), Some(old.as_bytes()), Policy::SelfSigned).unwrap();
+    assert!(!f.widened);
+    assert_eq!(f.info.version, "1.1");
+    // "1.1" offered as "1.1.0": the same version.
+    assert!(verify_update(same.clone(), &id, &update_for(&same, "1.1.0"), Some(old.as_bytes()), Policy::SelfSigned).is_ok());
+
+    // Widened: only the new permissions are listed.
+    let f = verify_update(wide.clone(), &id, &update_for(&wide, "1.1"), Some(old.as_bytes()), Policy::SelfSigned).unwrap();
+    assert!(f.widened);
+    assert_eq!(f.info.permissions, cws::added_permissions(old.as_bytes(), wider.as_bytes()));
+    assert_eq!(f.info.permissions.len(), 2, "{:?}", f.info.permissions);
+    assert!(!f.info.permissions.iter().any(|l| cws::describe_permissions(br#"{"permissions":["storage"]}"#).contains(l)));
+    // The installed manifest unreadable: widened, and every permission listed.
+    let f = verify_update(same.clone(), &id, &update_for(&same, "1.1"), None, Policy::SelfSigned).unwrap();
+    assert!(f.widened);
+    assert_eq!(f.info.permissions, cws::describe_permissions(manifest("A", "1.1", r#","permissions":["storage"]"#).as_bytes()));
+
+    // Another hash.
+    let mut wrong = update_for(&same, "1.1");
+    if let Source::Update { sha256, .. } = &mut wrong {
+        sha256[0] ^= 1;
+    }
+    let e = verify_update(same.clone(), &id, &wrong, Some(old.as_bytes()), Policy::SelfSigned).unwrap_err();
+    assert_eq!(e, Failure::Package("özet uyuşmuyor".into()));
+    // Not the version offered: another one, or the installed one back.
+    for v in ["1.2", "1.0", "1.1.1"] {
+        let e = verify_update(same.clone(), &id, &update_for(&same, v), Some(old.as_bytes()), Policy::SelfSigned).unwrap_err();
+        assert_eq!(e, Failure::Package("sürüm uyuşmuyor".into()), "{v}");
+    }
+    // Larger than the check said.
+    let mut small = update_for(&same, "1.1");
+    if let Source::Update { size, .. } = &mut small {
+        *size = Some(same.len() - 1);
+    }
+    let e = verify_update(same.clone(), &id, &small, Some(old.as_bytes()), Policy::SelfSigned).unwrap_err();
+    assert_eq!(e, Failure::Package("boyut uyuşmuyor".into()));
+    // Another id's package, with the right hash.
+    let other = TestKey::rsa();
+    assert!(matches!(
+        verify_update(same.clone(), &other.id(), &update_for(&same, "1.1"), Some(old.as_bytes()), Policy::SelfSigned),
+        Err(Failure::Package(_))
+    ));
+    // From the store: a package of the id, never widened.
+    let f = verify_update(wide.clone(), &id, &Source::Store, Some(old.as_bytes()), Policy::SelfSigned).unwrap();
+    assert!(!f.widened);
+}
+
+#[test]
+fn update_downloads_are_capped() {
+    assert_eq!(body_cap(None), crx::MAX_CRX_BYTES);
+    assert_eq!(body_cap(Some(1234)), 1234);
+    assert_eq!(body_cap(Some(usize::MAX)), crx::MAX_CRX_BYTES);
+}
+
+#[test]
+fn reads_the_installed_manifest_within_its_cap() {
+    let dir = temp_dir("webstore-old-manifest");
+    assert_eq!(read_manifest_bytes(&dir), None);
+    std::fs::write(dir.join("manifest.json"), b"{}").unwrap();
+    assert_eq!(read_manifest_bytes(&dir).as_deref(), Some(&b"{}"[..]));
+    let big = vec![b' '; crate::extensions::MAX_MANIFEST_BYTES as usize + 1];
+    std::fs::write(dir.join("manifest.json"), big).unwrap();
+    assert_eq!(read_manifest_bytes(&dir), None);
+    std::fs::remove_file(dir.join("manifest.json")).unwrap();
+    std::fs::create_dir(dir.join("manifest.json")).unwrap();
+    assert_eq!(read_manifest_bytes(&dir), None);
+    let _ = std::fs::remove_dir_all(&dir);
 }

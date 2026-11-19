@@ -176,6 +176,9 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
 
     #[cfg(feature = "selftest")]
     selftest::start(event_loop.create_proxy());
+    // The daily extension update check (the self-test sends its ticks).
+    #[cfg(not(feature = "selftest"))]
+    webstore::start_update_timer(event_loop.create_proxy());
 
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;

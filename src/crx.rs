@@ -127,9 +127,10 @@ pub enum Policy {
     /// publisher proof (`PUBLISHER_KEY_HASH`). RSA keys from 1024 bits, as
     /// in Chromium; the publisher proof is the real gate.
     WebStore,
-    /// Tests only: self-signed packages (developer proof alone), RSA keys
-    /// from 2048 bits.
-    #[cfg(test)]
+    /// Tests and the self-test build only: self-signed packages (developer
+    /// proof alone), RSA keys from 2048 bits. A normal build has no such
+    /// variant, so it cannot accept a package the store did not sign.
+    #[cfg(any(test, feature = "selftest"))]
     SelfSigned,
 }
 
@@ -137,7 +138,7 @@ impl Policy {
     fn min_rsa_bits(self) -> u32 {
         match self {
             Self::WebStore => 1024,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "selftest"))]
             Self::SelfSigned => 2048,
         }
     }
@@ -1052,5 +1053,7 @@ fn crc32(data: &[u8]) -> u32 {
     !data.iter().fold(!0u32, |c, &b| TABLE[((c ^ u32::from(b)) & 0xff) as usize] ^ (c >> 8))
 }
 
+#[cfg(any(test, feature = "selftest"))]
+pub(crate) mod testpkg;
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;

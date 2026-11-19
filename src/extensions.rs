@@ -124,6 +124,16 @@ pub struct ExtFile {
     pub items: Vec<Entry>,
     /// Missing: pending (see `firstrun::State`).
     pub first_run_ubol: crate::firstrun::State,
+    /// When the last Web Store update check started, in seconds since the
+    /// epoch (`webstore::update_check_due`). Missing or unreadable: never.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_secs")]
+    pub last_update_check: Option<u64>,
+}
+
+/// A time in seconds, or None for anything else (a string, a negative or
+/// fractional number): one bad field does not cost the file.
+fn lenient_secs<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?.as_u64())
 }
 
 /// The items of an array, each read on its own: one that is not an entry
@@ -441,6 +451,9 @@ pub struct Extensions {
     outcomes: Vec<(Op, Result<String, String>)>,
     /// What this start's first-run job has done (not saved).
     pub first_run: crate::firstrun::Session,
+    /// Re-adds of the start-up reconcile sent to WebView2 and not answered
+    /// yet (`settled`).
+    readding: usize,
 }
 
 impl Extensions {
@@ -600,6 +613,23 @@ impl Extensions {
         }
     }
 
+    /// When the last update check started (`ExtFile::last_update_check`).
+    pub fn last_update_check(&self) -> Option<u64> {
+        self.file.last_update_check
+    }
+
+    /// Sets and saves when the last update check started.
+    pub fn set_last_update_check(&mut self, secs: u64) {
+        self.file.last_update_check = Some(secs);
+        self.save();
+    }
+
+    /// The start-up reconcile is over and WebView2 has answered each of its
+    /// re-adds: the record says what the profile has.
+    pub fn settled(&self) -> bool {
+        self.reconcile == Reconcile::Done && self.readding == 0
+    }
+
     /// Where X-Browser keeps its own unpacked extensions.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
@@ -718,8 +748,8 @@ pub fn add(app: &mut App, dir: &Path, source: Source) -> Op {
 
 /// Installs the unpacked store package in `dir` (see `webstore`), which
 /// must come back as extension `id`. Nothing is recorded unless it does; a
-/// version recorded before is then left as it was. Removing the folder of
-/// the version replaced is left to extension management (task 5B).
+/// version recorded before is then left as it was. Once it does, `webstore`
+/// deletes the folder of the version replaced (`webstore::retire`).
 pub fn add_from_store(app: &mut App, dir: &Path, id: &str) -> Op {
     let op = app.extensions.start_op();
     // An update keeps an extension the user turned off, off.
@@ -728,22 +758,28 @@ pub fn add_from_store(app: &mut App, dir: &Path, id: &str) -> Op {
     op
 }
 
-fn add_as(app: &mut App, op: Op, dir: &Path, source: Source, enabled: bool, expect: Option<Expect>) {
+/// Returns whether WebView2 was asked: if not, `op` has ended already.
+fn add_as(app: &mut App, op: Op, dir: &Path, source: Source, enabled: bool, expect: Option<Expect>) -> bool {
     let checked = match dir.to_str() {
         Some(d) if valid_dir(d) => read_manifest(dir).map(|m| (d.to_owned(), m)),
         _ => Err("not an absolute folder path".into()),
     };
     let (dir_text, manifest) = match checked {
         Ok(c) => c,
-        Err(e) => return app.extensions.finish(op, Err(e)),
+        Err(e) => {
+            app.extensions.finish(op, Err(e));
+            return false;
+        }
     };
     let Some(view) = content_view(app) else {
-        return app.extensions.finish(op, Err("no content webview".into()));
+        app.extensions.finish(op, Err("no content webview".into()));
+        return false;
     };
     let proxy = app.proxy().clone();
     native::add_extension(view, dir, move |result| {
         send(&proxy, Event::Added { op, dir: dir_text, source, enabled, manifest, expect, result });
     });
+    true
 }
 
 /// Turns extension `id` on or off.
@@ -817,7 +853,7 @@ pub fn on_ui_ready(app: &mut App) {
 /// Deletes an owned extension folder in `root`; if that fails (a file still
 /// open), renames it so the next start's `sweep` finishes the job. Nothing
 /// is deleted if `root` is not a plain folder (`is_plain_folder`).
-fn delete_folder(root: &Path, path: &Path) -> Result<(), String> {
+pub(crate) fn delete_folder(root: &Path, path: &Path) -> Result<(), String> {
     if !is_plain_folder(root) {
         return Err(format!("{} is a link or cannot be read; folder not deleted", root.display()));
     }
@@ -839,6 +875,9 @@ fn delete_folder(root: &Path, path: &Path) -> Result<(), String> {
 }
 
 pub fn on_event(app: &mut App, ev: Event) {
+    if let Event::Added { expect: Some(Expect::Readd(_)), .. } = &ev {
+        app.extensions.readding = app.extensions.readding.saturating_sub(1);
+    }
     match ev {
         Event::Listed(Err(e)) => {
             eprintln!("x-browser: cannot list extensions: {e}");
@@ -864,7 +903,9 @@ pub fn on_event(app: &mut App, ev: Event) {
                 p.unknown.into_iter().filter(|id| x.live.iter().any(|l| l.id == *id && l.enabled)).collect();
             x.reconcile = Reconcile::Done;
             for e in again {
-                add_as(app, 0, Path::new(&e.dir), e.source, e.enabled, Some(Expect::Readd(e.id)));
+                if add_as(app, 0, Path::new(&e.dir), e.source, e.enabled, Some(Expect::Readd(e.id))) {
+                    app.extensions.readding += 1;
+                }
             }
             // Until the extensions page (task 5) can show and remove them.
             for id in unknown_on {

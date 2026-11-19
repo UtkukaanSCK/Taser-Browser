@@ -52,6 +52,31 @@ pub fn is_version(v: &str) -> bool {
         })
 }
 
+/// Whether `candidate` is a later version than `installed`, comparing the
+/// numbers part by part with missing parts as 0 (so `1.0` equals `1.0.0`).
+/// False if either is not a valid version.
+pub fn is_newer(candidate: &str, installed: &str) -> bool {
+    matches!((version_parts(candidate), version_parts(installed)), (Some(c), Some(i)) if c > i)
+}
+
+/// Whether `a` and `b` are the same version, compared as numbers (`1.0`
+/// equals `1.0.0`). False if either is not a valid version.
+pub fn same_version(a: &str, b: &str) -> bool {
+    matches!((version_parts(a), version_parts(b)), (Some(x), Some(y)) if x == y)
+}
+
+/// A valid version's four numbers, missing parts as 0.
+fn version_parts(v: &str) -> Option<[u32; 4]> {
+    if !is_version(v) {
+        return None;
+    }
+    let mut out = [0u32; 4];
+    for (slot, p) in out.iter_mut().zip(v.split('.')) {
+        *slot = p.parse().ok()?;
+    }
+    Some(out)
+}
+
 /// The update service URL that redirects to the current CRX of `id`.
 /// `None` if `id` or `prodversion` is malformed.
 pub fn crx_url(id: &str, prodversion: &str) -> Option<String> {
@@ -206,6 +231,10 @@ pub struct Update {
     /// download against it, and checks that `version` is newer than the
     /// installed one and equals the CRX manifest's.
     pub hash_sha256: Option<[u8; 32]>,
+    /// The CRX's size in bytes as the service states it, when `status` is
+    /// `ok` and the attribute is a plain positive number; only a download
+    /// cap, never trusted beyond that.
+    pub size: Option<usize>,
 }
 
 /// Biggest update-check response read; anything longer yields nothing. Pass it
@@ -302,7 +331,9 @@ fn update_from(app: &[(&str, String)], uc: Option<&[(&str, String)]>) -> Option<
     if !is_status_word(app_status) {
         return None;
     }
-    let none = |status: &str| Some(Update { id: id.into(), status: status.into(), version: None, codebase: None, hash_sha256: None });
+    let none = |status: &str| {
+        Some(Update { id: id.into(), status: status.into(), version: None, codebase: None, hash_sha256: None, size: None })
+    };
     if app_status != "ok" {
         return none(app_status);
     }
@@ -323,7 +354,16 @@ fn update_from(app: &[(&str, String)], uc: Option<&[(&str, String)]>) -> Option<
         version: Some(version.into()),
         codebase: Some(codebase.into()),
         hash_sha256: Some(hash),
+        size: attr(uc, "size").and_then(byte_count),
     })
+}
+
+/// A plain decimal byte count above zero; no sign, no spaces, at most 12 digits.
+fn byte_count(s: &str) -> Option<usize> {
+    if s.is_empty() || s.len() > 12 || !s.bytes().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    s.parse::<usize>().ok().filter(|&n| n > 0)
 }
 
 struct Tag<'a> {
@@ -440,6 +480,60 @@ fn unescape(s: &str) -> Option<String> {
 }
 
 // --- permissions ------------------------------------------------------------------
+
+/// What a manifest asks for that the install question shows: its
+/// `permissions`, `host_permissions` and content-script `matches`, as raw
+/// strings. `None` if the manifest is not a JSON object.
+fn requested(manifest_json: &[u8]) -> Option<std::collections::BTreeSet<String>> {
+    let bytes = manifest_json.strip_prefix(b"\xef\xbb\xbf").unwrap_or(manifest_json);
+    let Ok(serde_json::Value::Object(m)) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return None;
+    };
+    let mut out = std::collections::BTreeSet::new();
+    let mut add = |prefix: &str, v: Option<&serde_json::Value>| {
+        for x in v.and_then(|v| v.as_array()).into_iter().flatten() {
+            if let Some(s) = x.as_str() {
+                out.insert(format!("{prefix}{s}"));
+            }
+        }
+    };
+    add("p:", m.get("permissions"));
+    add("h:", m.get("host_permissions"));
+    for cs in m.get("content_scripts").and_then(|v| v.as_array()).into_iter().flatten() {
+        add("h:", cs.get("matches"));
+    }
+    Some(out)
+}
+
+/// Whether an update from `old` to `new` asks for anything `old` did not, so
+/// the user must be asked again. True when either manifest is unreadable.
+pub fn widens_permissions(old_manifest: &[u8], new_manifest: &[u8]) -> bool {
+    match (requested(old_manifest), requested(new_manifest)) {
+        (Some(old), Some(new)) => !new.is_subset(&old),
+        _ => true,
+    }
+}
+
+/// The question's lines for what an update from `old` to `new` asks for and
+/// `old` did not (`describe_permissions` of those alone). Every line of
+/// `new` when `old` is unreadable. Can be empty though `widens_permissions`
+/// holds (a pattern Chrome ignores): the question then says so without a
+/// list.
+pub fn added_permissions(old_manifest: &[u8], new_manifest: &[u8]) -> Vec<String> {
+    let (Some(old), Some(new)) = (requested(old_manifest), requested(new_manifest)) else {
+        return describe_permissions(new_manifest);
+    };
+    let (mut perms, mut hosts) = (Vec::new(), Vec::new());
+    for item in new.difference(&old) {
+        if let Some(p) = item.strip_prefix("p:") {
+            perms.push(p);
+        } else if let Some(h) = item.strip_prefix("h:") {
+            hosts.push(h);
+        }
+    }
+    let only_new = serde_json::json!({ "permissions": perms, "host_permissions": hosts });
+    describe_permissions(only_new.to_string().as_bytes())
+}
 
 /// Turkish lines for the install confirmation (design B.3.5): host access
 /// first, then one line per known permission, then the unknown ones, at most
@@ -876,6 +970,7 @@ mod tests {
                 version: Some("2026.1116.1650".into()),
                 codebase: Some("https://clients2.googleusercontent.com/crx/blobs/ARGaeZLeALIRsuijSwhFBl-Z0ltArvPUOJ-CKdMbUL3RI27qxXQehxFLDTs-E5uh-kq2wKXL36kpjPwSzzPf1A9UBtpDmtC3CWFFVL7CTNsJQj4pTUnzlsthgtG2tNiagPuQAMZSmuXNQ96tXtyqK_JDDWtYTsok8YbagA/DDKJIAHEJLHFCAFBDDMGIAHCPHECMPFH_2026_1116_1650_0.crx".into()),
                 hash_sha256: Some(hash),
+                size: Some(9_097_388),
             }
         );
         assert_eq!(hash[..4], [0x09, 0x08, 0xf4, 0xb6]);
@@ -894,6 +989,81 @@ mod tests {
     }
 
     const HASH: &str = "0908f4b6d19a38f2681bd746e4597d7818f083bb3e2e3cc5534b407d896b07fd";
+
+    #[test]
+    fn compares_versions() {
+        assert!(is_newer("1.10", "1.9"));
+        assert!(!is_newer("1.9", "1.10"));
+        assert!(!is_newer("1.0", "1.0.0"));
+        assert!(!is_newer("1.0.0", "1.0"));
+        assert!(is_newer("1.0.0.1", "1.0"));
+        assert!(is_newer("2", "1.65535.65535.65535"));
+        assert!(!is_newer("1.2", "1.2"));
+        for bad in ["", "1.", "01.2", "1.2.3.4.5", "1.65536", "a.b", "+1", " 1"] {
+            assert!(!is_newer(bad, "1.0"), "{bad:?}");
+            assert!(!is_newer("9.0", bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn compares_versions_as_numbers() {
+        assert!(same_version("1.0", "1.0.0"));
+        assert!(same_version("1.0.0.0", "1"));
+        assert!(same_version("1.10", "1.10.0"));
+        assert!(!same_version("1.1", "1.10"));
+        assert!(!same_version("1.0.0.1", "1.0"));
+        for bad in ["", "1.", "01.0", "1.0.0.0.0", "x"] {
+            assert!(!same_version(bad, "1.0"), "{bad:?}");
+            assert!(!same_version(bad, bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn lists_only_the_added_permissions() {
+        let old = br#"{"permissions":["storage"],"host_permissions":["https://a.example/*"]}"#;
+        let new = br#"{"permissions":["storage","history"],"host_permissions":["https://a.example/*","https://b.example/*"]}"#;
+        let added = added_permissions(old, new);
+        assert_eq!(added.len(), 2, "{added:?}");
+        assert!(added[0].contains("b.example") && !added[0].contains("a.example"), "{added:?}");
+        assert!(!added.iter().any(|l| l == &describe_permissions(br#"{"permissions":["storage"]}"#)[0]), "{added:?}");
+        assert_eq!(added[1], describe_permissions(br#"{"permissions":["history"]}"#)[0]);
+        // Nothing new: nothing listed.
+        assert!(added_permissions(new, old).is_empty());
+        // Widened by a pattern Chrome ignores: no line to show.
+        let odd = br#"{"permissions":["storage"],"host_permissions":["https://a.example/*","not a pattern"]}"#;
+        assert!(widens_permissions(old, odd));
+        assert!(added_permissions(old, odd).is_empty());
+        // An unreadable old manifest: everything the new one asks for.
+        assert_eq!(added_permissions(b"not json", new), describe_permissions(new));
+    }
+
+    #[test]
+    fn reads_the_stated_size() {
+        let at = |size: &str| one(&ok_app(&format!(r#"status="ok" version="1" codebase="https://e.example/x" hash_sha256="{HASH}" {size}"#)))[0].size;
+        assert_eq!(at(r#"size="1234""#), Some(1234));
+        assert_eq!(at(""), None);
+        for bad in ["", "0", "-1", "+5", " 5", "5 ", "1e3", "0x10", "9999999999999"] {
+            assert_eq!(at(&format!(r#"size="{bad}""#)), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn spots_widened_permissions() {
+        let old = br#"{"permissions":["storage","tabs"],"host_permissions":["https://a.example/*"],"content_scripts":[{"matches":["https://b.example/*"]}]}"#;
+        // The same, a subset, or reordered: no question.
+        assert!(!widens_permissions(old, old));
+        assert!(!widens_permissions(old, br#"{"permissions":["tabs"]}"#));
+        assert!(!widens_permissions(old, br#"{"host_permissions":["https://b.example/*"],"permissions":["tabs","storage"]}"#));
+        assert!(!widens_permissions(b"\xef\xbb\xbf{}", br#"{"optional_permissions":["history"]}"#));
+        // Anything new asks, as does an unreadable manifest.
+        assert!(widens_permissions(old, br#"{"permissions":["storage","tabs","history"]}"#));
+        assert!(widens_permissions(old, br#"{"host_permissions":["<all_urls>"]}"#));
+        assert!(widens_permissions(old, br#"{"content_scripts":[{"matches":["https://c.example/*"]}]}"#));
+        // An API name moved to hosts is new, not the same string.
+        assert!(widens_permissions(br#"{"permissions":["https://a.example/*"]}"#, br#"{"host_permissions":["https://a.example/*"]}"#));
+        assert!(widens_permissions(b"not json", br#"{}"#));
+        assert!(widens_permissions(br#"{}"#, b"[]"));
+    }
 
     #[test]
     fn update_parser_tolerates_harmless_variation() {

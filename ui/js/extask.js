@@ -80,6 +80,7 @@
     on = true;
     stage = str(d && d.stage);
     const remove = str(d && d.action) === "remove";
+    const update = !remove && d && d.update === true;
     const id = str(d && d.id);
     const version = str(d && d.version);
     name.textContent = str(d && d.name) || (stage === "error" ? "" : id);
@@ -88,14 +89,17 @@
     perms.hidden = true;
     yes.hidden = stage !== "ask";
     if (stage === "ask") {
-      title.textContent = remove ? "Bu uzantı kaldırılsın mı?" : "Bu uzantı eklensin mi?";
-      yes.textContent = remove ? "Kaldır" : "Ekle";
+      title.textContent = remove ? "Bu uzantı kaldırılsın mı?" : update ? "Bu uzantı güncellensin mi?" : "Bu uzantı eklensin mi?";
+      yes.textContent = remove ? "Kaldır" : update ? "Güncelle" : "Ekle";
       no.textContent = "İptal";
       if (remove) {
         note.textContent = "Uzantının ayarları ve kaydettiği veriler de silinir.";
       } else {
         const lines = Array.isArray(d && d.permissions) ? d.permissions.map(str).filter(Boolean) : [];
-        note.textContent = lines.length ? "Bu uzantı şunları yapabilir:" : "Bu uzantı özel bir izin istemiyor.";
+        // An update lists only what the new version adds.
+        note.textContent = update
+          ? lines.length ? "Yeni sürüm şu yeni izinleri istiyor:" : "Yeni sürüm daha geniş erişim istiyor."
+          : lines.length ? "Bu uzantı şunları yapabilir:" : "Bu uzantı özel bir izin istemiyor.";
         perms.replaceChildren(...lines.map((t) => {
           const li = document.createElement("li");
           li.textContent = t;
