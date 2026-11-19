@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 626;
+const EXPECTED_CHECKS: u32 = 629;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -378,8 +378,8 @@ const DELAYS: &[u64] = &[
     2500, // 290 check it; turn it off
     900,  // 291 check it is off; the check offers 1.1
     1500, // 292 check nothing was asked; turn it on
-    900,  // 293 check it is on; the check offers 1.1
-    3000, // 294 check 1.1 is in; the check offers 1.1 again
+    900,  // 293 check it is on; the check offers 1.1, from the page's button
+    3000, // 294 check 1.1 is in and the page; the check offers 1.1 again
     1500, // 295 check the old folder is gone and nothing was fetched; a bad hash
     1500, // 296 check nothing changed; the bad 1.2 again
     1500, // 297 check it was not fetched; in front; open the menu; 1.3 wants more
@@ -4830,8 +4830,10 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         280 => {
-            // The Uzantılar page is still open from the last steps.
+            // The Uzantılar page is still open from the last steps; the
+            // keys go back to the strip.
             crate::overlay::close(app);
+            app.focus_after_switch();
             // First-run uBOL, against the fake store (`firstrun::fake`). The
             // planted file has no state (pending), and this start's try,
             // after the reconcile, was answered offline.
@@ -4936,7 +4938,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         287 => {
             log(&format!(
-                "INFO step 283: X-Browser is the foreground window: {}; extension added again: {:?}",
+                "INFO step 287: X-Browser is the foreground window: {}; extension added again: {:?}",
                 crate::native::is_foreground(&app.window),
                 ext_outcome(app, "ext-op")
             ));
@@ -5038,7 +5040,13 @@ pub fn step(app: &mut App, n: u32) {
                 format!("outcome {outcome:?}, enabled {rec:?}, listed {listed:?}"),
             );
             serve_update_check(&id, "1.1", None);
-            crate::webstore::check_updates(app);
+            // An install error nobody saw, for the page to show under its
+            // row; then the check, from the page's button.
+            if let Some(e) = crate::webstore::LastError::new(&id, EXT_LAST_ERROR, crate::history::now_secs()) {
+                app.extensions.set_last_error(e);
+            }
+            crate::ext_ui::open(app);
+            overlay_click(app, "#x-check");
         }
         294 => {
             // A newer version: fetched from its address, in without a
@@ -5054,6 +5062,41 @@ pub fn step(app: &mut App, n: u32) {
                     && app.webstore.busy_with().is_none(),
                 format!("record {rec:?}, {:?}, job {:?}, asked {asked:?}", app.overlay.mode, app.webstore.busy_with()),
             );
+            // The page's button started that check, and the page says how
+            // it ended; the last error was under its row, and is seen.
+            const CHECK_JS: &str = "(() => { const g = (i) => document.getElementById(i), row = document.querySelector('#x-list li[data-id=\"__ID__\"] p.text-danger'); \
+                return `title=${g('xp-title').textContent};status=${g('x-status').textContent};button=${g('x-check').disabled};row=${row ? row.textContent : ''};top=${g('x-error').hidden}`; })()";
+            overlay_eval(app, "ext-page-check-button-checks-updates", &CHECK_JS.replace("__ID__", &id), |r| {
+                check(
+                    "ext-page-check-button-checks-updates",
+                    field(&r, "title") == "Uzantılar"
+                        && field(&r, "status") == "1 güncelleme bulundu; sırayla kuruluyor."
+                        && field(&r, "button") == "false",
+                    &r,
+                );
+                check(
+                    "ext-page-shows-the-last-error-under-its-row",
+                    field(&r, "row") == format!("Son hata: {EXT_LAST_ERROR}") && field(&r, "top") == "true",
+                    &r,
+                );
+            });
+            // One for an id not in the list: on top of the page. Both are
+            // gone from the file once shown.
+            const OTHER: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            if let Some(e) = crate::webstore::LastError::new(OTHER, EXT_LAST_ERROR, crate::history::now_secs()) {
+                app.extensions.set_last_error(e);
+            }
+            crate::ext_ui::on_changed(app);
+            let cleared = app.extensions.last_error().is_none();
+            overlay_eval(app, "ext-page-shows-an-unlisted-last-error-on-top", "`top=${document.getElementById('x-error').textContent};hidden=${document.getElementById('x-error').hidden}`", move |r| {
+                check(
+                    "ext-page-shows-an-unlisted-last-error-on-top",
+                    cleared && field(&r, "top") == format!("Son hata ({OTHER}): {EXT_LAST_ERROR}") && field(&r, "hidden") == "false",
+                    format!("{r}, cleared {cleared}"),
+                );
+            });
+            crate::overlay::close(app);
+            app.focus_after_switch();
             // The same version offered again: nothing to fetch.
             remember("upd-asked", asked.len() as i64);
             serve_update_check(&id, "1.1", None);
@@ -5316,6 +5359,8 @@ const EXT_OPTIONS_HTML: &str = include_str!("../test-assets/selftest-ext/options
 const EXT_FRAME_HTML: &str = include_str!("../test-assets/selftest-ext/frame.html");
 /// Adds a frame with `frame.html` over the whole popup, once the popup's
 /// page is parsed (a script queued during its load runs before `body`).
+/// The last error the Extensions page is given to show (update steps).
+const EXT_LAST_ERROR: &str = "Uzantı paketi doğrulanamadı (self-test).";
 const EXT_FRAME_ADD_JS: &str = "(() => { const add = () => document.body.insertAdjacentHTML('beforeend', \
   '<iframe src=\"frame.html\" title=\"frame\" style=\"position:fixed;inset:0;width:100%;height:100%;border:0\"></iframe>'); \
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', add); else add(); return 1; })()";
@@ -5609,7 +5654,7 @@ const SECURITY_JS: &str = "(() => { const g = (id) => document.getElementById(id
 /// restart the wait; `failed`: the failure line is shown.
 /// The Web Store question's fields, read back as `key=value;...`.
 const STORE_ASK_JS: &str = "(() => { const g = (id) => document.getElementById(id); \
-  return [`hidden=${g('ext-ask').hidden}`, `launch=${g('launch').hidden}`, `title=${g('x-title').textContent}`, \
+  return [`hidden=${g('ext-ask').hidden}`, `launch=${g('launch').hidden}`, `title=${document.querySelector('#ext-ask h1').textContent}`, \
   `yes=${g('x-yes').hidden ? 'hidden' : g('x-yes').textContent}`, `meta=${g('x-meta').textContent}`, \
   `perms=${g('x-perms').hidden}`, `items=${g('x-perms').children.length}`, \
   `list=${g('x-perms').textContent}`, `note=${g('x-note').textContent}`, `focus=${document.activeElement ? document.activeElement.id : ''}`].join(';'); })()";

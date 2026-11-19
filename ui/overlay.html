@@ -135,14 +135,16 @@
 <!-- Extensions (extensions.js, src/ext_ui.rs). Rust sends the rows; each
      switch, button and question is drawn here. The confirm row of a removal
      sits under its own extension. -->
-<section id="extensions" aria-labelledby="x-title" class="flex h-full flex-col" hidden>
+<section id="extensions" aria-labelledby="xp-title" class="flex h-full flex-col" hidden>
   <header class="border-b border-line px-4 py-2">
-    <h1 id="x-title" tabindex="-1" class="text-[14px] font-semibold outline-none">Uzantılar</h1>
+    <h1 id="xp-title" tabindex="-1" class="text-[14px] font-semibold outline-none">Uzantılar</h1>
   </header>
+  <p id="x-error" class="border-b border-line px-4 py-2 leading-snug text-danger" hidden></p>
   <ul id="x-list" aria-label="Yüklü uzantılar" class="min-h-0 flex-1 overflow-y-auto py-1"></ul>
   <p id="x-empty" class="flex-1 px-4 py-6 text-center text-muted" hidden>Yüklü uzantı yok</p>
-  <footer class="border-t border-line px-4 py-2">
-    <p id="x-status" role="status" class="min-h-4 leading-snug text-muted"></p>
+  <footer class="flex items-center gap-3 border-t border-line px-4 py-2">
+    <p id="x-status" role="status" class="min-h-4 min-w-0 flex-1 leading-snug text-muted"></p>
+    <button id="x-check" type="button" class="h-7 shrink-0 rounded-md border border-line px-3 hover:bg-hover disabled:opacity-40 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-accent">Güncellemeleri denetle</button>
   </footer>
 </section>
 

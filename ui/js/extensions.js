@@ -9,10 +9,12 @@
   const send = (msg) => window.ipc.postMessage(msg);
 
   const page = $("extensions");
-  const title = $("x-title");
+  const title = $("xp-title");
   const list = $("x-list");
   const empty = $("x-empty");
   const status = $("x-status");
+  const check = $("x-check");
+  const error = $("x-error");
   const menu = $("ext-actions");
 
   const ID = /^[a-p]{32}$/;
@@ -26,7 +28,14 @@
   const NOTES = {
     removed: (n) => `${n} kaldırıldı.`,
     "remove-failed": (n) => `${n} kaldırılamadı.`,
+    "store-busy": (n) => `${n} için Mağaza işi sürüyor; bitince yeniden deneyin.`,
+    "up-to-date": () => "Uzantılar güncel.",
+    // Found by the check; they go in one at a time after it.
+    found: (n) => (/^[1-9][0-9]{0,3}$/.test(n) ? `${n} güncelleme bulundu; sırayla kuruluyor.` : ""),
+    "check-failed": () => "Güncellemeler denetlenemedi.",
+    "nothing-to-check": () => "Mağazadan kurulmuş açık uzantı yok; denetlenecek güncelleme yok.",
   };
+  const CHECKING = "Güncellemeler denetleniyor…";
 
   const str = (v) => (typeof v === "string" ? v : "");
   const visible = () => !page.hidden;
@@ -34,6 +43,8 @@
 
   // The extension whose removal is being asked about.
   let confirming = null;
+  // The last install error nobody saw: { id, message }, or null.
+  let lastError = null;
   // The control the user last had: { id, ctl }. A redraw puts the focus
   // back there (or as near as is left).
   let want = null;
@@ -131,6 +142,10 @@
     actions.append(state);
     li.append(actions);
 
+    if (lastError && lastError.id === x.id) {
+      li.append(el("p", "leading-snug text-danger", "Son hata: " + lastError.message));
+    }
+
     if (confirming === x.id && !busy) {
       actions.hidden = true;
       const ask = el("div", "flex flex-wrap items-center gap-2");
@@ -210,10 +225,22 @@
     if (inside || (want && before >= 0)) refocus(Math.max(before, 0));
   }
 
+  /** The error as sent: a valid id and some text (Rust cleaned it). */
+  function cleanError(e) {
+    if (!e || typeof e !== "object" || !ID.test(str(e.id))) return null;
+    const message = str(e.message).trim();
+    return message ? { id: e.id, message } : null;
+  }
+
   /** `keep`: an update of the open page (the focus stays where it is). */
   function show(data, keep) {
     items = clean(data);
     const d = data && typeof data === "object" ? data : {};
+    lastError = cleanError(d.error);
+    // Its id not in the list: on top of the page.
+    const onTop = lastError && !items.some((x) => x.id === lastError.id);
+    error.textContent = onTop ? "Son hata (" + lastError.id + "): " + lastError.message : "";
+    error.hidden = !onTop;
     menu.hidden = true;
     page.hidden = false;
     if (!keep) {
@@ -223,7 +250,11 @@
     redraw();
     const note = d.note && typeof d.note === "object" ? d.note : null;
     const say = note && NOTES[str(note.code)];
-    status.textContent = say ? say(str(note.name)) : "";
+    const checking = d.checking === true;
+    // The button waits while a check runs; the focus on it goes to the title.
+    if (checking && document.activeElement === check) title.focus();
+    check.disabled = checking;
+    status.textContent = checking ? CHECKING : say ? say(str(note.name)) : "";
     if (!keep) {
       const first = list.querySelector('[data-ctl="switch"]');
       (first || title).focus();
@@ -239,7 +270,13 @@
     list.replaceChildren();
     menu.replaceChildren();
     status.textContent = "";
+    lastError = null;
+    error.textContent = "";
+    error.hidden = true;
+    check.disabled = false;
   }
+
+  check.addEventListener("click", () => send("ext-check-updates"));
 
   page.addEventListener("focusin", (e) => {
     const c = e.target.closest("[data-ctl]");

@@ -98,13 +98,18 @@ pub enum ExtCmd {
     /// The popup picked in the list opens now (`open_popup`), the list
     /// being hidden.
     OpenPopup,
+    /// The page's "Güncellemeleri denetle".
+    CheckUpdates,
 }
 
 impl ExtCmd {
-    pub const NAMES: &[&str] = &["ext-actions", "ext-enable", "ext-remove", "ext-options", "ext-popup"];
+    pub const NAMES: &[&str] = &["ext-actions", "ext-enable", "ext-remove", "ext-options", "ext-popup", "ext-check-updates"];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         let id = |a: &str| (is_extension_id(a) && !extensions::is_builtin(a)).then(|| a.to_owned());
+        if name == "ext-check-updates" {
+            return arg.is_none().then_some(Self::CheckUpdates);
+        }
         let arg = arg?;
         match name {
             "ext-actions" if arg.bytes().all(|b| b.is_ascii_digit()) => arg.parse().ok().map(Self::Actions),
@@ -307,8 +312,17 @@ pub struct ExtUi {
     /// may still answer, and that answer is the true one. `MAX_LATE` at
     /// most (the oldest goes first).
     late: Vec<Pending>,
-    /// The page's status line: ("removed" | "remove-failed", name).
+    /// The page's status line: ("removed" | "remove-failed", name), or
+    /// how the update check the page asked for ended: ("up-to-date" |
+    /// "found" | "check-failed" | "nothing-to-check", the count found).
     note: Option<(&'static str, String)>,
+    /// The page's button asked for an update check, and its end is to be
+    /// said on the page.
+    check_asked: bool,
+    /// The last install error nobody had seen (`Extensions::last_error`),
+    /// taken for the page when it was shown: it stays until the page is
+    /// opened again.
+    error: Option<crate::webstore::LastError>,
     /// Manifest facts by folder (a new version is a new folder).
     cache: Vec<(String, Info)>,
     /// What the strip's button was last told (None: nothing yet).
@@ -361,9 +375,20 @@ struct Note<'a> {
 }
 
 #[derive(Serialize)]
+struct ErrorView {
+    id: String,
+    message: String,
+}
+
+#[derive(Serialize)]
 struct PageView<'a> {
     items: Vec<Row>,
     note: Option<Note<'a>>,
+    /// An update check is running: the button waits.
+    checking: bool,
+    /// The last install error: under its row, or on top when its id is not
+    /// in the list.
+    error: Option<ErrorView>,
 }
 
 #[derive(Serialize)]
@@ -415,7 +440,9 @@ fn page_json(app: &mut App) -> String {
         });
     }
     let note = app.ext_ui.note.as_ref().map(|(code, name)| Note { code, name });
-    serde_json::to_string(&PageView { items, note }).unwrap_or_else(|_| "{}".into())
+    let error = app.ext_ui.error.as_ref().map(|e| ErrorView { id: e.id.clone(), message: extensions::clean_text(&e.message) });
+    let checking = app.webstore.is_checking();
+    serde_json::to_string(&PageView { items, note, checking, error }).unwrap_or_else(|_| "{}".into())
 }
 
 // ------------------------------------------------------------ page
@@ -428,10 +455,18 @@ pub fn open(app: &mut App) {
     }
     app.ext_ui.failed.clear();
     app.ext_ui.note = None;
+    app.ext_ui.check_asked = false;
+    app.ext_ui.error = None;
     render(app, false);
 }
 
 fn render(app: &mut App, keep: bool) {
+    // An install error nobody saw: shown now, so seen (it goes from the
+    // file).
+    if let Some(e) = app.extensions.last_error().cloned() {
+        app.ext_ui.error = Some(e);
+        app.extensions.clear_last_error();
+    }
     let json = page_json(app);
     let bounds = overlay::panel_rect(overlay::win_size(app));
     overlay::show(app, Mode::Extensions, format!("xbx.show({json},{keep})"), bounds);
@@ -480,6 +515,12 @@ fn start(app: &mut App, id: String, remove: bool, on: bool) {
         return;
     }
     let Some(name) = app.extensions.list().into_iter().find(|l| l.id == id).map(|l| l.name) else { return };
+    // The store is installing, updating or removing it: not under that.
+    if app.webstore.busy_with() == Some(id.as_str()) {
+        app.ext_ui.note = Some(("store-busy", name));
+        render(app, true);
+        return;
+    }
     app.ext_ui.failed.retain(|(f, _)| *f != id);
     app.ext_ui.note = None;
     if remove {
@@ -595,6 +636,42 @@ pub fn on_command(app: &mut App, cmd: ExtCmd) {
         }
         ExtCmd::PopupClosed { generation, refocus } => crate::popup::on_closed(app, generation, refocus),
         ExtCmd::OpenPopup => open_next_popup(app),
+        ExtCmd::CheckUpdates => check_updates(app),
+    }
+}
+
+/// The page's "Güncellemeleri denetle": the same check as the daily one.
+/// A check already running (the timer's) counts as this one.
+fn check_updates(app: &mut App) {
+    if app.overlay.mode != Mode::Extensions {
+        return;
+    }
+    crate::webstore::check_updates(app);
+    let checking = app.webstore.is_checking();
+    // Not running: nothing to ask about, or the check could not start.
+    let checkable = checking || crate::webstore::has_checkable(app);
+    let x = &mut app.ext_ui;
+    x.check_asked = checking;
+    x.note = match (checking, checkable) {
+        (true, _) => None,
+        (false, true) => Some(("check-failed", String::new())),
+        (false, false) => Some(("nothing-to-check", String::new())),
+    };
+    render(app, true);
+}
+
+/// An update check ended: `found` updates to install, one at a time
+/// (`None`: it failed). Said on the page if its button asked.
+pub fn on_update_checked(app: &mut App, found: Option<usize>) {
+    if std::mem::take(&mut app.ext_ui.check_asked) {
+        app.ext_ui.note = Some(match found {
+            Some(0) => ("up-to-date", String::new()),
+            Some(n) => ("found", n.to_string()),
+            None => ("check-failed", String::new()),
+        });
+    }
+    if app.overlay.mode == Mode::Extensions {
+        render(app, true);
     }
 }
 
@@ -695,7 +772,10 @@ mod tests {
         assert_eq!(p("ext-remove", Some(ID)), Some(ExtCmd::Remove(ID.into())));
         assert_eq!(p("ext-options", Some(ID)), Some(ExtCmd::Options(ID.into())));
         assert_eq!(p("ext-popup", Some(ID)), Some(ExtCmd::Popup(ID.into())));
+        assert_eq!(p("ext-check-updates", None), Some(ExtCmd::CheckUpdates));
         for (n, a) in [
+            ("ext-check-updates", Some("")),
+            ("ext-check-updates", Some("1")),
             ("ext-actions", None),
             ("ext-actions", Some("-1")),
             ("ext-actions", Some("+5")),

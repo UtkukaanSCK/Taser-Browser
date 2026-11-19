@@ -148,7 +148,7 @@ fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Entry>, D::Erro
 /// Text as kept: no control characters, no bidi marks, embeddings,
 /// overrides or isolates (a name that turns the text around it), at most
 /// `MAX_TEXT` characters.
-fn clean_text(s: &str) -> String {
+pub fn clean_text(s: &str) -> String {
     let bidi = |c: char| matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
     s.chars().filter(|&c| !c.is_control() && !bidi(c)).take(MAX_TEXT).collect::<String>().trim().to_string()
 }
@@ -630,7 +630,6 @@ impl Extensions {
     }
 
     /// The last install error nobody saw, for the Extensions page.
-    #[cfg_attr(not(test), allow(dead_code))] // Wired up to the page at the merge.
     pub fn last_error(&self) -> Option<&crate::webstore::LastError> {
         self.file.last_error.as_ref()
     }
@@ -639,6 +638,13 @@ impl Extensions {
     pub fn set_last_error(&mut self, e: crate::webstore::LastError) {
         self.file.last_error = Some(e);
         self.save();
+    }
+
+    /// The Extensions page showed the last error: it is seen, and goes.
+    pub fn clear_last_error(&mut self) {
+        if self.file.last_error.take().is_some() {
+            self.save();
+        }
     }
 
     /// The start-up reconcile is over and WebView2 has answered each of its

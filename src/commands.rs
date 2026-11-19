@@ -244,6 +244,8 @@ mod tests {
             Some(UiCommand::Settings(SettingsCmd::Autofill(false)))
         );
         assert_eq!(UiCommand::parse("ext-actions:900"), Some(UiCommand::Ext(ExtCmd::Actions(900))));
+        assert_eq!(UiCommand::parse("ext-check-updates"), Some(UiCommand::Ext(ExtCmd::CheckUpdates)));
+        assert_eq!(UiCommand::parse("ext-check-updates:x"), None);
         assert_eq!(
             UiCommand::parse("ext-enable:mmbkafeccnpmgicaldnppdljpaogpjdm:0"),
             Some(UiCommand::Ext(ExtCmd::Enable { id: "mmbkafeccnpmgicaldnppdljpaogpjdm".into(), on: false }))

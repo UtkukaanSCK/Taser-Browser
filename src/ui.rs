@@ -216,6 +216,27 @@ pub fn build_overlay(
 mod tests {
     use super::*;
 
+    /// Every `id="..."` in a page is there once: `getElementById` returns
+    /// the first, so a second one is silently left out.
+    #[test]
+    fn page_ids_are_unique() {
+        for (page, html) in [("index.html", INDEX_HTML), ("overlay.html", OVERLAY_HTML)] {
+            let mut seen = std::collections::HashSet::new();
+            let mut rest = html;
+            while let Some(at) = rest.find("id=\"") {
+                let before = rest[..at].chars().next_back();
+                rest = &rest[at + 4..];
+                // `data-id`, `aria-...`: not an id.
+                if !before.is_some_and(char::is_whitespace) {
+                    continue;
+                }
+                let id = &rest[..rest.find('"').expect("closed")];
+                assert!(seen.insert(id), "{page}: id \"{id}\" more than once");
+            }
+            assert!(seen.len() > 10, "{page}: {} ids", seen.len());
+        }
+    }
+
     #[test]
     fn ui_origin_check() {
         #[cfg(windows)]
@@ -265,6 +286,10 @@ mod tests {
             assert_eq!(ipc_command(ui, &body, false), None, "{body}");
             assert_eq!(ipc_command("https://example.com/", &body, true), None, "{body}");
         }
+        // The page's update check: the overlay only.
+        assert!(matches!(ipc_command(ui, "ext-check-updates", true), Some(UiCommand::Ext(crate::ext_ui::ExtCmd::CheckUpdates))));
+        assert_eq!(ipc_command(ui, "ext-check-updates", false), None, "not from the strip");
+        assert_eq!(ipc_command("https://example.com/", "ext-check-updates", true), None);
         assert!(ipc_command(ui, "ext-actions:900", false).is_some());
         assert!(ipc_command(ui, "ext-actions:900", true).is_some());
         assert_eq!(ipc_command("chrome-extension://mmbkafeccnpmgicaldnppdljpaogpjdm/", "ext-actions:9", false), None);

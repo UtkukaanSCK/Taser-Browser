@@ -272,8 +272,12 @@ pub struct State {
 }
 
 impl State {
+    /// An update check is running (the Extensions page's button waits).
+    pub fn is_checking(&self) -> bool {
+        self.checking
+    }
+
     /// The id of the extension being installed, updated or removed.
-    #[cfg(feature = "selftest")]
     pub fn busy_with(&self) -> Option<&str> {
         self.job.as_ref().map(|j| j.id.as_str())
     }
@@ -676,11 +680,14 @@ fn fetched(app: &mut App, result: Result<Fetched, Failure>) {
         Err(f) => end(app, Err(f)),
         // New permissions: the update waits for the user's yes, from now on
         // like an install that asks. Never over something else on screen
-        // (a menu, a question, a page in fullscreen) or while X-Browser is
-        // in the background: then it is left for the next check (Cancelled
-        // is not remembered as failed).
+        // (a menu, a question, an extension's popup, a page in fullscreen)
+        // or while X-Browser is in the background: then it is left for the
+        // next check (Cancelled is not remembered as failed).
         Ok(Fetched { bytes, info, widened: true }) if update => {
-            let free = app.overlay.mode == Mode::Hidden && !app.fullscreen.on() && app.in_front();
+            let free = app.overlay.mode == Mode::Hidden
+                && crate::popup::extension(app).is_none()
+                && !app.fullscreen.on()
+                && app.in_front();
             if !free {
                 return end(app, Err(Failure::Cancelled));
             }
@@ -960,6 +967,12 @@ pub fn check_updates(app: &mut App) {
     }
 }
 
+/// Whether `check_updates` has anything to ask about: an extension
+/// installed from the store and turned on.
+pub fn has_checkable(app: &App) -> bool {
+    !store_installed(app.extensions.records(), &app.extensions.list()).is_empty()
+}
+
 /// Sends `UserEvent::UpdateTimer` every `UPDATE_TIMER_TICK` until the event
 /// loop is gone. The self-test build has no timer: it sends the event
 /// itself.
@@ -1104,10 +1117,15 @@ fn wanted(
 
 fn checked(app: &mut App, result: Result<Vec<cws::Update>, Failure>) {
     app.webstore.checking = false;
+    // How many updates this check found to install (None: it failed), for
+    // the Extensions page.
+    let mut found = None;
     match result {
         Ok(offered) => {
             let listed = app.extensions.list();
-            for (id, source) in wanted(app.extensions.records(), &listed, &offered, &app.webstore.failed) {
+            let wanted = wanted(app.extensions.records(), &listed, &offered, &app.webstore.failed);
+            found = Some(wanted.len());
+            for (id, source) in wanted {
                 let w = &mut app.webstore;
                 // An update of it under way already; a removal is not one.
                 if w.job.as_ref().is_some_and(|j| j.id == id && j.offered.is_some()) {
@@ -1122,6 +1140,7 @@ fn checked(app: &mut App, result: Result<Vec<cws::Update>, Failure>) {
         Err(f) => eprintln!("x-browser: update check failed: {f:?}"),
     }
     job_ended(app);
+    crate::ext_ui::on_update_checked(app, found);
 }
 
 /// Starts the next queued update that is still wanted, unless a job is
