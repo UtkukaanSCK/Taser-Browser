@@ -244,7 +244,7 @@ All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
 | `window.json` | normal rect (physical px), maximized | same |
 | `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
 | `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
-| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session or one blank tab), `autofill` (on/off), `download_dir` (empty: the system Downloads folder); file at most 64 KiB | on each change |
+| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session or one blank tab), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced); file at most 64 KiB | on each change |
 | `extensions.json` | extensions X-Browser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
 | `extensions\<id>\<version>\` | unpacked extensions X-Browser owns | on install, update and removal |
 
@@ -265,11 +265,16 @@ The strip's ⋮ button, Alt+F or Alt+E opens the main menu: new tab, find, zoom
 (see "Extensions"). Each item calls what its own shortcut calls. Downloads use
 WebView2's own flyout (progress, pause/cancel, "open file", "open folder");
 SmartScreen stays on. The strip's downloads button appears once the session has
-had a download. Settings (search engine, startup, autofill, download folder)
-are saved on each change and take effect at once.
+had a download. Settings (search engine, startup, autofill, download folder,
+tracker blocking) are saved on each change and take effect at once.
 
-**Tracker blocking.** *To be written when the setting is merged: Kapalı,
-Temel, Dengeli or Katı, Dengeli by default.*
+Tracker blocking is WebView2's tracking prevention for the content
+profile (the tabs and their extensions, not the UI's own profile): Temel
+(known harmful trackers only), Dengeli (the default, also trackers from
+sites you have not visited), Katı (most trackers; some sites may break) or
+Kapalı, which leaves blocking to the extensions (uBlock Origin Lite) when the
+two together break a site. `settings.json` stores them as basic, balanced,
+strict and off.
 
 ## Security indicator and external applications
 
@@ -468,13 +473,13 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/native/download.rs` | downloads through WebView2's own flyout; SmartScreen left on |
 | `src/native/policy.rs` | content-tab policy hooks: certificate errors, external launches stopped, navigation outcome |
 | `src/native/error_page.rs` | writes X-Browser's error page into a tab whose load failed |
-| `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, Find, Print |
+| `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, tracking prevention, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
 | `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch and store questions, Uzantılar); placement and closing |
 | `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
-| `src/settings.rs` | `settings.json`: engine, startup, autofill, download folder (with its checks) |
+| `src/settings.rs` | `settings.json`: engine, startup, autofill, download folder (with its checks), tracking prevention |
 | `src/error_page.rs` | error status → Turkish error page text, and the script that shows it |
 | `src/policy.rs` | security indicator, certificate-error memory, external-launch question |
 | `src/extensions.rs` | `extensions.json`, install/remove/enable, start-up reconcile with WebView2's list |

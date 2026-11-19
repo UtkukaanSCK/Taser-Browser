@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 642;
+const EXPECTED_CHECKS: u32 = 646;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -3791,6 +3791,12 @@ pub fn step(app: &mut App, n: u32) {
             );
             let all_on = app.views.iter().all(|(_, v)| crate::native::content_settings(v) == Some((true, false)));
             check("autofill-on-and-password-save-off-by-default", all_on && !app.views.is_empty(), "a view differs");
+            let level = app.content_view().and_then(crate::native::tracking);
+            check(
+                "tracking-prevention-balanced-by-default",
+                s.tracking == crate::settings::Tracking::Balanced && level == Some(2),
+                format!("{:?} {level:?}", s.tracking),
+            );
             let folder = dir().join("dl");
             let _ = std::fs::create_dir_all(&folder);
             remember("dl-ready", i64::from(folder.is_dir()));
@@ -3802,6 +3808,7 @@ pub fn step(app: &mut App, n: u32) {
                     "document.querySelector('input[name=s-engine][value=google]').click(); \
                      document.querySelector('input[name=s-startup][value=blank]').click(); \
                      document.getElementById('s-autofill').click(); \
+                     document.querySelector('input[name=s-tracking][value=strict]').click(); \
                      document.getElementById('s-folder').value = {lit}; \
                      document.getElementById('s-folder-apply').click();"
                 ),
@@ -3815,6 +3822,12 @@ pub fn step(app: &mut App, n: u32) {
             check("settings-engine-drives-the-address-bar", url.starts_with("https://www.google.com/search?q=a"), &url);
             check("settings-startup-changes", s.startup == Startup::Blank, format!("{:?}", s.startup));
             check("settings-autofill-off-reaches-open-views", app.views.iter().all(|(_, v)| crate::native::content_settings(v) == Some((false, false))), "a view differs");
+            let level = app.content_view().and_then(crate::native::tracking);
+            check(
+                "settings-tracking-strict-reaches-the-profile",
+                s.tracking == crate::settings::Tracking::Strict && level == Some(3),
+                format!("{:?} {level:?}", s.tracking),
+            );
             let want = dir().join("dl");
             check("settings-download-folder-saved", s.download_dir == want.to_string_lossy(), format!("{:?}", s.download_dir));
             let now = app.views.first().and_then(|(_, v)| crate::native::download_folder(v)).unwrap_or_default();
@@ -3823,14 +3836,15 @@ pub fn step(app: &mut App, n: u32) {
             let file = crate::store::data_dir().map(|d| d.join("settings.json")).and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
             check(
                 "settings-are-written-to-settings-json",
-                flushed && file.contains("\"v\":1") && file.contains("google") && file.contains("blank") && file.contains("\"autofill\":false"),
+                flushed && file.contains("\"v\":1") && file.contains("google") && file.contains("blank") && file.contains("\"autofill\":false")
+                    && file.contains("\"tracking\":\"strict\""),
                 &file,
             );
             // The page's own scripts reach none of it.
             app.overlay.cleared = None;
             page_js(
                 app,
-                "for (const m of ['menu-toggle','menu-pick:history','st-engine:bing','st-startup:last','st-autofill:1','st-folder:','ov-clear-data']) \
+                "for (const m of ['menu-toggle','menu-pick:history','st-engine:bing','st-startup:last','st-autofill:1','st-folder:','st-tracking:basic','ov-clear-data']) \
                  { try { window.ipc.postMessage(m); } catch (e) {} }",
             );
         }
@@ -3842,15 +3856,23 @@ pub fn step(app: &mut App, n: u32) {
                     && s.engine == crate::settings::Engine::Google
                     && s.startup == crate::settings::Startup::Blank
                     && !s.autofill
+                    && s.tracking == crate::settings::Tracking::Strict
                     && !s.download_dir.is_empty()
                     && app.overlay.cleared.is_none(),
                 format!("{:?} {s:?} {:?}", app.overlay.mode, app.overlay.cleared),
             );
+            crate::settings::on_command(app, crate::settings::SettingsCmd::Tracking(crate::settings::Tracking::Off));
             overlay_js(app, &key_js("Escape"));
             press(app, vk::T, CTRL);
         }
         202 => {
             check("settings-esc-closes", overlay_closed(app), format!("mode {:?}", app.overlay.mode));
+            let level = app.content_view().and_then(crate::native::tracking);
+            check(
+                "settings-tracking-off-reaches-the-content-profile",
+                app.settings.value.tracking == crate::settings::Tracking::Off && level == Some(0),
+                format!("{:?} {level:?}", app.settings.value.tracking),
+            );
             let new_view = app.views.last().is_some_and(|(_, v)| crate::native::content_settings(v) == Some((false, false)));
             check("autofill-off-reaches-new-tabs", new_view, "the new tab's webview differs");
             let port = recall("dl-port");
@@ -3905,6 +3927,7 @@ pub fn step(app: &mut App, n: u32) {
                 "document.querySelector('input[name=s-engine][value=duckduckgo]').click(); \
                  document.querySelector('input[name=s-startup][value=last]').click(); \
                  document.getElementById('s-autofill').click(); \
+                 document.querySelector('input[name=s-tracking][value=balanced]').click(); \
                  document.getElementById('s-folder-reset').click(); \
                  document.getElementById('s-clear').click(); document.getElementById('s-yes').click();",
             );
@@ -3920,19 +3943,27 @@ pub fn step(app: &mut App, n: u32) {
             check("settings-engine-restored-for-the-address-bar", crate::url::search_url("a").starts_with(crate::url::SEARCH_URL), crate::url::search_url("a"));
             let all_on = app.views.iter().all(|(_, v)| crate::native::content_settings(v) == Some((true, false)));
             check("autofill-back-on-and-password-save-still-off", all_on, "a view differs");
+            let level = app.content_view().and_then(crate::native::tracking);
+            check(
+                "settings-tracking-back-to-balanced",
+                s.tracking == crate::settings::Tracking::Balanced && level == Some(2),
+                format!("{:?} {level:?}", s.tracking),
+            );
             check("settings-clear-data-clears", app.overlay.cleared == Some(true), format!("{:?}", app.overlay.cleared));
             // A hostile settings.json costs only its fields; an oversize one is ignored.
             let hostile = dir().join("hostile");
             let _ = std::fs::create_dir_all(&hostile);
             let _ = std::fs::write(
                 hostile.join("settings.json"),
-                r#"{"v":1,"engine":"evil","startup":"blank","autofill":"x","download_dir":"..\\x"}"#,
+                r#"{"v":1,"engine":"evil","startup":"blank","autofill":"x","download_dir":"..\\x","tracking":"none"}"#,
             );
             let read = crate::settings::State::open(Some(&hostile));
             let v = &read.value;
             check(
                 "hostile-settings-file-is-sanitized",
-                (v.engine, v.startup, v.autofill) == (Engine::DuckDuckGo, Startup::Blank, true) && v.download_dir.is_empty(),
+                (v.engine, v.startup, v.autofill) == (Engine::DuckDuckGo, Startup::Blank, true)
+                    && v.download_dir.is_empty()
+                    && v.tracking == crate::settings::Tracking::Balanced,
                 format!("{v:?}"),
             );
             overlay_js(app, &key_js("Escape"));
