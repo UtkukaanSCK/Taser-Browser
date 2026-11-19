@@ -259,9 +259,8 @@ change and take effect at once.
 
 The start of the address box shows the connection of the page on screen: a
 lock for https, "Güvenli değil" for http, "Sertifika hatası" for a host whose
-certificate failed in this run (also after the user chose to proceed on
-WebView2's warning page), and "Sayfa çöktü" with a reload button for a crashed
-tab. Every state has its own icon or text, never colour alone, and is read out
+certificate failed in this run, and "Sayfa çöktü" with a reload button for a
+crashed tab (the tab itself stays empty). Every state has its own icon or text, never colour alone, and is read out
 by screen readers when it changes. After more than 64 hosts with certificate
 errors in one run, no https page counts as secure until the next start; the
 indicator then says "Sertifikalara güvenilmiyor" (told once, not in a dialog).
@@ -273,8 +272,19 @@ asking site and the whole address). "Aç" counts only after a short pause
 (Esc, a click elsewhere, a tab switch, a navigation, 60 s) answers "no".
 Every other `ms-` scheme is refused without a question.
 
+A page that cannot load (unknown host, no connection, refused connection,
+time-out, bad certificate) shows X-Browser's own error page in Turkish, never
+WebView2's Edge-branded one: a title for the kind of error, a short
+explanation, the failed address as plain text and a "Yeniden dene" button.
+The address bar keeps the failed address, the error page never shows the
+lock, and Back and Forward step over it like any page. The page is written
+only into WebView2's error document (`chrome-error://`), which no site can
+load or script, and only as text. A bad certificate has no "proceed anyway".
+
 Known limits, left as they are:
 
+- A real certificate error has not been checked against the error page here;
+  the self-test checks unreachable hosts only.
 - `ms-windows-store:` is the one `ms-` scheme let through (to the same
   question), because sites link to their Store page and it only shows a page
   of the Store.
@@ -311,6 +321,7 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/native/fullscreen.rs` | a page's element fullscreen (video, `requestFullscreen`) events |
 | `src/native/download.rs` | downloads through WebView2's own flyout; SmartScreen left on |
 | `src/native/policy.rs` | content-tab policy hooks: certificate errors, external launches stopped, navigation outcome |
+| `src/native/error_page.rs` | writes X-Browser's error page into a tab whose load failed |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
 | `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch question); placement and closing |
@@ -318,6 +329,7 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
 | `src/settings.rs` | `settings.json`: engine, startup, autofill, download folder (with its checks) |
+| `src/error_page.rs` | error status → Turkish error page text, and the script that shows it |
 | `src/policy.rs` | security indicator, certificate-error memory, external-launch question |
 | `src/ui.rs` | embedded UI assets, custom protocol, CSP |
 | `src/store.rs` | versioned JSON files: atomic writes, `.bak`, corrupt-file recovery |
