@@ -9,6 +9,7 @@
 <script src="/js/menu.js" defer></script>
 <script src="/js/settings.js" defer></script>
 <script src="/js/extask.js" defer></script>
+<script src="/js/extensions.js" defer></script>
 </head>
 <body class="bg-surface text-ink font-sans text-[13px] leading-none border border-line">
 <!-- Address-bar suggestions: 30px rows (ROW_H in overlay.rs), 4px padding. -->
@@ -63,7 +64,7 @@
   <p id="bm-more" class="border-t border-line px-3 py-1.5 text-muted" hidden></p>
 </section>
 
-<!-- Main menu (menu.js, src/menu.rs). Sized in menu.rs (264 x 292): 32px rows,
+<!-- Main menu (menu.js, src/menu.rs). Sized in menu.rs (264 x 324): 32px rows,
      a 36px zoom row, two separators. The zoom row is one stop for ↑/↓: ←/→ zoom,
      Enter resets; the − and + buttons are for the mouse. -->
 <section id="menu" role="menu" aria-label="Ana menü" class="h-full overflow-y-auto py-1" hidden>
@@ -80,6 +81,7 @@
   <button type="button" role="menuitem" data-item="bookmarks" data-stop class="mi">Yer imleri<kbd>Ctrl+Shift+O</kbd></button>
   <button type="button" role="menuitem" data-item="downloads" data-stop class="mi">İndirilenler<kbd>Ctrl+J</kbd></button>
   <button type="button" role="menuitem" data-item="settings" data-stop class="mi">Ayarlar</button>
+  <button type="button" role="menuitem" data-item="extensions" data-stop class="mi">Uzantılar</button>
 </section>
 
 <!-- Settings (settings.js, src/settings.rs). -->
@@ -129,6 +131,25 @@
     <p id="s-status" role="status" class="min-h-4 leading-snug text-muted"></p>
   </footer>
 </section>
+
+<!-- Extensions (extensions.js, src/ext_ui.rs). Rust sends the rows; each
+     switch, button and question is drawn here. The confirm row of a removal
+     sits under its own extension. -->
+<section id="extensions" aria-labelledby="x-title" class="flex h-full flex-col" hidden>
+  <header class="border-b border-line px-4 py-2">
+    <h1 id="x-title" tabindex="-1" class="text-[14px] font-semibold outline-none">Uzantılar</h1>
+  </header>
+  <ul id="x-list" aria-label="Yüklü uzantılar" class="min-h-0 flex-1 overflow-y-auto py-1"></ul>
+  <p id="x-empty" class="flex-1 px-4 py-6 text-center text-muted" hidden>Yüklü uzantı yok</p>
+  <footer class="border-t border-line px-4 py-2">
+    <p id="x-status" role="status" class="min-h-4 leading-snug text-muted"></p>
+  </footer>
+</section>
+
+<!-- The strip's extensions button's list (extensions.js; ACTIONS_* in
+     ext_ui.rs): 36px rows, 4px padding above and below, inside the
+     overlay's 1px border (ACTIONS_PAD = 10). A pick opens that popup. -->
+<section id="ext-actions" role="menu" aria-label="Uzantılar" class="h-full overflow-y-auto py-1" hidden></section>
 
 <!-- The question before another application is started (policy.rs). The
      address is the page's text: shown whole, it scrolls inside its box. -->

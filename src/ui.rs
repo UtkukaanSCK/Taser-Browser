@@ -26,6 +26,8 @@ const SETTINGS_JS: &str = include_str!("../ui/js/settings.js");
 const SECURITY_JS: &str = include_str!("../ui/js/security.js");
 const WEBSTORE_JS: &str = include_str!("../ui/js/webstore.js");
 const EXTASK_JS: &str = include_str!("../ui/js/extask.js");
+const EXTENSIONS_JS: &str = include_str!("../ui/js/extensions.js");
+const EXT_BUTTON_JS: &str = include_str!("../ui/js/ext-button.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -91,6 +93,8 @@ fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/js/security.js" => (SECURITY_JS, "text/javascript; charset=utf-8"),
         "/js/webstore.js" => (WEBSTORE_JS, "text/javascript; charset=utf-8"),
         "/js/extask.js" => (EXTASK_JS, "text/javascript; charset=utf-8"),
+        "/js/extensions.js" => (EXTENSIONS_JS, "text/javascript; charset=utf-8"),
+        "/js/ext-button.js" => (EXT_BUTTON_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })
@@ -119,11 +123,13 @@ fn ipc_command(origin: &str, body: &str, overlay: bool) -> Option<UiCommand> {
     if !is_ui_origin(origin) {
         return None;
     }
+    // The launch answer, the Web Store question's answers and the
+    // extensions page's own commands come from the overlay only; the
+    // strip sends the store button's and its extensions button's.
     UiCommand::parse(body).filter(|cmd| match cmd {
         UiCommand::Launch(_) => overlay,
-        // The Web Store question is answered in the overlay; its button is
-        // in the strip.
         UiCommand::Store(c) => overlay == c.is_answer(),
+        UiCommand::Ext(x) => overlay || x.strip_may_send(),
         _ => true,
     })
 }
@@ -252,6 +258,16 @@ mod tests {
         assert!(matches!(ipc_command(ui, "ext-store", false), Some(UiCommand::Store(_))), "the strip's button");
         assert_eq!(ipc_command(ui, "ext-store", true), None, "not from the overlay");
         assert_eq!(ipc_command(ui, "ext-yes:1", true), None, "no argument");
+        // The extensions page's commands: the overlay only; the button's: both.
+        let id = "mmbkafeccnpmgicaldnppdljpaogpjdm";
+        for body in [format!("ext-remove:{id}"), format!("ext-enable:{id}:0"), format!("ext-options:{id}"), format!("ext-popup:{id}")] {
+            assert!(ipc_command(ui, &body, true).is_some(), "{body}");
+            assert_eq!(ipc_command(ui, &body, false), None, "{body}");
+            assert_eq!(ipc_command("https://example.com/", &body, true), None, "{body}");
+        }
+        assert!(ipc_command(ui, "ext-actions:900", false).is_some());
+        assert!(ipc_command(ui, "ext-actions:900", true).is_some());
+        assert_eq!(ipc_command("chrome-extension://mmbkafeccnpmgicaldnppdljpaogpjdm/", "ext-actions:9", false), None);
     }
 
     #[test]
@@ -291,6 +307,8 @@ mod tests {
         assert_eq!(get("/js/menu.js").status(), 200);
         assert_eq!(get("/js/settings.js").status(), 200);
         assert_eq!(get("/js/security.js").status(), 200);
+        assert_eq!(get("/js/extensions.js").status(), 200);
+        assert_eq!(get("/js/ext-button.js").status(), 200);
         let r = get("/overlay.html");
         assert_eq!(r.status(), 200);
         assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], CSP);
@@ -331,7 +349,10 @@ mod tests {
 
     #[test]
     fn scripts_never_write_html() {
-        for js in [CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS, SECURITY_JS, WEBSTORE_JS, EXTASK_JS] {
+        for js in [
+            CORE_JS, STRIP_JS, SUGGEST_JS, OVERLAY_JS, BOOKMARKS_JS, MENU_JS, SETTINGS_JS, SECURITY_JS, WEBSTORE_JS,
+            EXTASK_JS, EXTENSIONS_JS, EXT_BUTTON_JS,
+        ] {
             for bad in [".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval("] {
                 assert!(!js.contains(bad), "{bad}");
             }

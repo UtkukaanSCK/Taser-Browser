@@ -143,6 +143,10 @@ pub enum Mode {
     Launch,
     /// The Web Store install or removal question (see `webstore`).
     Store,
+    /// The extensions page (see `ext_ui`).
+    Extensions,
+    /// The strip's extensions button's list (see `ext_ui`).
+    ExtActions,
 }
 
 impl Mode {
@@ -150,7 +154,17 @@ impl Mode {
     /// the suggestions, which the address bar keeps typing into. The launch
     /// question takes it too: no keystroke may reach it from elsewhere.
     fn owns_keyboard(self) -> bool {
-        matches!(self, Mode::History | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch | Mode::Store)
+        matches!(
+            self,
+            Mode::History
+                | Mode::Bookmarks
+                | Mode::Menu
+                | Mode::Settings
+                | Mode::Launch
+                | Mode::Store
+                | Mode::Extensions
+                | Mode::ExtActions
+        )
     }
 }
 
@@ -416,7 +430,12 @@ pub fn show_store(app: &mut App, js: String, spot: (f64, f64)) {
 
 /// Hides the overlay. Its last list stays known, so a pick that races the
 /// close (a click blurs the address input first) still lands.
+#[track_caller]
 pub fn close(app: &mut App) {
+    #[cfg(feature = "selftest")]
+    if app.overlay.mode == Mode::Extensions {
+        crate::selftest::trace(&format!("Uzantılar page closed from {} (focus {})", std::panic::Location::caller(), native::focus_class()));
+    }
     reset(app, true);
 }
 
@@ -474,12 +493,16 @@ fn reset(app: &mut App, hide: bool) {
     if was == Mode::Suggest {
         let _ = app.ui.evaluate_script("xbSuggest.set(false,null)");
     }
+    if was == Mode::ExtActions {
+        let _ = app.ui.evaluate_script("xbExtBtn.expanded(false)");
+    }
 }
 
 /// Closes the overlay for a reason of its own (a page started loading, the
 /// window moved or was resized, the UI failed). The history list held the
 /// keyboard, so it goes back where Esc would put it, as long as X-Browser is
 /// still the foreground window.
+#[track_caller]
 pub fn dismiss(app: &mut App) {
     let had_keyboard = app.overlay.mode.owns_keyboard();
     close(app);
@@ -713,7 +736,15 @@ pub fn refresh(app: &mut App) {
             suggest(app, x, w, text);
         }
         // The bookmark list is redrawn by `bookmarks` itself on every change.
-        Mode::Suggest | Mode::Hidden | Mode::Bookmarks | Mode::Menu | Mode::Settings | Mode::Launch | Mode::Store => {}
+        Mode::Suggest
+        | Mode::Hidden
+        | Mode::Bookmarks
+        | Mode::Menu
+        | Mode::Settings
+        | Mode::Launch
+        | Mode::Store
+        | Mode::Extensions
+        | Mode::ExtActions => {}
     }
 }
 
@@ -743,7 +774,16 @@ mod tests {
         // Suggest keeps the keyboard in the address input: the page that
         // replaces it must take the focus itself.
         assert!(!Mode::Suggest.owns_keyboard() && !Mode::Hidden.owns_keyboard());
-        for m in [Mode::History, Mode::Bookmarks, Mode::Menu, Mode::Settings, Mode::Launch, Mode::Store] {
+        for m in [
+            Mode::History,
+            Mode::Bookmarks,
+            Mode::Menu,
+            Mode::Settings,
+            Mode::Launch,
+            Mode::Store,
+            Mode::Extensions,
+            Mode::ExtActions,
+        ] {
             assert!(m.owns_keyboard());
         }
     }

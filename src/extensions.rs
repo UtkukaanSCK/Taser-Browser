@@ -1,7 +1,7 @@
 //! Browser extensions (v0.3 task 2): X-Browser's record of what it
 //! installed, the start-up reconcile, and add / list / enable / remove for
-//! Rust callers. The WebView2 calls are `native::extensions`; there is no
-//! page for any of this yet (task 5).
+//! Rust callers. The WebView2 calls are `native::extensions`; the Uzantılar
+//! page and the popups are `ext_ui` and `popup`.
 //!
 //! - Extensions live only in the default WebView2 profile, the one content
 //!   tabs use. The UI strip and the overlay run in their own profile
@@ -34,9 +34,6 @@
 //!   `Extensions::outcome` gives once WebView2 has answered.
 //! - The file also keeps the first-run uBOL state (`first_run_ubol`, see
 //!   `firstrun`); the reconcile's end starts that job.
-// add / list / enable / remove have no caller in the app until the
-// Uzantılar page (task 5); the self-test uses all of them.
-#![cfg_attr(not(feature = "selftest"), allow(dead_code))]
 
 use crate::app::{App, UserEvent};
 use crate::native::{self, ExtensionInfo};
@@ -148,9 +145,12 @@ fn lenient<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Entry>, D::Erro
     Ok(raw.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
 }
 
-/// Text as kept: no control characters, at most `MAX_TEXT` characters.
+/// Text as kept: no control characters, no bidi marks, embeddings,
+/// overrides or isolates (a name that turns the text around it), at most
+/// `MAX_TEXT` characters.
 fn clean_text(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).take(MAX_TEXT).collect::<String>().trim().to_string()
+    let bidi = |c: char| matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    s.chars().filter(|&c| !c.is_control() && !bidi(c)).take(MAX_TEXT).collect::<String>().trim().to_string()
 }
 
 /// An absolute folder path without `.`/`..` parts or control characters.
@@ -439,6 +439,7 @@ pub enum Event {
     Removed { op: Op, id: String, result: Result<bool, String> },
     /// The self-test's fake store result (`firstrun::fake`), kept apart from
     /// `UserEvent::StoreInstalled` so the fake never touches `webstore`.
+    #[cfg_attr(not(feature = "selftest"), allow(dead_code))]
     StoreInstalled { id: String, result: Result<String, crate::firstrun::FailureKind> },
 }
 
@@ -755,7 +756,9 @@ fn send(proxy: &crate::native::Proxy, ev: Event) {
 /// Installs the unpacked extension in `dir` (an absolute folder with a
 /// manifest.json) and records it, replacing an older install of the same id
 /// in place. The folder is used where it is; `remove` deletes it only if it
-/// is in `Extensions::root`.
+/// is in `Extensions::root`. Only the self-test adds a folder directly;
+/// the Web Store installs through `add_from_store`.
+#[cfg_attr(not(feature = "selftest"), allow(dead_code))]
 pub fn add(app: &mut App, dir: &Path, source: Source) -> Op {
     let op = app.extensions.start_op();
     add_as(app, op, dir, source, true, None);
@@ -923,7 +926,7 @@ pub fn on_event(app: &mut App, ev: Event) {
                     app.extensions.readding += 1;
                 }
             }
-            // Until the extensions page (task 5) can show and remove them.
+            // The Uzantılar page lists them; the user may turn them on there.
             for id in unknown_on {
                 eprintln!("x-browser: extension {id} was not installed by X-Browser; turned off");
                 set_enabled_as(app, 0, &id, false);
@@ -987,6 +990,16 @@ pub fn on_event(app: &mut App, ev: Event) {
 mod tests {
     use super::*;
     use crate::store::tests::temp_dir;
+
+    #[test]
+    fn kept_text_has_no_controls_or_bidi_overrides() {
+        assert_eq!(clean_text("  uBlock\u{0007} Origin\n Lite "), "uBlock Origin Lite");
+        let spoof = "\u{202E}fdp.exe\u{202C} \u{200E}a\u{200F}b \u{2066}c\u{2069} \u{202A}d\u{202B}e\u{202D}";
+        assert_eq!(clean_text(spoof), "fdp.exe ab c de");
+        // Other text, right-to-left scripts too, stays.
+        assert_eq!(clean_text("Uzantı \u{05D0}\u{05D1} 1.0"), "Uzantı \u{05D0}\u{05D1} 1.0");
+        assert_eq!(clean_text(&"x".repeat(MAX_TEXT + 5)).len(), MAX_TEXT);
+    }
 
     const ID: &str = "mmbkafeccnpmgicaldnppdljpaogpjdm";
     const ID2: &str = "abcdefghijklmnopabcdefghijklmnop";

@@ -24,6 +24,7 @@ mod extensions;
 mod favicon;
 mod fullscreen;
 mod policy;
+mod popup;
 mod tools;
 mod zoom;
 pub use audio::*;
@@ -33,6 +34,7 @@ pub use extensions::*;
 pub use favicon::*;
 pub use fullscreen::*;
 pub use policy::*;
+pub use popup::*;
 pub use tools::*;
 pub use zoom::*;
 
