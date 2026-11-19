@@ -175,6 +175,20 @@ mod imp {
         Ok(())
     }
 
+    /// `(IsWebMessageEnabled, AreHostObjectsAllowed)` as WebView2 has them
+    /// for `view`: what `harden_content` turned off. (A disabled
+    /// `postMessage` still exists and does not throw; it posts nothing.)
+    #[cfg(feature = "selftest")]
+    pub fn host_bridge(view: &WebView) -> Option<(bool, bool)> {
+        let (mut messages, mut objects) = (BOOL(0), BOOL(0));
+        unsafe {
+            let settings = view.webview().Settings().ok()?;
+            settings.IsWebMessageEnabled(&mut messages).ok()?;
+            settings.AreHostObjectsAllowed(&mut objects).ok()?;
+        }
+        Some((messages.as_bool(), objects.as_bool()))
+    }
+
     fn nav_uri(args: &ICoreWebView2NavigationStartingEventArgs) -> windows::core::Result<String> {
         let mut uri = PWSTR::null();
         unsafe { args.Uri(&mut uri)? };
@@ -385,6 +399,10 @@ mod imp {
     }
     pub fn harden_content(_: &WebView) -> Result<(), ()> {
         Ok(())
+    }
+    #[cfg(feature = "selftest")]
+    pub fn host_bridge(_: &WebView) -> Option<(bool, bool)> {
+        None
     }
 }
 

@@ -4693,7 +4693,12 @@ pub fn step(app: &mut App, n: u32) {
                 format!("popup {:?}, mode {:?}", crate::popup::extension(app), app.overlay.mode),
             );
             let want = active_url(app);
-            const JS: &str = "`url=${document.body.dataset.url};id=${document.body.dataset.id};n=${document.body.dataset.n};href=${location.href};msg=${(() => { try { const w = window.chrome && window.chrome.webview; if (!w || typeof w.postMessage !== 'function') return 'none'; w.postMessage('xb-selftest'); return 'sent'; } catch (e) { return 'refused'; } })()}`";
+            // No host bridge: WebView2's settings for the popup say web
+            // messages and host objects are off (a disabled postMessage
+            // still exists and does not throw, so the page cannot tell),
+            // and the page sees no host objects.
+            let bridge = crate::popup::view(app).and_then(crate::native::host_bridge);
+            const JS: &str = "`url=${document.body.dataset.url};id=${document.body.dataset.id};n=${document.body.dataset.n};href=${location.href};objects=${(() => { try { const w = window.chrome && window.chrome.webview; return !!(w && w.hostObjects && Object.keys(w.hostObjects).length); } catch (e) { return false; } })()}`";
             eval(crate::popup::view(app), "ext-popup-tabs-query", JS, move |r| {
                 // WebView2's own tab for the active page, found by its
                 // address: one tab, with WebView2's id.
@@ -4706,9 +4711,11 @@ pub fn step(app: &mut App, n: u32) {
                         && field(&r, "href") == format!("chrome-extension://{EXT_ID}/popup.html"),
                     format!("{r}, want {want}"),
                 );
-                // IsWebMessageEnabled false: WebView2 keeps postMessage, and
-                // it throws.
-                check("ext-popup-has-no-web-messages", matches!(field(&r, "msg"), "none" | "refused"), &r);
+                check(
+                    "ext-popup-has-no-web-messages",
+                    bridge == Some((false, false)) && field(&r, "objects") == "false",
+                    format!("web messages and host objects {bridge:?}, {r}"),
+                );
             });
             if let Some(v) = crate::popup::view(app) {
                 log(&format!("INFO the popup's address: {}", v.url().unwrap_or_default()));
@@ -5180,14 +5187,16 @@ pub fn step(app: &mut App, n: u32) {
                 format!("record {rec:?}, {:?}, job {:?}, asked {asked:?}", app.overlay.mode, app.webstore.busy_with()),
             );
             // The page's button started that check, and the page says how
-            // it ended; the last error was under its row, and is seen.
-            const CHECK_JS: &str = "(() => { const g = (i) => document.getElementById(i), row = document.querySelector('#x-list li[data-id=\"__ID__\"] p.text-danger'); \
-                return `title=${g('xp-title').textContent};status=${g('x-status').textContent};button=${g('x-check').disabled};row=${row ? row.textContent : ''};top=${g('x-error').hidden}`; })()";
+            // it ended; the last error was under its row, and is seen. (The
+            // row's own paragraph, not its state's inside the buttons; the
+            // status's ';' comes back as '|', as `field` splits on ';'.)
+            const CHECK_JS: &str = "(() => { const g = (i) => document.getElementById(i), row = document.querySelector('#x-list li[data-id=\"__ID__\"] > p.text-danger'); \
+                return `title=${g('xp-title').textContent};status=${g('x-status').textContent.replace(/;/g, '|')};button=${g('x-check').disabled};row=${row ? row.textContent : ''};top=${g('x-error').hidden}`; })()";
             overlay_eval(app, "ext-page-check-button-checks-updates", &CHECK_JS.replace("__ID__", &id), |r| {
                 check(
                     "ext-page-check-button-checks-updates",
                     field(&r, "title") == "Uzantılar"
-                        && field(&r, "status") == "1 güncelleme bulundu; sırayla kuruluyor."
+                        && field(&r, "status") == "1 güncelleme bulundu| sırayla kuruluyor."
                         && field(&r, "button") == "false",
                     &r,
                 );
