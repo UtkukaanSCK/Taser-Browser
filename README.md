@@ -377,7 +377,10 @@ version is checked like an install (signature, same id and key, and the size
 and SHA-256 the update service gave) and replaces the old one in place, so the
 extension keeps its settings; the old folder is deleted afterwards. It asks
 only when the new version wants a permission or site the installed one did not
-have ("Güncelle" or "İptal", listing only what is new), and only when nothing
+have, or lets sites or other extensions message it, runs its scripts in more
+frames, replaces a browser page or changes its manifest version ("Güncelle" or
+"İptal", listing only what is new). An update of an extension the Uzantılar
+page is still switching or removing waits for the next check. It asks only when nothing
 else is on screen: with the overlay open (the Uzantılar page itself included),
 an extension's popup open, in fullscreen or with X-Browser in the background it
 waits for the next check. So an update that wants more is never asked about

@@ -207,6 +207,13 @@ pub fn is_plain_folder(root: &Path) -> bool {
     }
 }
 
+/// The metadata of `path` if it is a plain file: not a link, junction or
+/// other reparse point (a manifest swapped for a link to a file outside
+/// the extension's folder is not read).
+pub fn plain_file_metadata(path: &Path) -> Option<std::fs::Metadata> {
+    std::fs::symlink_metadata(path).ok().filter(|m| m.is_file() && !is_reparse_point(m))
+}
+
 #[cfg(windows)]
 fn is_reparse_point(m: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -276,8 +283,8 @@ pub struct Manifest {
 /// `MAX_MANIFEST_BYTES` with a non-empty `"version"`.
 pub fn read_manifest(dir: &Path) -> Result<Manifest, String> {
     let path = dir.join("manifest.json");
-    let meta = std::fs::metadata(&path).map_err(|e| format!("manifest.json: {e}"))?;
-    if !meta.is_file() || meta.len() > MAX_MANIFEST_BYTES {
+    let meta = plain_file_metadata(&path).ok_or("manifest.json is missing, a link or not a file")?;
+    if meta.len() > MAX_MANIFEST_BYTES {
         return Err("manifest.json is not a file within the size limit".into());
     }
     let bytes = std::fs::read(&path).map_err(|e| format!("manifest.json: {e}"))?;
@@ -1326,6 +1333,24 @@ mod tests {
         let big = format!("{{\"version\":\"1\",\"pad\":\"{}\"}}", "x".repeat(MAX_MANIFEST_BYTES as usize));
         std::fs::write(dir.join("manifest.json"), big).unwrap();
         assert!(read_manifest(&dir).is_err(), "too big");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn manifest_behind_a_link_is_not_read() {
+        let dir = temp_dir("ext-manifest-link");
+        let outside = dir.join("outside.json");
+        std::fs::write(&outside, "{\"version\":\"9\",\"name\":\"Spoof\"}").unwrap();
+        let ext = dir.join("ext");
+        std::fs::create_dir_all(&ext).unwrap();
+        // Creating a link needs Developer Mode or elevation; without it there
+        // is nothing to test.
+        if std::os::windows::fs::symlink_file(&outside, ext.join("manifest.json")).is_err() {
+            return;
+        }
+        assert!(read_manifest(&ext).is_err());
+        assert!(plain_file_metadata(&ext.join("manifest.json")).is_none());
+        assert!(plain_file_metadata(&outside).is_some());
     }
 
     #[test]

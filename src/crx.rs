@@ -16,7 +16,6 @@
 //!   folder next to the destination, which it renames into place.
 //! - Everything here is untrusted input: every length is checked before use
 //!   and nothing panics on bad bytes.
-#![allow(dead_code)] // Wired up by the install flow (v0.3 task 4).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -149,10 +148,13 @@ impl Policy {
 #[derive(Debug)]
 pub struct ZipPayload<'a> {
     zip: &'a [u8],
-    /// The extension id (equal to the one asked for).
+    /// The extension id (equal to the one asked for). Only the tests read
+    /// it back; the install flow already has the id it asked for.
+    #[cfg_attr(not(test), allow(dead_code))]
     id: String,
     /// SHA-256 of each proof's public key (DER SubjectPublicKeyInfo); every
-    /// one of these proofs was checked.
+    /// one of these proofs was checked. Only the tests read it back.
+    #[cfg_attr(not(test), allow(dead_code))]
     key_hashes: Vec<[u8; 32]>,
     /// The developer's public key (DER SubjectPublicKeyInfo): the proof key
     /// the id comes from. `unpack` writes it into the manifest as `"key"`.
@@ -160,10 +162,12 @@ pub struct ZipPayload<'a> {
 }
 
 impl ZipPayload<'_> {
+    #[cfg(test)]
     pub fn id(&self) -> &str {
         &self.id
     }
 
+    #[cfg(test)]
     pub fn key_hashes(&self) -> &[[u8; 32]] {
         &self.key_hashes
     }

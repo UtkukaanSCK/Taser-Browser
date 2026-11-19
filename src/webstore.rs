@@ -414,8 +414,9 @@ fn new_job(app: &mut App, id: &str, action: Action, confirm: bool, tab: Option<T
 /// The store page's button, through the hook script and its sentinel
 /// (`policy::Event::Store`), from the page the user is looking at.
 pub fn on_store_button(app: &mut App, tab: TabId, action: Action, id: &str) {
-    if app.webstore.job.is_some() {
+    if app.webstore.job.is_some() || app.ext_ui.is_busy_with(id) {
         // One at a time; the strip's button shows that one is under way.
+        // The Uzantılar page's own switch or removal of it ends first.
         return;
     }
     match action {
@@ -509,9 +510,7 @@ fn body_cap(size: Option<usize>) -> usize {
 fn read_manifest_bytes(dir: &Path) -> Option<Vec<u8>> {
     use std::io::Read;
     let path = dir.join("manifest.json");
-    if !std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file()) {
-        return None;
-    }
+    crate::extensions::plain_file_metadata(&path)?;
     let mut out = Vec::new();
     std::fs::File::open(&path).ok()?.take(crate::extensions::MAX_MANIFEST_BYTES + 1).read_to_end(&mut out).ok()?;
     (out.len() as u64 <= crate::extensions::MAX_MANIFEST_BYTES).then_some(out)
@@ -739,8 +738,9 @@ fn unpacked(app: &mut App, result: Result<Unpacked, Failure>) {
         Err(f) => return end(app, Err(f)),
     };
     let (id, update) = (job.id.clone(), job.offered.is_some());
-    // An update of an extension removed meanwhile does not install it again.
-    if update && recorded_dir(app, &id).is_none() {
+    // An update of an extension removed meanwhile, or one the Uzantılar
+    // page is switching or removing, does not install it again.
+    if update && (recorded_dir(app, &id).is_none() || app.ext_ui.is_busy_with(&id)) {
         if unpacked.fresh {
             discard(app, unpacked.dir);
         }
@@ -1155,8 +1155,11 @@ fn next_update(app: &mut App) {
         // The record may have changed since the check (removed, updated,
         // turned off).
         let listed = app.extensions.list();
+        // One the Uzantılar page is switching or removing waits for the
+        // next check.
         let still = matches!(&source, Source::Update { version, .. }
             if !failed_before(&app.webstore.failed, &id, version)
+                && !app.ext_ui.is_busy_with(&id)
                 && store_installed(app.extensions.records(), &listed).iter().any(|(i, have)| *i == id && cws::is_newer(version, have)));
         if still {
             return start_job(app, &id, false, None, source);

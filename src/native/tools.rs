@@ -66,7 +66,7 @@ mod imp {
     }
 
     /// Sets the profile's tracking prevention level
-    /// (`COREWEBVIEW2_TRACKING_PREVENTION_LEVEL`, 1–3).
+    /// (`COREWEBVIEW2_TRACKING_PREVENTION_LEVEL`: 0 none, 1 basic, 2 balanced, 3 strict).
     pub fn set_tracking(view: &WebView, level: i32) -> bool {
         unsafe {
             profile(view)

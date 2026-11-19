@@ -5,7 +5,9 @@
 //! There is no cookie store, no automatic authentication and no default
 //! credentials, and the User-Agent names the client and nothing else.
 
-#![allow(dead_code)] // Wired up by the install flow (v0.3 task 4).
+// The self-test build fetches from its fake store (`webstore::http_get`),
+// so none of the network code runs there.
+#![cfg_attr(feature = "selftest", allow(dead_code))]
 
 use std::ffi::c_void;
 use std::fmt;
@@ -56,7 +58,9 @@ impl Default for Limits {
 
 #[derive(Debug)]
 pub struct Response {
-    /// The URL that answered, after redirects, without a fragment.
+    /// The URL that answered, after redirects, without a fragment. Only
+    /// the network tests read it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub final_url: String,
     pub status: u16,
     pub body: Vec<u8>,

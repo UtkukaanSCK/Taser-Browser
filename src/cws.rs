@@ -4,7 +4,6 @@
 //!
 //! Everything here is pure: no I/O, no WebView2.
 
-#![allow(dead_code)] // Wired up by the install flow (v0.3 task 4).
 
 use crate::crx::is_extension_id;
 use crate::net::MAX_URL;
@@ -93,6 +92,7 @@ pub enum Action {
     Remove,
 }
 
+#[cfg(any(test, feature = "selftest"))]
 impl Action {
     fn word(self) -> &'static str {
         match self {
@@ -102,6 +102,10 @@ impl Action {
     }
 }
 
+/// The sentinel address the store page's hook navigates to. X-Browser
+/// itself only reads them (`parse_sentinel`); the tests and the self-test
+/// write them.
+#[cfg(any(test, feature = "selftest"))]
 pub fn sentinel_url(action: Action, id: &str) -> String {
     format!("{SENTINEL_PREFIX}{}/{id}", action.word())
 }
@@ -481,9 +485,18 @@ fn unescape(s: &str) -> Option<String> {
 
 // --- permissions ------------------------------------------------------------------
 
-/// What a manifest asks for that the install question shows: its
-/// `permissions`, `host_permissions` and content-script `matches`, as raw
-/// strings. `None` if the manifest is not a JSON object.
+/// What a manifest asks for, as raw strings with a kind prefix:
+/// - `p:` `permissions`, `h:` `host_permissions` and content-script
+///   `matches` (what the install question lists);
+/// - `x:` who may message it (`externally_connectable` `matches` and `ids`);
+/// - `f:<flag>:<match>` a content script that also runs in frames
+///   (`all_frames`), in `about:`/`blob:`/`data:` frames
+///   (`match_about_blank`, `match_origin_as_fallback`);
+/// - `o:` a browser page it replaces (`chrome_url_overrides`);
+/// - `m:` its `manifest_version`.
+///
+/// A signed update that only widens one of the later kinds still asks
+/// (`widens_permissions`). `None` if the manifest is not a JSON object.
 fn requested(manifest_json: &[u8]) -> Option<std::collections::BTreeSet<String>> {
     let bytes = manifest_json.strip_prefix(b"\xef\xbb\xbf").unwrap_or(manifest_json);
     let Ok(serde_json::Value::Object(m)) = serde_json::from_slice::<serde_json::Value>(bytes) else {
@@ -499,8 +512,23 @@ fn requested(manifest_json: &[u8]) -> Option<std::collections::BTreeSet<String>>
     };
     add("p:", m.get("permissions"));
     add("h:", m.get("host_permissions"));
+    if let Some(ec) = m.get("externally_connectable") {
+        add("x:", ec.get("matches"));
+        add("x:id:", ec.get("ids"));
+    }
     for cs in m.get("content_scripts").and_then(|v| v.as_array()).into_iter().flatten() {
         add("h:", cs.get("matches"));
+        for flag in ["all_frames", "match_about_blank", "match_origin_as_fallback"] {
+            if cs.get(flag).and_then(|v| v.as_bool()) == Some(true) {
+                add(&format!("f:{flag}:"), cs.get("matches"));
+            }
+        }
+    }
+    if let Some(o) = m.get("chrome_url_overrides").and_then(|v| v.as_object()) {
+        out.extend(o.keys().map(|k| format!("o:{k}")));
+    }
+    if let Some(v) = m.get("manifest_version") {
+        out.insert(format!("m:{v}"));
     }
     Some(out)
 }
@@ -523,16 +551,29 @@ pub fn added_permissions(old_manifest: &[u8], new_manifest: &[u8]) -> Vec<String
     let (Some(old), Some(new)) = (requested(old_manifest), requested(new_manifest)) else {
         return describe_permissions(new_manifest);
     };
-    let (mut perms, mut hosts) = (Vec::new(), Vec::new());
+    let (mut perms, mut hosts, mut other) = (Vec::new(), Vec::new(), Vec::new());
     for item in new.difference(&old) {
         if let Some(p) = item.strip_prefix("p:") {
             perms.push(p);
         } else if let Some(h) = item.strip_prefix("h:") {
             hosts.push(h);
+        } else {
+            // Fixed text, one line per kind: nothing from the manifest.
+            let line = match &item[..2] {
+                "x:" => "Web siteleri ya da başka uzantılar onunla doğrudan konuşabilir",
+                "f:" => "Sitelere eklediği betikler sayfaların çerçevelerinde de çalışır",
+                "o:" => "Bir tarayıcı sayfasının (ör. yeni sekme) yerine geçer",
+                _ => "Yeni bir manifest sürümüne geçiyor",
+            };
+            if !other.contains(&line) {
+                other.push(line);
+            }
         }
     }
     let only_new = serde_json::json!({ "permissions": perms, "host_permissions": hosts });
-    describe_permissions(only_new.to_string().as_bytes())
+    let mut lines = describe_permissions(only_new.to_string().as_bytes());
+    lines.extend(other.into_iter().map(str::to_string));
+    lines
 }
 
 /// Turkish lines for the install confirmation (design B.3.5): host access
@@ -1063,6 +1104,35 @@ mod tests {
         assert!(widens_permissions(br#"{"permissions":["https://a.example/*"]}"#, br#"{"host_permissions":["https://a.example/*"]}"#));
         assert!(widens_permissions(b"not json", br#"{}"#));
         assert!(widens_permissions(br#"{}"#, b"[]"));
+    }
+
+    #[test]
+    fn spots_widened_powers_beyond_permissions() {
+        let old = br#"{"manifest_version":3,"permissions":["storage"],"content_scripts":[{"matches":["https://b.example/*"]}],"externally_connectable":{"matches":["https://a.example/*"]}}"#;
+        let with = |extra: &str| format!(r#"{{"manifest_version":3,"permissions":["storage"],{extra}}}"#);
+        let cs = r#""externally_connectable":{"matches":["https://a.example/*"]},"content_scripts":[{"matches":["https://b.example/*"]"#;
+        // Unchanged, or the same thing turned off: no question.
+        assert!(!widens_permissions(old, with(&format!("{cs}}}]")).as_bytes()));
+        assert!(!widens_permissions(old, with(&format!(r#"{cs},"all_frames":false}}]"#)).as_bytes()));
+        // Each widening asks, with a fixed line for it.
+        for (extra, word) in [
+            (format!(r#"{cs},"all_frames":true}}]"#), "çerçeve"),
+            (format!(r#"{cs},"match_about_blank":true}}]"#), "çerçeve"),
+            (format!(r#"{cs},"match_origin_as_fallback":true}}]"#), "çerçeve"),
+            (r#""externally_connectable":{"matches":["https://a.example/*","https://c.example/*"]},"content_scripts":[{"matches":["https://b.example/*"]}]"#.to_string(), "konuşabilir"),
+            (r#""externally_connectable":{"matches":["https://a.example/*"],"ids":["*"]},"content_scripts":[{"matches":["https://b.example/*"]}]"#.to_string(), "konuşabilir"),
+            (format!(r#"{cs}}}],"chrome_url_overrides":{{"newtab":"n.html"}}"#), "yeni sekme"),
+        ] {
+            let new = with(&extra);
+            assert!(widens_permissions(old, new.as_bytes()), "{new}");
+            let lines = added_permissions(old, new.as_bytes());
+            assert!(lines.len() == 1 && lines[0].contains(word), "{new}: {lines:?}");
+        }
+        let v2 = String::from_utf8(old.to_vec()).unwrap().replace(r#""manifest_version":3"#, r#""manifest_version":2"#);
+        assert!(widens_permissions(v2.as_bytes(), old));
+        // Manifest text never reaches the lines.
+        let evil = with(&format!(r#"{cs}}}],"chrome_url_overrides":{{"Güvenli, onaylayın":"n.html"}}"#));
+        assert!(!added_permissions(old, evil.as_bytes()).iter().any(|l| l.contains("onaylayın")));
     }
 
     #[test]

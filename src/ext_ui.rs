@@ -213,8 +213,8 @@ pub fn icon_data_url(dir: &Path, rel: &str) -> Option<String> {
 
 fn read_manifest(dir: &Path) -> Option<Value> {
     let path = dir.join("manifest.json");
-    let meta = std::fs::metadata(&path).ok()?;
-    if !meta.is_file() || meta.len() > extensions::MAX_MANIFEST_BYTES {
+    let meta = extensions::plain_file_metadata(&path)?;
+    if meta.len() > extensions::MAX_MANIFEST_BYTES {
         return None;
     }
     let bytes = std::fs::read(&path).ok()?;
@@ -331,6 +331,16 @@ pub struct ExtUi {
     anchor: f64,
     /// The popup to open at the next `ExtCmd::OpenPopup`: (id, page).
     popup_next: Option<(String, String)>,
+}
+
+impl ExtUi {
+    /// The page has a switch or removal of `id` that WebView2 has not
+    /// answered yet, including one whose row gave up waiting. The Web Store
+    /// leaves such an id alone (as `start` leaves the store's job alone), so
+    /// a late removal and an update cannot cross.
+    pub fn is_busy_with(&self, id: &str) -> bool {
+        self.pending.iter().chain(&self.late).any(|p| p.id == id)
+    }
 }
 
 /// The manifest facts of recorded extension `id` (None: not recorded or
@@ -983,5 +993,15 @@ mod tests {
         assert_eq!(x.late.iter().map(|p| p.op).collect::<Vec<_>>(), vec![3]);
         settle_late(&mut x, |_| None, &ids(&["b"]));
         assert_eq!(x.failed, vec![("b".to_string(), "error")]);
+    }
+
+    #[test]
+    fn busy_covers_pending_and_late_operations() {
+        let op = |id: &str, op: Op| Pending { id: id.into(), op, remove: true, name: String::new() };
+        let mut x = ExtUi::default();
+        assert!(!x.is_busy_with("a"));
+        x.pending.push(op("a", 1));
+        x.late.push(op("b", 2));
+        assert!(x.is_busy_with("a") && x.is_busy_with("b") && !x.is_busy_with("c"));
     }
 }
