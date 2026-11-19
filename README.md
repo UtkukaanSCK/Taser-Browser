@@ -130,17 +130,29 @@ blank tab, median (ms since process creation):
 | v0.1 (33b478e) | 684,544 B | 50 | 276 | 302 | 308 |
 | v0.2 at task 5 (ae74229) | 1,073,152 B | 51 | 293 | 365 | 366 |
 | v0.2 final (e966be7) | 1,260,032 B | 50 | 291 | 361 | 362 |
-| v0.3 final, blank profile () | B | | | | |
-| v0.3 final, uBOL installed () | B | | | | |
+| v0.2 final (ce8fd15), 2026-11-19 | 1,260,032 B | 57 | 305 | 382 | 384 |
+| v0.3 final (75bb7c8), blank profile | 1,656,832 B | 54 | 306 | 421 | 421 |
+| v0.2 final (ce8fd15), 2026-11-19, second session | 1,260,032 B | 57 | 307 | 385 | 390 |
+| v0.3 final (75bb7c8), uBOL installed | 1,656,832 B | 59 | 291 | 428 | 430 |
 
-All three rows were measured in one session on 2026-11-17 (absolute numbers
-move with machine load: the same builds measured 50–60 ms slower on
+The first three rows were measured in one session on 2026-11-17 (absolute
+numbers move with machine load: the same builds measured 50–60 ms slower on
 2026-11-15, with the same gaps between them). The v0.2 cost at start-up is
 creating the first content tab, which grew at task 5
 (first-tab-created − ui-webview-created: 26 ms in v0.1, 70 ms in v0.2);
 tasks 6–9 added nothing measurable.
 
-v0.3: *to be measured (task 6).*
+v0.3 was measured on 2026-11-19, each row against v0.2 run alternately in
+the same session (`startup-timing.sh`): ui-ready is +37 ms on a blank profile
+and +40 ms with uBlock Origin Lite installed and on, against a budget of
++100 ms. Nearly all of it is again in creating the first content tab
+(first-tab-created − ui-webview-created: 77 ms in v0.2, 115 ms in v0.3 on
+the same blank profile); the installed extension adds only a few ms before
+ui-ready. `XB_TIMING_QUIT`
+closes the app at ui-ready, before the first-run uBOL download starts, so the
+blank-profile row has no extension; the uBOL row's profile was filled by one
+ordinary start beforehand. The binary is 397 KB larger (CRX3 and manifest
+handling, the Web Store and update code, the Uzantılar page and popups).
 
 ## Fullscreen
 
