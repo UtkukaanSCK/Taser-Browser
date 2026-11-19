@@ -4666,7 +4666,10 @@ pub fn step(app: &mut App, n: u32) {
             if let Some(v) = app.active_view() {
                 let _ = v.load_url(&format!("http://127.0.0.1:{}/ext?n=9", recall("ext-port")));
             }
-            // The strip's button: its list.
+            // The strip's button: its list. X-Browser counts as in front
+            // to step 278 whoever uses the desktop (`App::in_front`): the
+            // list and the popup close only for what these steps do.
+            app.foreground = Some(true);
             let _ = app.ui.focus();
             ui_js(app, "document.getElementById('ext-btn').click()");
         }
@@ -4782,6 +4785,7 @@ pub fn step(app: &mut App, n: u32) {
                 format!("reopened {}, maximized {}", recall("ext-popup-reopened"), app.window.is_maximized()),
             );
             app.window.set_outer_position(tao::dpi::PhysicalPosition::new(recall("ext-win-x") as i32, recall("ext-win-y") as i32));
+            app.foreground = None;
             // Its page in a tab in the background: removal closes it.
             let _ = app.open_tab(&format!("chrome-extension://{EXT_ID}/options.html"), crate::tabs::Placement::End, false);
             remember("tabs-before-remove", app.tabs.len() as i64);
@@ -5154,6 +5158,10 @@ pub fn step(app: &mut App, n: u32) {
             if let Some(e) = crate::webstore::LastError::new(&id, EXT_LAST_ERROR, crate::history::now_secs()) {
                 app.extensions.set_last_error(e);
             }
+            // X-Browser counts as in front from here to step 304 whoever
+            // uses the desktop (`App::in_front`): the page stays open for
+            // its button.
+            app.foreground = Some(true);
             crate::ext_ui::open(app);
             overlay_click(app, "#x-check");
         }
@@ -5258,9 +5266,9 @@ pub fn step(app: &mut App, n: u32) {
                 format!("asked {new:?}, job {:?}", app.webstore.busy_with()),
             );
             // A version that wants more, while the menu is open: no
-            // question over it. X-Browser counts as in front from here to
-            // step 308 whoever uses the desktop (`App::in_front`), so the
-            // menu does not close itself either.
+            // question over it. X-Browser still counts as in front, to
+            // step 308 (`App::in_front`), so the menu does not close itself
+            // either.
             app.foreground = Some(true);
             let sc = press(app, vk::F, ALT);
             log(&format!("INFO step 304: X-Browser is really the foreground window: {}; Alt+F {sc:?}", crate::native::is_foreground(&app.window)));

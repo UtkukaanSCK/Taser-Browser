@@ -222,6 +222,13 @@ pub fn on_closed(app: &mut App, generation: u32, refocus: bool) {
             }
             native::FocusAt::Elsewhere => {}
         }
+        // While the self-test has X-Browser count as in front
+        // (`App::foreground`), a focus loss that only comes from the window
+        // really being behind another program is no click outside.
+        #[cfg(feature = "selftest")]
+        if app.foreground == Some(true) && !native::is_foreground(&app.window) {
+            return;
+        }
     }
     close(app, refocus && native::is_foreground(&app.window));
 }
@@ -240,7 +247,7 @@ pub fn on_window_changed(app: &mut App) {
 
 /// The window lost activation to another window.
 pub fn on_window_unfocused(app: &mut App) {
-    if app.popup.view.is_some() && !native::is_foreground(&app.window) {
+    if app.popup.view.is_some() && !app.in_front() {
         close(app, false);
     }
 }
