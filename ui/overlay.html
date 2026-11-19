@@ -103,6 +103,14 @@
       <label class="flex items-center gap-2"><input id="s-autofill" type="checkbox" class="accent-accent">Formları otomatik doldur</label>
       <p class="leading-snug text-muted">Parolalar hiçbir zaman kaydedilmez.</p>
     </div>
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1 font-semibold">İzleyici engelleme</legend>
+      <label class="flex items-center gap-2"><input type="radio" name="s-tracking" value="basic" class="accent-accent">Temel: yalnızca zararlı izleyiciler</label>
+      <label class="flex items-center gap-2"><input type="radio" name="s-tracking" value="balanced" class="accent-accent">Dengeli (önerilen)</label>
+      <label class="flex items-center gap-2"><input type="radio" name="s-tracking" value="strict" aria-describedby="s-tracking-hint" class="accent-accent">Katı: izleyicilerin çoğu</label>
+      <label class="flex items-center gap-2"><input type="radio" name="s-tracking" value="off" class="accent-accent">Kapalı: yalnızca uzantılar engeller</label>
+      <p id="s-tracking-hint" class="leading-snug text-muted">Katı düzeyde bazı siteler düzgün çalışmayabilir.</p>
+    </fieldset>
     <div class="flex flex-col gap-2">
       <label for="s-folder" class="font-semibold">İndirme klasörü</label>
       <div class="flex gap-2">

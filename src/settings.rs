@@ -6,6 +6,9 @@
 //! - `autofill`: WebView2's general autofill in pages (default on). Saving
 //!   passwords is never offered, whatever this says.
 //! - `download_dir`: where downloads go; empty is WebView2's own folder.
+//! - `tracking`: WebView2's tracking prevention level for the content
+//!   profile (off, basic, balanced or strict; default balanced, WebView2's
+//!   own default).
 //!
 //! The page is drawn by the overlay (`ui/js/settings.js`), never in a content
 //! tab, and talks over the same origin-checked IPC as the rest of the UI.
@@ -78,6 +81,49 @@ impl Startup {
     }
 }
 
+/// How hard WebView2 blocks trackers. Off leaves blocking to the extensions
+/// (uBlock Origin Lite): the way out when the two together break a site.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Tracking {
+    /// WebView2 blocks nothing itself.
+    Off,
+    /// Harmful trackers only.
+    Basic,
+    /// Also trackers from sites the user has not visited.
+    #[default]
+    Balanced,
+    /// Most trackers everywhere; some sites may break.
+    Strict,
+}
+
+impl Tracking {
+    pub const ALL: [Tracking; 4] = [Tracking::Off, Tracking::Basic, Tracking::Balanced, Tracking::Strict];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Tracking::Off => "off",
+            Tracking::Basic => "basic",
+            Tracking::Balanced => "balanced",
+            Tracking::Strict => "strict",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.id() == id)
+    }
+
+    /// `COREWEBVIEW2_TRACKING_PREVENTION_LEVEL`.
+    pub fn level(self) -> i32 {
+        match self {
+            Tracking::Off => 0,
+            Tracking::Basic => 1,
+            Tracking::Balanced => 2,
+            Tracking::Strict => 3,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -91,6 +137,8 @@ pub struct Settings {
     pub autofill: bool,
     #[serde(deserialize_with = "lenient_default")]
     pub download_dir: String,
+    #[serde(deserialize_with = "lenient_default")]
+    pub tracking: Tracking,
 }
 
 fn lenient_default<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -109,7 +157,13 @@ fn lenient_autofill<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::E
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { engine: Engine::default(), startup: Startup::default(), autofill: true, download_dir: String::new() }
+        Self {
+            engine: Engine::default(),
+            startup: Startup::default(),
+            autofill: true,
+            download_dir: String::new(),
+            tracking: Tracking::default(),
+        }
     }
 }
 
@@ -224,6 +278,8 @@ pub struct State {
     /// The download folder is still to be set: there was no tab to set it
     /// through yet (see `on_view_created`).
     folder_pending: bool,
+    /// The same for the tracking prevention level.
+    tracking_pending: bool,
 }
 
 impl State {
@@ -236,7 +292,7 @@ impl State {
             eprintln!("x-browser: {} restored from its backup", Settings::NAME);
         }
         set_engine(loaded.value.engine);
-        Self { value: loaded.value, store: Some(store), system_dir: None, folder_pending: false }
+        Self { value: loaded.value, store: Some(store), system_dir: None, folder_pending: false, tracking_pending: false }
     }
 
     fn save(&mut self) {
@@ -246,11 +302,32 @@ impl State {
     }
 }
 
-/// Puts the settings to work: the download folder and autofill, on every
-/// webview there is (new tabs get autofill when they are made).
+/// Puts the settings to work: the download folder, tracking prevention and
+/// autofill, on every webview there is (new tabs get autofill when they are
+/// made; the other two belong to the shared profile).
 pub fn apply(app: &mut App) {
     apply_folder(app);
+    apply_tracking(app);
     apply_autofill(app);
+}
+
+/// The level belongs to the content tabs' profile (where the extensions
+/// are too), never the UI's own, so it is set through a tab, like the
+/// download folder. WebView2 keeps the level in the profile as well; this
+/// file stays the source. False if WebView2 refused (a runtime without
+/// `ICoreWebView2Profile3`); with no tab yet it waits and counts as done.
+fn apply_tracking(app: &mut App) -> bool {
+    let level = app.settings.value.tracking.level();
+    let Some(v) = app.content_view() else {
+        app.settings.tracking_pending = true;
+        return true;
+    };
+    let ok = crate::native::set_tracking(v, level);
+    app.settings.tracking_pending = false;
+    if !ok {
+        eprintln!("x-browser: tracking prevention level not set");
+    }
+    ok
 }
 
 fn apply_autofill(app: &App) {
@@ -279,10 +356,14 @@ fn apply_folder(app: &mut App) {
     }
 }
 
-/// A content webview was made: sets the download folder if it waited for one.
+/// A content webview was made: sets the download folder and the tracking
+/// prevention level if they waited for one.
 pub fn on_view_created(app: &mut App) {
     if app.settings.folder_pending {
         apply_folder(app);
+    }
+    if app.settings.tracking_pending {
+        apply_tracking(app);
     }
 }
 
@@ -293,6 +374,7 @@ struct View<'a> {
     startup: &'a str,
     autofill: bool,
     folder: &'a str,
+    tracking: &'a str,
     /// WebView2's own folder, shown when `folder` is empty.
     default_folder: &'a str,
     /// A short code for the page to word (never text from here).
@@ -306,6 +388,7 @@ fn render(app: &mut App, keep: bool, status: &str) {
         startup: s.value.startup.id(),
         autofill: s.value.autofill,
         folder: &s.value.download_dir,
+        tracking: s.value.tracking.id(),
         default_folder: s.system_dir.as_deref().unwrap_or(""),
         status,
     };
@@ -332,10 +415,11 @@ pub enum SettingsCmd {
     Autofill(bool),
     /// A folder to download to; empty goes back to WebView2's own.
     Folder(String),
+    Tracking(Tracking),
 }
 
 impl SettingsCmd {
-    pub const NAMES: &[&str] = &["st-engine", "st-startup", "st-autofill", "st-folder"];
+    pub const NAMES: &[&str] = &["st-engine", "st-startup", "st-autofill", "st-folder", "st-tracking"];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         Some(match (name, arg?) {
@@ -344,6 +428,7 @@ impl SettingsCmd {
             ("st-autofill", "1") => Self::Autofill(true),
             ("st-autofill", "0") => Self::Autofill(false),
             ("st-folder", a) if a.chars().count() <= MAX_DIR => Self::Folder(a.to_string()),
+            ("st-tracking", a) => Self::Tracking(Tracking::from_id(a)?),
             _ => return None,
         })
     }
@@ -377,6 +462,14 @@ pub fn on_command(app: &mut App, cmd: SettingsCmd) {
                 status = "folder-bad";
             }
             apply_folder(app);
+        }
+        SettingsCmd::Tracking(t) => {
+            // The choice is kept (it is tried again at every start), but
+            // the page is told it did not take.
+            app.settings.value.tracking = t;
+            if !apply_tracking(app) {
+                status = "tracking-failed";
+            }
         }
     }
     app.settings.save();
@@ -456,14 +549,16 @@ mod tests {
         let s = Settings::default();
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::DuckDuckGo, Startup::Last, true));
         assert_eq!(s.download_dir, "");
+        assert_eq!(s.tracking, Tracking::Balanced);
         assert_eq!(read("{}"), s);
         assert_eq!(read(r#"{"v":1}"#), s);
     }
 
     #[test]
     fn reads_what_was_saved() {
-        let s = read(r#"{"v":1,"engine":"bing","startup":"blank","autofill":false,"download_dir":"C:\\Users\\x\\Downloads"}"#);
+        let s = read(r#"{"v":1,"engine":"bing","startup":"blank","autofill":false,"download_dir":"C:\\Users\\x\\Downloads","tracking":"strict"}"#);
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::Bing, Startup::Blank, false));
+        assert_eq!(s.tracking, Tracking::Strict);
         assert_eq!(s.download_dir, "C:\\Users\\x\\Downloads");
         let again: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(again, s);
@@ -471,7 +566,7 @@ mod tests {
 
     #[test]
     fn hostile_values_cost_only_their_field() {
-        let s = read(r#"{"engine":"evil","startup":7,"autofill":"yes","download_dir":"..\\x"}"#);
+        let s = read(r#"{"engine":"evil","startup":7,"autofill":"yes","download_dir":"..\\x","tracking":"none"}"#);
         assert_eq!(s, Settings::default(), "unknown or mistyped values read as the defaults");
         let s = read(r#"{"engine":"google","startup":[],"autofill":false,"download_dir":{"a":1}}"#);
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::Google, Startup::Last, false));
@@ -504,6 +599,17 @@ mod tests {
     }
 
     #[test]
+    fn tracking_levels_are_webview2_values() {
+        assert_eq!(Tracking::ALL.map(Tracking::level), [0, 1, 2, 3]);
+        assert_eq!(Tracking::from_id("off"), Some(Tracking::Off));
+        for t in Tracking::ALL {
+            assert_eq!(Tracking::from_id(t.id()), Some(t));
+        }
+        assert_eq!(Tracking::from_id("none"), None);
+        assert_eq!(Tracking::from_id("Strict"), None);
+    }
+
+    #[test]
     fn commands_are_a_closed_set() {
         let p = SettingsCmd::parse;
         assert_eq!(p("st-engine", Some("google")), Some(SettingsCmd::Engine(Engine::Google)));
@@ -512,6 +618,8 @@ mod tests {
         assert_eq!(p("st-autofill", Some("1")), Some(SettingsCmd::Autofill(true)));
         assert_eq!(p("st-folder", Some("")), Some(SettingsCmd::Folder(String::new())));
         assert_eq!(p("st-folder", Some("C:\\a:b")), Some(SettingsCmd::Folder("C:\\a:b".into())));
+        assert_eq!(p("st-tracking", Some("strict")), Some(SettingsCmd::Tracking(Tracking::Strict)));
+        assert_eq!(p("st-tracking", Some("off")), Some(SettingsCmd::Tracking(Tracking::Off)));
         for (n, a) in [
             ("st-engine", None),
             ("st-engine", Some("")),
@@ -520,6 +628,8 @@ mod tests {
             ("st-autofill", Some("2")),
             ("st-autofill", Some("true")),
             ("st-folder", None),
+            ("st-tracking", Some("none")),
+            ("st-tracking", Some("")),
             ("st-theme", Some("dark")),
         ] {
             assert_eq!(p(n, a), None, "{n} {a:?}");

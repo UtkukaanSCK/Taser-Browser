@@ -1,5 +1,5 @@
 //! Settings-driven and menu-driven WebView2 calls: autofill, the download
-//! folder, Find and Print. Elsewhere (no WebView2) they do nothing.
+//! folder, tracking prevention, Find and Print. Elsewhere (no WebView2) they do nothing.
 
 use wry::WebView;
 
@@ -65,6 +65,28 @@ mod imp {
         unsafe { profile(view).and_then(|p| p.SetDefaultDownloadFolderPath(&HSTRING::from(dir))).is_ok() }
     }
 
+    /// Sets the profile's tracking prevention level
+    /// (`COREWEBVIEW2_TRACKING_PREVENTION_LEVEL`, 1–3).
+    pub fn set_tracking(view: &WebView, level: i32) -> bool {
+        unsafe {
+            profile(view)
+                .and_then(|p| p.cast::<ICoreWebView2Profile3>())
+                .and_then(|p| p.SetPreferredTrackingPreventionLevel(COREWEBVIEW2_TRACKING_PREVENTION_LEVEL(level)))
+                .is_ok()
+        }
+    }
+
+    /// The profile's tracking prevention level as WebView2 reports it.
+    #[cfg(feature = "selftest")]
+    pub fn tracking(view: &WebView) -> Option<i32> {
+        unsafe {
+            let p = profile(view).ok()?.cast::<ICoreWebView2Profile3>().ok()?;
+            let mut level = COREWEBVIEW2_TRACKING_PREVENTION_LEVEL(-1);
+            p.PreferredTrackingPreventionLevel(&mut level).ok()?;
+            Some(level.0)
+        }
+    }
+
     /// Opens WebView2's find bar on `view` (what Ctrl+F does in a page).
     pub fn find(view: &WebView) -> bool {
         let started = (|| unsafe {
@@ -123,6 +145,9 @@ mod imp {
         None
     }
     pub fn set_download_folder(_: &WebView, _: &str) -> bool {
+        false
+    }
+    pub fn set_tracking(_: &WebView, _: i32) -> bool {
         false
     }
     pub fn find(_: &WebView) -> bool {

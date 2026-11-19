@@ -9,6 +9,7 @@
   const page = $("settings");
   const engines = [...page.querySelectorAll('input[name="s-engine"]')];
   const startups = [...page.querySelectorAll('input[name="s-startup"]')];
+  const trackings = [...page.querySelectorAll('input[name="s-tracking"]')];
   const autofill = $("s-autofill");
   const folder = $("s-folder");
   const hint = $("s-folder-hint");
@@ -19,6 +20,7 @@
   const MESSAGES = {
     "folder-ok": "İndirme klasörü değiştirildi.",
     "folder-reset": "Varsayılan indirme klasörüne dönüldü.",
+    "tracking-failed": "İzleyici engelleme düzeyi bu WebView2 sürümünde değiştirilemedi.",
     "folder-bad": "Var olan bir klasörün tam yolunu girin, örneğin C:\\Users\\ad\\Downloads.",
   };
 
@@ -36,6 +38,7 @@
     page.hidden = false;
     for (const r of engines) r.checked = r.value === d.engine;
     for (const r of startups) r.checked = r.value === d.startup;
+    for (const r of trackings) r.checked = r.value === d.tracking;
     autofill.checked = d.autofill !== false;
     const code = str(d.status);
     // What is being typed in the folder box stays, unless the change was its own.
@@ -57,6 +60,7 @@
 
   for (const r of engines) r.addEventListener("change", () => r.checked && send("st-engine:" + r.value));
   for (const r of startups) r.addEventListener("change", () => r.checked && send("st-startup:" + r.value));
+  for (const r of trackings) r.addEventListener("change", () => r.checked && send("st-tracking:" + r.value));
   autofill.addEventListener("change", () => send("st-autofill:" + (autofill.checked ? "1" : "0")));
   const applyFolder = () => send("st-folder:" + folder.value.trim());
   $("s-folder-apply").addEventListener("click", applyFolder);
