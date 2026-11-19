@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 533;
+const EXPECTED_CHECKS: u32 = 546;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -320,17 +320,24 @@ const DELAYS: &[u64] = &[
     900,  // 238 crash a third time
     1500, // 239 go to an address that cannot load
     2500, // 240 check the crashed mark went with the navigation
-    900,  // 241 v0.2 fixes: a page on example.org
-    2500, // 242 Ctrl+H
-    1000, // 243 a jump within the page
-    1200, // 244 check the history list stayed up; Esc
-    800,  // 245 Ctrl+D: bookmark and editor
-    1000, // 246 press and click the star
-    900,  // 247 check the editor closed; too many certificate errors
-    900,  // 248 the launch question
-    1200, // 249 click the ⋮ button from the strip
-    1000, // 250 check the menu has the keyboard; Esc
-    900,  // 251 last tab close quits
+    900,  // 241 error page: a page on example.org first
+    2500, // 242 check it; an address that cannot load
+    2500, // 243 check X-Browser's error page, no lock, address kept
+    600,  // 244 check the tab title; click "Yeniden dene"
+    2500, // 245 check it reloaded in the same entry; Alt+Left
+    2500, // 246 check back on the page before; Alt+Right
+    2500, // 247 check forward on the error page again
+    900,  // 248 v0.2 fixes: a page on example.org
+    2500, // 249 Ctrl+H
+    1000, // 250 a jump within the page
+    1200, // 251 check the history list stayed up; Esc
+    800,  // 252 Ctrl+D: bookmark and editor
+    1000, // 253 press and click the star
+    900,  // 254 check the editor closed; too many certificate errors
+    900,  // 255 the launch question
+    1200, // 256 click the ⋮ button from the strip
+    1000, // 257 check the menu has the keyboard; Esc
+    900,  // 258 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -4225,28 +4232,99 @@ pub fn step(app: &mut App, n: u32) {
                 check("indicator-after-crash-and-failed-load", field(&r, "state").is_empty() && field(&r, "reload") == "false" && field(&r, "name").is_empty(), &r);
             });
         }
-        // ---- v0.2 fixes: one contiguous block ----
+        // ---- X-Browser's own error page, not WebView2's ----
         241 => {
-            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?frag".into())));
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?error-page-before".into())));
         }
         242 => {
-            press(app, vk::H, CTRL);
+            check("error-page-before-loaded", active_url(app).starts_with("https://example.org/?error-page-before"), active_url(app));
+            app.handle(UserEvent::Ui(UiCommand::Navigate(ERROR_URL.into())));
         }
         243 => {
+            let t = app.tabs.active().and_then(|id| app.tabs.get(id));
+            let (loading, back) = t.map_or((true, false), |t| (t.loading, t.can_back));
+            check(
+                "error-page-address-kept",
+                active_url(app) == ERROR_URL && page_url(app) == ERROR_URL && !loading && back,
+                format!("url {}, page {}, loading {loading}, back {back}", active_url(app), page_url(app)),
+            );
+            page_eval(app, "error-page-shown", ERROR_PAGE_JS, |r| {
+                log(&format!("INFO error page: {r}"));
+                check(
+                    "error-page-shown",
+                    field(&r, "doc").starts_with("chrome-error:")
+                        && field(&r, "h1") == "Bu siteye ulaşılamıyor"
+                        && field(&r, "url") == ERROR_URL
+                        && field(&r, "retry") == "Yeniden dene"
+                        && field(&r, "retry_vis") == "true"
+                        && field(&r, "lang") == "tr",
+                    &r,
+                );
+                check("error-page-is-not-webview2s", field(&r, "edge") == "false" && field(&r, "only_ours") == "true", &r);
+                remember("error_page_history", num(&r, "hl") as i64);
+            });
+            page_js(app, "window.__xbErrorMark = 1");
+            ui_eval(app, "error-page-no-lock", SECURITY_JS, |r| {
+                check("error-page-no-lock", field(&r, "state").is_empty() && field(&r, "hidden") == "true" && field(&r, "addr") == ERROR_URL, &r);
+            });
+            capture(app, "error-page");
+        }
+        244 => {
+            check("error-page-tab-title", active_title(app) == "Bu siteye ulaşılamıyor", active_title(app));
+            page_js(app, "document.getElementById('xb-error-retry').click()");
+        }
+        245 => {
+            check("error-page-retry-keeps-the-address", active_url(app) == ERROR_URL, active_url(app));
+            let before = recall("error_page_history");
+            page_eval(app, "error-page-retry-reloads", ERROR_PAGE_JS, move |r| {
+                // A new error document (the mark is gone), filled again, in
+                // the same history entry.
+                check(
+                    "error-page-retry-reloads",
+                    field(&r, "mark") == "undefined" && field(&r, "h1") == "Bu siteye ulaşılamıyor" && before > 0 && num(&r, "hl") as i64 == before,
+                    format!("{r}; history before {before}"),
+                );
+            });
+            press(app, vk::LEFT, ALT);
+        }
+        246 => {
+            check("error-page-back", active_url(app).starts_with("https://example.org/?error-page-before"), active_url(app));
+            ui_eval(app, "error-page-back-has-the-lock", SECURITY_JS, |r| {
+                check("error-page-back-has-the-lock", field(&r, "state") == "secure", &r);
+            });
+            press(app, vk::RIGHT, ALT);
+        }
+        247 => {
+            check("error-page-forward", active_url(app) == ERROR_URL, active_url(app));
+            page_eval(app, "error-page-forward-shown", ERROR_PAGE_JS, |r| {
+                check("error-page-forward-shown", field(&r, "doc").starts_with("chrome-error:") && field(&r, "h1") == "Bu siteye ulaşılamıyor", &r);
+            });
+            ui_eval(app, "error-page-forward-no-lock", SECURITY_JS, |r| {
+                check("error-page-forward-no-lock", field(&r, "state").is_empty() && field(&r, "addr") == ERROR_URL, &r);
+            });
+        }
+        // ---- v0.2 fixes: one contiguous block ----
+        248 => {
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?frag".into())));
+        }
+        249 => {
+            press(app, vk::H, CTRL);
+        }
+        250 => {
             // A jump within the page loads nothing: the list stays up.
             page_js(app, "location.hash = 'x'");
         }
-        244 => {
+        251 => {
             check("history-stays-open-on-a-fragment-change", app.overlay.mode == Mode::History, format!("mode {:?}, url {}", app.overlay.mode, active_url(app)));
             page_eval(app, "history-fragment-change-happened", "`hash=${location.hash}`", |r| {
                 check("history-fragment-change-happened", field(&r, "hash") == "#x", &r);
             });
             overlay_js(app, &key_js("Escape"));
         }
-        245 => {
+        252 => {
             press(app, BM_D, CTRL);
         }
-        246 => {
+        253 => {
             check("bm-editor-open-before-star-press", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
             // A press then a click on the star, as a mouse makes them.
             ui_js(
@@ -4255,7 +4333,7 @@ pub fn step(app: &mut App, n: u32) {
                  b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true })); b.click(); })()",
             );
         }
-        247 => {
+        254 => {
             let page = page_url(app);
             check(
                 "bm-star-click-closes-the-open-editor",
@@ -4278,18 +4356,18 @@ pub fn step(app: &mut App, n: u32) {
                 );
             });
         }
-        248 => {
+        255 => {
             let id = app.tabs.active().unwrap();
             app.handle(UserEvent::Policy(id, Event::ExternalLaunch { uri: MAIL_URI.into(), origin: String::new(), user: true }));
         }
-        249 => {
-            log(&format!("INFO step 249: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+        256 => {
+            log(&format!("INFO step 256: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             check("launch-question-up-before-menu-click", app.overlay.mode == Mode::Launch, format!("mode {:?}", app.overlay.mode));
             // A mouse click on ⋮: the strip takes the keyboard first.
             let _ = app.ui.focus();
             ui_js(app, "document.getElementById('menu-btn').click()");
         }
-        250 => {
+        257 => {
             let now = std::time::Instant::now();
             check(
                 "menu-click-answers-the-launch-question-no",
@@ -4301,7 +4379,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_js(app, &key_js("Escape"));
         }
-        251 => {
+        258 => {
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);
@@ -4373,7 +4451,22 @@ fn tab_zoom(app: &App) -> u16 {
 
 /// What the policy steps ask to open. Never opened: `record_launch` stands
 /// in for the launcher, and the address is not a real one.
-const MAIL_URI: &str = "mailto:selftest@example.invalid?subject=x-browser-selftest";
+/// An address whose host never resolves (`.invalid`): its load fails.
+const ERROR_URL: &str = "https://xb-error-page.invalid/yol?q=1";
+
+/// The error page as the tab's document has it. `only_ours`: the body holds
+/// nothing but X-Browser's page; `retry_vis`: the button is on top at its
+/// centre; `mark` is set by the test in the document it last saw.
+const ERROR_PAGE_JS: &str = "(() => { const g = (id) => document.getElementById(id), h = document.querySelector('h1'), b = g('xb-error-retry'); \
+  const r = b ? b.getBoundingClientRect() : null; \
+  const hit = r && r.width > 0 ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null; \
+  return [`doc=${document.URL}`, `h1=${h ? h.textContent : ''}`, `url=${g('xb-error-url') ? g('xb-error-url').textContent : ''}`, \
+  `retry=${b ? b.textContent : ''}`, `retry_vis=${!!b && hit === b}`, `lang=${document.documentElement.lang}`, \
+  `edge=${/edge|microsoft/i.test(document.documentElement.innerText)}`, \
+  `only_ours=${!!document.body && document.body.children.length === 1 && document.body.firstElementChild.id === 'xb-error'}`, \
+  `title=${document.title}`, `hl=${history.length}`, `mark=${typeof window.__xbErrorMark}`].join(';'); })()";
+
+const MAIL_URI: &str ="mailto:selftest@example.invalid?subject=x-browser-selftest";
 
 static LAUNCHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 

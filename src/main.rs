@@ -5,6 +5,7 @@ mod app;
 mod bookmarks;
 mod commands;
 mod downloads;
+mod error_page;
 mod history;
 mod instance;
 mod menu;

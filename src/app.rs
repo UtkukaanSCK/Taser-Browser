@@ -543,8 +543,10 @@ impl App {
                 crate::overlay::on_ui_failed(self);
                 let _ = self.ui.reload();
             }
-            // A dead page shows WebView2's error page; the tab stays, but
-            // must not keep spinning, nor keep the screen.
+            // A dead page leaves the tab empty (WebView2's own error page is
+            // off, and a dead renderer cannot be given X-Browser's); the
+            // indicator offers the reload. The tab stays, but must not keep
+            // spinning, nor keep the screen.
             (_, Some(id)) => {
                 if let Some(t) = self.tabs.get_mut(id) {
                     t.loading = false;

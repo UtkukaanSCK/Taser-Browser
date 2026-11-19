@@ -84,7 +84,8 @@ mod imp {
                 &mut token,
             )?;
 
-            // The action is left alone: WebView2 shows its own interstitial.
+            // The action is left alone: the page fails, and the tab gets
+            // X-Browser's error page (`attach_error_page`).
             // Raised for every request of the tab (images, scripts, frames);
             // `policy` keeps the ones for the page itself.
             let p = proxy.clone();
@@ -102,8 +103,8 @@ mod imp {
                 &mut token,
             )?;
 
-            // A new document is about to be shown: the site's, or WebView2's
-            // error page in its place.
+            // A new document is about to be shown: the site's, or an error
+            // document in its place (X-Browser's error page goes into it).
             let p = proxy.clone();
             let shown = committed.clone();
             wv.add_ContentLoading(

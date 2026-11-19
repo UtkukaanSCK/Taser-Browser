@@ -4,7 +4,8 @@
 //!   box shows for the active tab from the page that is on screen (`render_js`,
 //!   drawn by `ui/js/security.js`). An address that was typed but has not
 //!   loaded yet gets no mark, and neither does an error page.
-//! - **Certificate errors**: WebView2 keeps its own interstitial. When the
+//! - **Certificate errors**: the page does not load; the tab shows
+//!   X-Browser's error page (`error_page`), never WebView2's. When the
 //!   failing request is the tab's own navigation (`is_main_navigation`), its
 //!   host (every port, `cert_host`) is remembered here, so the indicator
 //!   says "certificate error" for it until the app exits, also after the user
@@ -506,8 +507,9 @@ pub enum Event {
     /// while the tab's main navigations started and not completed were to
     /// `navs` (`native::attach_policy`).
     CertError { uri: String, navs: Vec<String> },
-    /// The tab began to show a new document; `error`: WebView2's own error
-    /// page (no connection, name not found, ...), not the site's.
+    /// The tab began to show a new document; `error`: an error document (no
+    /// connection, name not found, ...; X-Browser's `error_page` goes into
+    /// it), not the site's.
     Page { error: bool },
     /// A navigation ended in failure after its document was shown.
     Failed,
@@ -525,7 +527,7 @@ const MAX_BAD_CERT_SITES: usize = 64;
 #[derive(Default)]
 pub struct State {
     /// Hosts (`cert_host`) whose certificate failed in this run. Not per
-    /// tab: once the user proceeds through WebView2's interstitial, the host
+    /// tab: once a certificate error was let through, the host
     /// loads without another error for the rest of the run, in every tab and
     /// on every port, and must keep its mark.
     bad_cert: Vec<String>,
