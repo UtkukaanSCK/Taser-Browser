@@ -76,7 +76,7 @@ const SCHEME: &str = "chrome-extension";
 /// page. Read by the navigation handlers (`native::content`, `native::popup`).
 static ALLOWED: RwLock<Vec<String>> = RwLock::new(Vec::new());
 
-/// Messages from the strip's button and the extensions page, plus two of
+/// Messages from the strip's button and the extensions page, plus some of
 /// the app's own (never parsed from IPC).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtCmd {
@@ -100,6 +100,9 @@ pub enum ExtCmd {
     OpenPopup,
     /// The page's "Güncellemeleri denetle".
     CheckUpdates,
+    /// An update's question, asked over the page, is gone
+    /// (`webstore::finish`): the page comes back.
+    BackToPage,
 }
 
 impl ExtCmd {
@@ -647,7 +650,19 @@ pub fn on_command(app: &mut App, cmd: ExtCmd) {
         ExtCmd::PopupClosed { generation, refocus } => crate::popup::on_closed(app, generation, refocus),
         ExtCmd::OpenPopup => open_next_popup(app),
         ExtCmd::CheckUpdates => check_updates(app),
+        ExtCmd::BackToPage => back_to_page(app),
     }
+}
+
+/// Puts the page back after an update's question asked over it, if nothing
+/// took its place meanwhile and X-Browser is still in front. Its note about
+/// the check ("found") is over: the question answered it.
+fn back_to_page(app: &mut App) {
+    if app.overlay.mode != Mode::Hidden || app.fullscreen.on() || crate::popup::extension(app).is_some() || !app.in_front() {
+        return;
+    }
+    app.ext_ui.note = None;
+    render(app, false);
 }
 
 /// The page's "Güncellemeleri denetle": the same check as the daily one.

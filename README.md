@@ -393,11 +393,12 @@ have, or lets sites or other extensions message it, runs its scripts in more
 frames, replaces a browser page or changes its manifest version ("Güncelle" or
 "İptal", listing only what is new). An update of an extension the Uzantılar
 page is still switching or removing waits for the next check. It asks only when nothing
-else is on screen: with the overlay open (the Uzantılar page itself included),
-an extension's popup open, in fullscreen or with X-Browser in the background it
-waits for the next check. So an update that wants more is never asked about
-from the page's button; it is counted as queued and asked about at a later
-daily check. Otherwise it goes in without a question. A version whose download
+else is on screen or only the Uzantılar page is: an update found by the page's
+button asks over the page, and the page comes back once the question is
+answered or closed ("İptal" keeps the installed version). With another overlay
+page open (a menu, a question), an extension's popup open, in fullscreen or
+with X-Browser in the background it waits for the next check. Otherwise it goes
+in without a question. A version whose download
 or install failed is not fetched again until the next start.
 
 An install or update that fails with no question of its own on screen (its

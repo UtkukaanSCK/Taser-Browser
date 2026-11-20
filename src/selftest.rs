@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 646;
+const EXPECTED_CHECKS: u32 = 648;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -398,8 +398,10 @@ const DELAYS: &[u64] = &[
     1500, // 310 check 1.4 waits; answer "no"
     3000, // 311 check 1.4 is in; a timer tick, last check long ago
     1500, // 312 check the tick checked; another tick
-    900,  // 313 check it asked nothing
-    900,  // 314 last tab close quits
+    900,  // 313 check it asked nothing; the page open, its button: 1.5 wants more
+    1500, // 314 check the question is over the page; answer "no"
+    1500, // 315 check the page is back and 1.4 stays; close it
+    900,  // 316 last tab close quits
 ];
 
 pub fn start(proxy: Proxy) {
@@ -5094,15 +5096,16 @@ pub fn step(app: &mut App, n: u32) {
             // Store updates (task 5B), against the fake store
             // (`webstore::fake`): a fresh self-signed key, its packages at
             // 1.0 to 1.4, the 1.0 one behind the store URL and the others at
-            // their own addresses. All want storage; 1.3 also wants a site.
+            // their own addresses. All want storage; 1.3 and 1.5 also want a
+            // site.
             use crate::crx::testpkg::{TestKey, crx, stored, zip};
             use crate::webstore::fake;
             fake::clear();
             let key = TestKey::rsa();
             let id = key.id();
             let mut sums = Vec::new();
-            for v in ["1.0", "1.1", "1.2", "1.3", "1.4"] {
-                let hosts = if v == "1.3" { r#","host_permissions":["https://example.com/*"]"# } else { "" };
+            for v in ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] {
+                let hosts = if v == "1.3" || v == "1.5" { r#","host_permissions":["https://example.com/*"]"# } else { "" };
                 let manifest = format!(r#"{{"manifest_version":3,"name":"XB Update","version":"{v}","permissions":["storage"]{hosts}}}"#);
                 let body = crx(&zip(&[stored("manifest.json", manifest.as_bytes())]), &[&key]);
                 let hex: String = crate::crx::sha256(&[&body]).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
@@ -5420,8 +5423,44 @@ pub fn step(app: &mut App, n: u32) {
             let asked = crate::webstore::fake::asked();
             let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
             check("update-timer-waits-a-day", new.is_empty() && app.webstore.busy_with().is_none(), format!("asked {new:?}"));
+            // A version that wants more, found by the page's button with
+            // the page open: the question comes over the page. In front to
+            // step 315 (`App::in_front`).
+            app.foreground = Some(true);
+            crate::ext_ui::open(app);
+            serve_update_check(&update_id(), "1.5", None);
+            overlay_click(app, "#x-check");
         }
         314 => {
+            let id = update_id();
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "update-asks-over-the-extensions-page",
+                app.overlay.mode == Mode::Store && shown && app.webstore.busy_with() == Some(id.as_str()),
+                format!("{:?}, visible {shown}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+            app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
+        }
+        315 => {
+            // "No": the old version stays, and the page is back.
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "update-no-returns-to-the-extensions-page",
+                app.overlay.mode == Mode::Extensions
+                    && shown
+                    && app.webstore.busy_with().is_none()
+                    && rec == Some(("1.4".into(), true))
+                    && !home.join("1.5").exists(),
+                format!("{:?}, visible {shown}, job {:?}, record {rec:?}, 1.5 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.5").exists()),
+            );
+            crate::overlay::close(app);
+            app.focus_after_switch();
+            app.foreground = None;
+        }
+        316 => {
             crate::overlay::close(app);
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
