@@ -173,7 +173,7 @@ const LOOPBACK_V6: [u16; 8] = [0, 0, 0, 0, 0, 0, 0, 1];
 /// Parses the text form of an IPv6 address (RFC 4291 section 2.2): up to
 /// eight groups of 1-4 hex digits, at most one `::`, optionally ending in a
 /// dotted IPv4 address. Zone ids (`%...`) are not valid in URLs.
-fn parse_ipv6(s: &str) -> Option<[u16; 8]> {
+pub(crate) fn parse_ipv6(s: &str) -> Option<[u16; 8]> {
     fn groups(part: &str, out: &mut Vec<u16>) -> Option<()> {
         if part.is_empty() {
             return Some(());
@@ -225,7 +225,7 @@ fn valid_label(l: &str) -> bool {
         && l.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
-fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
+pub(crate) fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
     let mut out = [0u8; 4];
     let mut parts = host.split('.');
     for slot in &mut out {

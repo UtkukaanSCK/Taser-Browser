@@ -11,6 +11,10 @@
   const startups = [...page.querySelectorAll('input[name="s-startup"]')];
   const trackings = [...page.querySelectorAll('input[name="s-tracking"]')];
   const autofill = $("s-autofill");
+  // Privacy switches: element id -> command.
+  const switches = [["s-https", "st-https", "https_only"], ["s-strip", "st-strip", "strip_params"], ["s-gpc", "st-gpc", "gpc"]].map(
+    ([id, cmd, key]) => ({ el: $(id), cmd, key }),
+  );
   const folder = $("s-folder");
   const hint = $("s-folder-hint");
   const home = $("s-home");
@@ -44,6 +48,7 @@
     for (const r of startups) r.checked = r.value === d.startup;
     for (const r of trackings) r.checked = r.value === d.tracking;
     autofill.checked = d.autofill !== false;
+    for (const s of switches) s.el.checked = d[s.key] !== false;
     const code = str(d.status);
     // What is being typed in the folder box stays, unless the change was its own.
     if (!keep || (code.startsWith("folder") && code !== "folder-bad") || document.activeElement !== folder) folder.value = str(d.folder);
@@ -68,6 +73,7 @@
   for (const r of startups) r.addEventListener("change", () => r.checked && send("st-startup:" + r.value));
   for (const r of trackings) r.addEventListener("change", () => r.checked && send("st-tracking:" + r.value));
   autofill.addEventListener("change", () => send("st-autofill:" + (autofill.checked ? "1" : "0")));
+  for (const s of switches) s.el.addEventListener("change", () => send(s.cmd + ":" + (s.el.checked ? "1" : "0")));
   const applyFolder = () => send("st-folder:" + folder.value.trim());
   $("s-folder-apply").addEventListener("click", applyFolder);
   $("s-folder-reset").addEventListener("click", () => send("st-folder:"));

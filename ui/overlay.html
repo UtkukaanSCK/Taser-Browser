@@ -125,6 +125,14 @@
       <label class="flex items-center gap-2"><input type="radio" name="s-tracking" value="off" class="accent-accent">Kapalı: yalnızca uzantılar engeller</label>
       <p id="s-tracking-hint" class="leading-snug text-muted">Katı düzeyde bazı siteler düzgün çalışmayabilir.</p>
     </fieldset>
+    <fieldset class="flex flex-col gap-2">
+      <legend class="mb-1 font-semibold">Gizlilik</legend>
+      <label class="flex items-center gap-2"><input id="s-https" type="checkbox" aria-describedby="s-https-hint" class="accent-accent">Siteleri önce güvenli bağlantıyla (https) aç</label>
+      <p id="s-https-hint" class="leading-snug text-muted">Güvenli sürümü olmayan bir sitede ne yapacağınız sorulur. Yerel ağ adresleri olduğu gibi açılır.</p>
+      <label class="flex items-center gap-2"><input id="s-strip" type="checkbox" class="accent-accent">Adreslerden izleme parametrelerini sil (utm_, fbclid…)</label>
+      <label class="flex items-center gap-2"><input id="s-gpc" type="checkbox" aria-describedby="s-gpc-hint" class="accent-accent">Sitelere verilerimi satmamalarını bildir (Global Privacy Control)</label>
+      <p id="s-gpc-hint" class="leading-snug text-muted">Açık sayfalar yeniden yüklenince geçerli olur.</p>
+    </fieldset>
     <div class="flex flex-col gap-2">
       <label for="s-folder" class="font-semibold">İndirme klasörü</label>
       <div class="flex gap-2">

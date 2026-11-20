@@ -256,7 +256,7 @@ All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
 | `window.json` | normal rect (physical px), maximized | same |
 | `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
 | `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
-| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session, one blank tab or the home page), `home` (an http/https address of at most 2,048 characters; empty: the new tab page), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced); file at most 64 KiB | on each change |
+| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session, one blank tab or the home page), `home` (an http/https address of at most 2,048 characters; empty: the new tab page), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced), `https_only`, `strip_params`, `gpc` (each on/off, default on; see "Privacy"); file at most 64 KiB | on each change |
 | `extensions.json` | extensions X-Browser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
 | `extensions\<id>\<version>\` | unpacked extensions X-Browser owns | on install, update and removal |
 
@@ -278,8 +278,8 @@ The strip's ⋮ button, Alt+F or Alt+E opens the main menu: new tab, find, zoom
 WebView2's own flyout (progress, pause/cancel, "open file", "open folder");
 SmartScreen stays on. The strip's downloads button appears once the session has
 had a download. Settings (search engine, startup, home page, autofill,
-download folder, tracker blocking) are saved on each change and take effect at
-once.
+download folder, tracker blocking, the three privacy switches) are saved on
+each change and take effect at once.
 
 **New tab page and home button.** A blank tab (Ctrl+T, the strip's +) shows
 X-Browser's new tab page: a search box (it searches with the chosen engine, or
@@ -300,6 +300,43 @@ sites you have not visited), Katı (most trackers; some sites may break) or
 Kapalı, which leaves blocking to the extensions (uBlock Origin Lite) when the
 two together break a site. `settings.json` stores them as basic, balanced,
 strict and off.
+
+## Privacy
+
+Three switches under "Gizlilik" in the settings, all on by default:
+
+- **HTTPS-only** (`https_only`): an `http://` address is tried as `https://`
+  first. If that fails, the tab shows X-Browser's error page saying "Bu site
+  güvenli bağlantı sunmuyor", with "Yine de http ile aç" (load the http
+  address; the host is then let through on http until X-Browser closes) and
+  "Yeniden dene" (try https again). Local and private hosts (`localhost`,
+  loopback, private and link-local addresses, single-label names, `.local`,
+  `.lan`, `.internal`, `.home.arpa`, `.test` and the like) and addresses with
+  an explicit port are never upgraded.
+- **Tracking parameters** (`strip_params`): known click-tracking parameters
+  (`utm_*`, `fbclid`, `gclid`, `dclid`, `msclkid`, `mc_eid`, `igshid`,
+  `yclid`, `_hsenc`, `_hsmsclk` and others, in `src/url_clean.rs`) are removed
+  from the address before a page loads. The rest of the query, its order and
+  the `#fragment` stay.
+- **Global Privacy Control** (`gpc`): every request a tab makes carries
+  `Sec-GPC: 1`, and pages see `navigator.globalPrivacyControl === true`.
+
+Known limits, left as they are:
+
+- A rewritten load (stripped or upgraded) is started again as a plain GET: a
+  form posted to an address with tracking parameters, or to http, loses its
+  body. Each load is rewritten at most 4 times, so two rewrites cannot loop.
+- An https page that redirects back to http on the same host is let through
+  on http (the site asks for it); it is not marked as an exception.
+- The http exceptions are for the run only and are not saved.
+- Turning GPC off or on reaches requests at once but `navigator` only in
+  documents loaded after; open pages see the change when they are reloaded.
+- GPC is set with WebView2's request hook (`WebResourceRequested` on every
+  request of the tab) while it is on. With the hook in place, adding or
+  updating an extension cancels a page load still in flight in an open tab;
+  the tab keeps its previous page until it is loaded again.
+- Only top-level page loads are rewritten; frames and requests a page makes
+  itself keep their addresses.
 
 ## Security indicator and external applications
 
@@ -493,6 +530,8 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/app.rs` | owns all state; webview creation, layout, IPC handling |
 | `src/tabs.rs` | pure tab model (order, active tab, placement, JSON) |
 | `src/url.rs` | address bar input → URL or search; scheme blocking |
+| `src/url_clean.rs` | tracking-parameter removal and the https form of an http address (pure) |
+| `src/privacy.rs` | HTTPS-only, tracking-parameter and GPC switches; per-tab load rewrites and http exceptions |
 | `src/commands.rs` | closed IPC command and shortcut sets |
 | `src/strip.rs` | tab strip extras: reorder, reopen closed tab, Ctrl+1..9, mute |
 | `src/page_tools.rs` | page zoom (keys, indicator) and fullscreen (F11, the page's own) |
@@ -505,13 +544,14 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/native/download.rs` | downloads through WebView2's own flyout; SmartScreen left on |
 | `src/native/policy.rs` | content-tab policy hooks: certificate errors, external launches stopped, navigation outcome |
 | `src/native/error_page.rs` | writes X-Browser's error page into a tab whose load failed |
+| `src/native/privacy.rs` | Global Privacy Control in a tab: the `Sec-GPC` request hook and the `navigator` script |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, tracking prevention, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
 | `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch and store questions, Uzantılar); placement and closing |
 | `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
-| `src/settings.rs` | `settings.json`: engine, startup, home page, autofill, download folder (with its checks), tracking prevention |
+| `src/settings.rs` | `settings.json`: engine, startup, home page, autofill, download folder (with its checks), tracking prevention, privacy switches |
 | `src/newtab.rs` | the new tab page written into blank tabs: search box, most visited sites, bookmarks |
 | `src/error_page.rs` | error status → Turkish error page text, and the script that shows it |
 | `src/policy.rs` | security indicator, certificate-error memory, external-launch question |

@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 659;
+const EXPECTED_CHECKS: u32 = 680;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -375,9 +375,9 @@ const DELAYS: &[u64] = &[
     600,  // 287 first-run uBOL: offline at the start; a next start, busy
     600,  // 288 check busy waits; another install finishes
     1500, // 289 check done; a start after it; remove uBOL
-    600,  // 290 check user_removed; a start after it
-    2500, // 291 Web Store: add the extension again; load an ordinary page
-    1200, // 292 check the store button is off; the page goes to the sentinel
+    600,  // 290 check user_removed; a start after it; load an ordinary page
+    2500, // 291 Web Store: add the extension again
+    1500, // 292 check the store button is off; the page goes to the sentinel
     900,  // 293 check it was refused; open the remove question
     900,  // 294 check the question; answer "no"
     900,  // 295 check it closed
@@ -407,7 +407,17 @@ const DELAYS: &[u64] = &[
     900,  // 319 check it went home; reset the home address
     2500, // 320 check it reset; the home button
     900,  // 321 check the new tab page lists the visited sites
-    900,  // 322 close it; last tab close quits
+    900,  // 322 privacy: a loopback page with tracking parameters
+    2500, // 323 check stripped, not upgraded, GPC; a page's own link
+    2500, // 324 check it was stripped too; a public http address
+    6000, // 325 check https was tried and the page offers http; take it
+    4000, // 326 check http opened; the same host again
+    3000, // 327 check it is remembered; the sentinel from a plain page
+    1500, // 328 check it was refused; open the settings
+    900,  // 329 check the switches; turn all three off
+    900,  // 330 check them saved; the loopback page again
+    2500, // 331 check nothing stripped and no GPC
+    900,  // 332 close the new tab page's tab; last tab close quits
 ];
 
 /// What a new tab page shows: `main` (it is there), `ph` (the search box's
@@ -3819,6 +3829,19 @@ pub fn step(app: &mut App, n: u32) {
                 s.tracking == crate::settings::Tracking::Balanced && level == Some(2),
                 format!("{:?} {level:?}", s.tracking),
             );
+            check("privacy-features-on-by-default", s.https_only && s.strip_params && s.gpc, format!("{s:?}"));
+            overlay_eval(
+                app,
+                "settings-privacy-switches-shown-on",
+                "['s-https', 's-strip', 's-gpc'].map((id) => `${id}=${document.getElementById(id)?.checked}`).join(';')",
+                |r| {
+                    check(
+                        "settings-privacy-switches-shown-on",
+                        field(&r, "s-https") == "true" && field(&r, "s-strip") == "true" && field(&r, "s-gpc") == "true",
+                        &r,
+                    );
+                },
+            );
             let folder = dir().join("dl");
             let _ = std::fs::create_dir_all(&folder);
             remember("dl-ready", i64::from(folder.is_dir()));
@@ -3866,7 +3889,7 @@ pub fn step(app: &mut App, n: u32) {
             app.overlay.cleared = None;
             page_js(
                 app,
-                "for (const m of ['menu-toggle','menu-pick:history','st-engine:bing','st-startup:last','st-autofill:1','st-folder:','st-tracking:basic','ov-clear-data']) \
+                "for (const m of ['menu-toggle','menu-pick:history','st-engine:bing','st-startup:last','st-autofill:1','st-folder:','st-tracking:basic','st-https:0','st-strip:0','st-gpc:0','ov-clear-data']) \
                  { try { window.ipc.postMessage(m); } catch (e) {} }",
             );
         }
@@ -3880,6 +3903,9 @@ pub fn step(app: &mut App, n: u32) {
                     && !s.autofill
                     && s.tracking == crate::settings::Tracking::Strict
                     && !s.download_dir.is_empty()
+                    && s.https_only
+                    && s.strip_params
+                    && s.gpc
                     && app.overlay.cleared.is_none(),
                 format!("{:?} {s:?} {:?}", app.overlay.mode, app.overlay.cleared),
             );
@@ -4020,10 +4046,15 @@ pub fn step(app: &mut App, n: u32) {
             ui_eval(app, "indicator-loopback-http-is-neutral", SECURITY_JS, |r| {
                 check("indicator-loopback-http-is-neutral", field(&r, "hidden") == "true" && field(&r, "state").is_empty() && num(&r, "w") == 0.0, &r);
             });
-            // A public address that has no https to be moved to.
+            // A public address that has no https to be moved to. HTTPS-only
+            // would try (and fail) https first: off for this one (the
+            // privacy steps take it on).
+            crate::privacy::set(false, true, true);
             app.handle(UserEvent::Ui(UiCommand::Navigate("http://www.msftconnecttest.com/connecttest.txt".into())));
         }
         214 => {
+            let s = &app.settings.value;
+            crate::privacy::set(s.https_only, s.strip_params, s.gpc);
             check("policy-http-page-loaded", active_url(app).starts_with("http://www.msftconnecttest.com/"), active_url(app));
             ui_eval(app, "indicator-http-says-not-secure", SECURITY_JS, |r| {
                 check(
@@ -5056,6 +5087,9 @@ pub fn step(app: &mut App, n: u32) {
                 fake::starts() == 3 && run == Run::NotYet && app.extensions.first_run_ubol() == State::UserRemoved,
                 format!("starts {}, {run:?}", fake::starts()),
             );
+            // Loaded before the extension is added below: with Global Privacy
+            // Control on, adding one cancels a page load still in flight.
+            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/".into())));
         }
         291 => {
             // The extension back, for the remove question below.
@@ -5064,7 +5098,6 @@ pub fn step(app: &mut App, n: u32) {
                 Ok(()) => remember("ext-op", crate::extensions::add(app, &again, crate::extensions::Source::Unpacked) as i64),
                 Err(e) => check("ext-test-extension-written", false, e),
             }
-            app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.com/".into())));
         }
         292 => {
             // Not a store detail page: no store button.
@@ -5524,9 +5557,129 @@ pub fn step(app: &mut App, n: u32) {
                 check("newtab-lists-visited-sites", field(&r, "main") == "true" && field(&r, "ex") == "true" && field(&r, "bad") == "0", &r);
             });
         }
+        // ---- Privacy (src/privacy.rs): tracking parameters, HTTPS-only,
+        // Global Privacy Control ----
         322 => {
             crate::overlay::close(app);
-            // The new tab page's tab, then the last one.
+            let port = serve_privacy_page();
+            check("privacy-server-started", port.is_ok(), format!("{port:?}"));
+            let port = port.unwrap_or(0);
+            remember("privacy-port", i64::from(port));
+            app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{port}/gpc?utm_source=x&a=1&fbclid=y#f"))));
+        }
+        323 => {
+            let port = recall("privacy-port");
+            let want = format!("http://127.0.0.1:{port}/gpc?a=1#f");
+            check("strip-tracking-before-the-load", active_url(app) == want, format!("{} (want {want})", active_url(app)));
+            check("https-only-leaves-loopback-alone", active_url(app).starts_with("http://127.0.0.1:"), active_url(app));
+            let hits = privacy_hits();
+            let ours: Vec<_> = hits.iter().filter(|(p, _)| p.starts_with("/gpc")).collect();
+            check(
+                "strip-tracking-server-never-sees-them",
+                ours.iter().any(|(p, _)| p == "/gpc?a=1") && !ours.iter().any(|(p, _)| p.contains("utm_") || p.contains("fbclid")),
+                format!("{hits:?}"),
+            );
+            check(
+                "gpc-header-on-page-and-subresource",
+                ours.iter().any(|(p, _)| p == "/gpc-img") && ours.iter().all(|(_, gpc)| *gpc),
+                format!("{hits:?}"),
+            );
+            page_eval(app, "gpc-seen-by-pages", "`gpc=${navigator.globalPrivacyControl}`", |r| {
+                check("gpc-seen-by-pages", field(&r, "gpc") == "true", &r);
+            });
+            PRIVACY_HITS.lock().unwrap().clear();
+            page_js(app, "location.href = '/gpc?utm_source=z&b=2&gclid=w';");
+        }
+        324 => {
+            // A navigation the page starts itself: its hook rewrites it.
+            let port = recall("privacy-port");
+            let want = format!("http://127.0.0.1:{port}/gpc?b=2");
+            check("strip-tracking-from-page-links", active_url(app) == want, format!("{} (want {want})", active_url(app)));
+            let hits = privacy_hits();
+            let leaked = hits.iter().any(|(p, _)| p.contains("utm_") || p.contains("gclid"));
+            log(&format!("INFO page link, server saw the tracked request first: {leaked} {hits:?}"));
+            app.handle(UserEvent::Ui(UiCommand::Navigate(HTTPS_ONLY_HTTP.into())));
+        }
+        325 => {
+            // msftconnecttest.com's https answers with another name's
+            // certificate: the upgrade fails.
+            check("https-only-tries-https-first", active_url(app) == HTTPS_ONLY_HTTP.replacen("http:", "https:", 1), active_url(app));
+            page_eval(app, "https-only-failure-offers-http", HTTPS_ONLY_JS, |r| {
+                log(&format!("INFO https-only page: {r}"));
+                check(
+                    "https-only-failure-offers-http",
+                    field(&r, "doc").starts_with("chrome-error:")
+                        && field(&r, "h1") == crate::error_page::HTTPS_ONLY_TEXTS.0
+                        && field(&r, "url") == HTTPS_ONLY_HTTP
+                        && field(&r, "open") == crate::error_page::OPEN_HTTP
+                        && field(&r, "retry") == "Yeniden dene",
+                    &r,
+                );
+            });
+            page_js(app, "document.getElementById('xb-error-open').click()");
+        }
+        326 => {
+            check("https-only-opens-http-when-asked", active_url(app) == HTTPS_ONLY_HTTP, active_url(app));
+            page_eval(app, "https-only-http-page-is-the-sites", "`doc=${document.URL}`", |r| {
+                check("https-only-http-page-is-the-sites", field(&r, "doc") == HTTPS_ONLY_HTTP, &r);
+            });
+            app.handle(UserEvent::Ui(UiCommand::Navigate("http://www.msftconnecttest.com/connecttest.txt?again".into())));
+        }
+        327 => {
+            check(
+                "https-only-exception-lasts-the-session",
+                active_url(app) == "http://www.msftconnecttest.com/connecttest.txt?again",
+                active_url(app),
+            );
+            // The "open http" address answers only the HTTPS-only page.
+            page_js(app, &format!("location.href = '{}'", crate::privacy::HTTP_SENTINEL));
+        }
+        328 => {
+            let id = app.tabs.active().unwrap();
+            let loading = app.tabs.get(id).is_some_and(|t| t.loading);
+            check(
+                "https-only-sentinel-refused-elsewhere",
+                active_url(app) == "http://www.msftconnecttest.com/connecttest.txt?again" && page_url(app) == active_url(app) && !loading,
+                format!("url {}, page {}, loading {loading}", active_url(app), page_url(app)),
+            );
+            crate::settings::open(app);
+        }
+        329 => {
+            check("privacy-settings-open", app.overlay.mode == Mode::Settings, format!("mode {:?}", app.overlay.mode));
+            overlay_js(app, "for (const id of ['s-https', 's-strip', 's-gpc']) document.getElementById(id).click();");
+        }
+        330 => {
+            let s = &app.settings.value;
+            check("privacy-switches-turn-off", !s.https_only && !s.strip_params && !s.gpc, format!("{s:?}"));
+            let flushed = crate::store::flush(Duration::from_secs(2));
+            let file = crate::store::data_dir().map(|d| d.join("settings.json")).and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+            check(
+                "privacy-settings-written-to-settings-json",
+                flushed && file.contains("\"https_only\":false") && file.contains("\"strip_params\":false") && file.contains("\"gpc\":false"),
+                &file,
+            );
+            crate::overlay::close(app);
+            PRIVACY_HITS.lock().unwrap().clear();
+            let port = recall("privacy-port");
+            app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{port}/gpc?utm_source=x&a=1"))));
+        }
+        331 => {
+            let port = recall("privacy-port");
+            let want = format!("http://127.0.0.1:{port}/gpc?utm_source=x&a=1");
+            check("strip-off-keeps-the-address", active_url(app) == want, format!("{} (want {want})", active_url(app)));
+            let hits = privacy_hits();
+            check(
+                "gpc-off-sends-no-header",
+                hits.iter().any(|(p, _)| p.starts_with("/gpc?utm_source=x")) && hits.iter().all(|(_, gpc)| !*gpc),
+                format!("{hits:?}"),
+            );
+            page_eval(app, "gpc-off-hidden-from-new-pages", "`gpc=${navigator.globalPrivacyControl}`", |r| {
+                check("gpc-off-hidden-from-new-pages", field(&r, "gpc") != "true", &r);
+            });
+        }
+        332 => {
+            crate::overlay::close(app);
+            // The new tab page's tab (the privacy steps ran in it), then the last one.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("only-the-first-tab-is-left", app.tabs.len() == 1 && !app.quit, app.tabs.len());
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
@@ -5874,6 +6027,57 @@ fn serve_http_page() -> std::io::Result<u16> {
             let _ = stream.read(&mut [0u8; 2048]);
             let body = "<!doctype html><title>Plain</title><body>plain http</body>";
             let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        }
+    });
+    Ok(port)
+}
+
+/// The HTTPS-only steps' address: public, plain http, and its https has the
+/// wrong certificate.
+const HTTPS_ONLY_HTTP: &str = "http://www.msftconnecttest.com/connecttest.txt?https-only";
+
+/// The HTTPS-only page as the tab's document has it.
+const HTTPS_ONLY_JS: &str = "(() => { const g = (id) => document.getElementById(id), h = document.querySelector('h1'); \
+  return [`doc=${document.URL}`, `h1=${h ? h.textContent : ''}`, `url=${g('xb-error-url') ? g('xb-error-url').textContent : ''}`, \
+  `open=${g('xb-error-open') ? g('xb-error-open').textContent : ''}`, `retry=${g('xb-error-retry') ? g('xb-error-retry').textContent : ''}`].join(';'); })()";
+
+/// What the privacy steps' server was asked: the request target, and
+/// whether it came with `Sec-GPC: 1`.
+static PRIVACY_HITS: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+
+fn privacy_hits() -> Vec<(String, bool)> {
+    PRIVACY_HITS.lock().unwrap().clone()
+}
+
+/// A loopback page with an image, recording each request's headers.
+fn serve_privacy_page() -> std::io::Result<u16> {
+    use std::io::Read;
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 2048];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let head = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+            let target = String::from_utf8_lossy(&buf).split(' ').nth(1).unwrap_or("").to_string();
+            let gpc = head.lines().any(|l| l.trim() == "sec-gpc: 1");
+            PRIVACY_HITS.lock().unwrap().push((target.clone(), gpc));
+            let (kind, body) = if target.starts_with("/gpc-img") {
+                ("image/svg+xml", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>")
+            } else {
+                ("text/html", "<!doctype html><title>Privacy</title><body>privacy<img src=\"/gpc-img\"></body>")
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
         }
     });
     Ok(port)
