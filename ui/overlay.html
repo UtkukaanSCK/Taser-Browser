@@ -10,6 +10,7 @@
 <script src="/js/settings.js" defer></script>
 <script src="/js/extask.js" defer></script>
 <script src="/js/extensions.js" defer></script>
+<script src="/js/site.js" defer></script>
 </head>
 <body class="bg-surface text-ink font-sans text-[13px] leading-none border border-line">
 <!-- Address-bar suggestions: 30px rows (ROW_H in overlay.rs), 4px padding. -->
@@ -181,6 +182,32 @@
      ext_ui.rs): 36px rows, 4px padding above and below, inside the
      overlay's 1px border (ACTIONS_PAD = 10). A pick opens that popup. -->
 <section id="ext-actions" role="menu" aria-label="Uzantılar" class="h-full overflow-y-auto py-1" hidden></section>
+
+<!-- The site information panel under the connection mark (site.js,
+     src/site_info.rs): the site, its connection, its permissions and its
+     data. Heights match HEAD_H, LIST_HEAD_H, ROW_H and FOOT_H there; if they
+     are off, the list scrolls. -->
+<section id="site" role="dialog" aria-labelledby="si-host" aria-describedby="si-conn" class="flex h-full flex-col" hidden>
+  <header class="h-[82px] flex-none overflow-hidden border-b border-line px-4 py-3">
+    <h1 id="si-host" class="truncate text-[14px] font-semibold leading-5"></h1>
+    <p id="si-conn" class="mt-1 leading-4 text-muted"></p>
+  </header>
+  <h2 id="si-perms-title" class="flex h-10 flex-none items-center px-4 font-semibold">İzinler</h2>
+  <ul id="si-perms" aria-labelledby="si-perms-title" class="min-h-0 flex-1 overflow-y-auto"></ul>
+  <footer class="flex min-h-[104px] flex-none flex-col gap-2 border-t border-line px-4 py-3">
+    <div id="si-actions" class="flex">
+      <button id="si-clear" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Bu sitenin verilerini sil</button>
+    </div>
+    <div id="si-confirm" class="flex flex-col gap-2" hidden>
+      <p class="leading-snug">Bu sitenin çerezleri ve verileri silinsin mi? Bu sitedeki oturumunuz kapanır.</p>
+      <div class="flex justify-end gap-2">
+        <button id="si-yes" type="button" class="h-7 rounded-md border border-danger px-3 text-danger hover:bg-hover">Sil</button>
+        <button id="si-no" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Vazgeç</button>
+      </div>
+    </div>
+    <p id="si-status" role="status" class="min-h-4 leading-snug text-muted"></p>
+  </footer>
+</section>
 
 <!-- The question before another application is started (policy.rs). The
      address is the page's text: shown whole, it scrolls inside its box. -->

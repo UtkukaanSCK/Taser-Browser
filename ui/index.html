@@ -38,14 +38,19 @@
   <!-- Narrow windows: the address box gives up width first (down to min-w-25). -->
   <div id="address-box" class="ml-1 flex h-7 w-[clamp(140px,34vw,520px)] min-w-25 shrink items-center rounded-md border border-line bg-surface px-2 transition-colors duration-100 focus-within:border-accent data-[blocked]:border-danger">
     <!-- Connection state of the shown page (security.js): a lock, "not secure",
-         a certificate error, or a crashed page with its reload button. The
-         mark itself is no control; its meaning is the status text after it,
-         unseen but read out whenever it changes. -->
+         a certificate error, or a crashed page with its reload button. Its
+         meaning is the status text after it, unseen but read out whenever it
+         changes. The mark is a button that opens the site information panel
+         (site_info.rs): the site's permissions and its data. -->
     <div id="security" hidden
-         class="group/sec -ml-1 mr-1 flex h-5 max-w-[60%] shrink-0 items-center gap-1 px-1 text-[11px] text-muted">
-      <svg aria-hidden="true" class="hidden size-3 shrink-0 group-data-[state=secure]/sec:block" viewBox="0 0 16 16"><path d="M4.5 7.5h7V13h-7zM6 7.5v-2a2 2 0 0 1 4 0v2"/></svg>
-      <svg aria-hidden="true" class="size-3 shrink-0 group-data-[state=cert]/sec:text-danger group-data-[state=crashed]/sec:text-danger group-data-[state=secure]/sec:hidden" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.25v.01"/></svg>
-      <span id="security-text" aria-hidden="true" class="min-w-0 truncate text-ink empty:hidden"></span>
+         class="group/sec -ml-1 mr-1 flex h-5 max-w-[60%] shrink-0 items-center gap-1 text-[11px] text-muted">
+      <button id="site-info" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Site bilgileri"
+              aria-describedby="security-status"
+              class="flex h-5 min-w-0 items-center gap-1 rounded px-1 hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent aria-expanded:bg-hover">
+        <svg aria-hidden="true" class="hidden size-3 shrink-0 group-data-[state=secure]/sec:block" viewBox="0 0 16 16"><path d="M4.5 7.5h7V13h-7zM6 7.5v-2a2 2 0 0 1 4 0v2"/></svg>
+        <svg aria-hidden="true" class="size-3 shrink-0 group-data-[state=cert]/sec:text-danger group-data-[state=crashed]/sec:text-danger group-data-[state=secure]/sec:hidden" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.25v.01"/></svg>
+        <span id="security-text" aria-hidden="true" class="min-w-0 truncate text-ink empty:hidden"></span>
+      </button>
       <button id="security-reload" type="button" hidden title="Sayfayı yeniden yükle (Ctrl+R)"
               class="shrink-0 rounded px-1 text-ink underline hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent">Yeniden yükle</button>
     </div>

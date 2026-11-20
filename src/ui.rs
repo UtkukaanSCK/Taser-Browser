@@ -28,6 +28,7 @@ const WEBSTORE_JS: &str = include_str!("../ui/js/webstore.js");
 const EXTASK_JS: &str = include_str!("../ui/js/extask.js");
 const EXTENSIONS_JS: &str = include_str!("../ui/js/extensions.js");
 const EXT_BUTTON_JS: &str = include_str!("../ui/js/ext-button.js");
+const SITE_JS: &str = include_str!("../ui/js/site.js");
 const APP_CSS: &str = include_str!("../ui/dist/app.css");
 
 /// No network, no inline script, no eval, no frames, no forms, no plugins.
@@ -95,6 +96,7 @@ fn asset(path: &str) -> Option<(&'static str, &'static str)> {
         "/js/extask.js" => (EXTASK_JS, "text/javascript; charset=utf-8"),
         "/js/extensions.js" => (EXTENSIONS_JS, "text/javascript; charset=utf-8"),
         "/js/ext-button.js" => (EXT_BUTTON_JS, "text/javascript; charset=utf-8"),
+        "/js/site.js" => (SITE_JS, "text/javascript; charset=utf-8"),
         "/app.css" => (APP_CSS, "text/css; charset=utf-8"),
         _ => return None,
     })
@@ -338,6 +340,7 @@ mod tests {
         assert_eq!(get("/js/security.js").status(), 200);
         assert_eq!(get("/js/extensions.js").status(), 200);
         assert_eq!(get("/js/ext-button.js").status(), 200);
+        assert_eq!(get("/js/site.js").status(), 200);
         let r = get("/overlay.html");
         assert_eq!(r.status(), 200);
         assert_eq!(r.headers()[header::CONTENT_SECURITY_POLICY], CSP);

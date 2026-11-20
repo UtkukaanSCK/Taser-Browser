@@ -30,6 +30,7 @@ use crate::native::Proxy;
 use crate::overlay::Mode;
 use crate::page_tools::PageKey;
 use crate::policy::{Event, LaunchCmd, Refused};
+use crate::site_info::SiteCmd;
 use crate::tabs::TabId;
 use std::io::Write;
 use std::path::PathBuf;
@@ -43,7 +44,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 682;
+const EXPECTED_CHECKS: u32 = 695;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -419,7 +420,13 @@ const DELAYS: &[u64] = &[
     900,  // 331 check the switches; turn all three off
     900,  // 332 check them saved; the loopback page again
     2500, // 333 check nothing stripped and no GPC
-    900,  // 334 close the new tab page's tab; last tab close quits
+    1500, // 334 site info: store data on the loopback page; open the panel
+    1500, // 335 check the panel; block the location permission
+    1500, // 336 check it is kept in the profile; back to ask
+    2000, // 337 check it is gone; delete the site's data
+    1500, // 338 check it was deleted; close the panel; reload the page
+    900,  // 339 check the page's data is gone
+    900,  // 340 close the new tab page's tab; last tab close quits
 ];
 
 /// What a new tab page shows: `main` (it is there), `ph` (the search box's
@@ -5723,6 +5730,89 @@ pub fn step(app: &mut App, n: u32) {
             });
         }
         334 => {
+            // The site information panel, on the loopback page of the privacy
+            // steps: something stored first, for the deletion to remove.
+            page_js(app, "localStorage.setItem('xbsite', '1'); document.cookie = 'xbsite=1; max-age=3600; path=/';");
+            app.handle(UserEvent::Ui(UiCommand::Site(SiteCmd::Open(120))));
+        }
+        335 => {
+            let want = format!("http://127.0.0.1:{}", recall("privacy-port"));
+            check(
+                "site-info-opens-for-the-page",
+                app.overlay.mode == Mode::SiteInfo && app.site.origin() == want,
+                format!("{:?} {} (want {want})", app.overlay.mode, app.site.origin()),
+            );
+            overlay_eval(app, "site-info-panel-drawn", SITE_JS, |r| {
+                check(
+                    "site-info-panel-drawn",
+                    field(&r, "hidden") == "false"
+                        && field(&r, "host") == "127.0.0.1"
+                        && field(&r, "names") == "Konum,Kamera,Mikrofon,Bildirimler,Pano okuma,Otomatik oynatma"
+                        && field(&r, "geo") == "0"
+                        && field(&r, "focus") == "SELECT",
+                    &r,
+                );
+            });
+            ui_eval(app, "site-info-button-expanded", SITE_BUTTON_JS, |r| {
+                check("site-info-button-expanded", r == "tag=BUTTON;in=true;popup=dialog;expanded=true", &r);
+            });
+            page_eval(app, "site-data-stored", "`ls=${localStorage.getItem('xbsite')};ck=${document.cookie.includes('xbsite=1')}`", |r| {
+                check("site-data-stored", field(&r, "ls") == "1" && field(&r, "ck") == "true", &r);
+            });
+            overlay_js(app, "(() => { const s = document.querySelector('#si-perms select[data-kind=\"3\"]'); s.value = '2'; s.dispatchEvent(new Event('change')); })()");
+        }
+        336 => {
+            let origin = app.site.origin().to_string();
+            if let Some(v) = app.content_view() {
+                let o = origin.clone();
+                crate::native::site_permissions(v, move |list| {
+                    let set = list.as_deref().map(|l| crate::site_info::perms_of(l, &o));
+                    check("site-permission-kept-in-profile", set == Some(vec![(3, crate::site_info::BLOCK)]), format!("{set:?} {list:?}"));
+                });
+            }
+            overlay_eval(app, "site-permission-panel-says-saved", SITE_JS, |r| {
+                check("site-permission-panel-says-saved", field(&r, "geo") == "2" && field(&r, "status") == crate::site_info::SAID_SAVED, &r);
+            });
+            overlay_js(app, "(() => { const s = document.querySelector('#si-perms select[data-kind=\"3\"]'); s.value = '0'; s.dispatchEvent(new Event('change')); })()");
+        }
+        337 => {
+            let origin = app.site.origin().to_string();
+            if let Some(v) = app.content_view() {
+                crate::native::site_permissions(v, move |list| {
+                    let set = list.as_deref().map(|l| crate::site_info::perms_of(l, &origin));
+                    check("site-permission-back-to-ask", set == Some(Vec::new()), format!("{set:?}"));
+                });
+            }
+            // The button asks first; "Sil" answers.
+            overlay_eval(
+                app,
+                "site-data-clear-asks-first",
+                "(() => { const g = (id) => document.getElementById(id); g('si-clear').click(); \
+                  const asked = !g('si-confirm').hidden && g('si-actions').hidden && document.activeElement === g('si-no'); \
+                  g('si-yes').click(); return `asked=${asked}`; })()",
+                |r| check("site-data-clear-asks-first", r == "asked=true", &r),
+            );
+        }
+        338 => {
+            check("site-data-deleted", app.site.cleared == Some(true), format!("{:?}", app.site.cleared));
+            overlay_eval(app, "site-data-panel-says-deleted", SITE_JS, |r| {
+                check("site-data-panel-says-deleted", field(&r, "status") == crate::site_info::SAID_CLEARED, &r);
+            });
+            // The mark again: the panel closes, the button says so.
+            app.handle(UserEvent::Ui(UiCommand::Site(SiteCmd::Open(120))));
+            check("site-info-mark-toggles-it-closed", app.overlay.mode == Mode::Hidden, format!("{:?}", app.overlay.mode));
+            ui_eval(app, "site-info-button-collapsed", SITE_BUTTON_JS, |r| {
+                check("site-info-button-collapsed", field(&r, "expanded") == "false", &r);
+            });
+            let url = active_url(app);
+            app.handle(UserEvent::Ui(UiCommand::Navigate(url)));
+        }
+        339 => {
+            page_eval(app, "site-data-gone-after-reload", "`ls=${localStorage.getItem('xbsite')};ck=${document.cookie.includes('xbsite=1')}`", |r| {
+                check("site-data-gone-after-reload", field(&r, "ls") == "null" && field(&r, "ck") == "false", &r);
+            });
+        }
+        340 => {
             crate::overlay::close(app);
             // The new tab page's tab (the privacy steps ran in it), then the last one.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
@@ -6134,6 +6224,18 @@ fn click_page(app: &App) {
         cdp_click(v, 200.0, 200.0);
     }
 }
+
+/// The site information panel as the overlay page draws it.
+const SITE_JS: &str = "(() => { const g = (id) => document.getElementById(id), geo = document.querySelector('#si-perms select[data-kind=\"3\"]'); \
+  return [`hidden=${g('site').hidden}`, `host=${g('si-host').textContent}`, \
+  `names=${[...document.querySelectorAll('#si-perms li span')].map((e) => e.textContent).join(',')}`, \
+  `geo=${geo ? geo.value : ''}`, `focus=${document.activeElement ? document.activeElement.tagName : ''}`, \
+  `status=${g('si-status').textContent}`].join(';'); })()";
+
+/// The mark's button that opens the site information panel.
+const SITE_BUTTON_JS: &str = "(() => { const b = document.getElementById('site-info'); \
+  return [`tag=${b.tagName}`, `in=${b.parentElement.id === 'security'}`, `popup=${b.getAttribute('aria-haspopup')}`, \
+  `expanded=${b.getAttribute('aria-expanded')}`].join(';'); })()";
 
 /// The address box's connection mark as drawn, and as told to a screen
 /// reader (`name`); `reload`: its button is shown and reachable by Tab.

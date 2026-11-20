@@ -27,6 +27,7 @@ mod fullscreen;
 mod policy;
 mod popup;
 mod privacy;
+mod site;
 mod tools;
 mod zoom;
 pub use audio::*;
@@ -39,6 +40,7 @@ pub use fullscreen::*;
 pub use policy::*;
 pub use popup::*;
 pub use privacy::*;
+pub use site::*;
 pub use tools::*;
 pub use zoom::*;
 

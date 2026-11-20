@@ -2,14 +2,16 @@
 // Connection indicator at the start of the address box (#security). Rust
 // decides the state (src/policy.rs) and pushes it with every render; this
 // only draws it. Every state has its own icon or text, never colour alone.
-// The mark is no control and has no role: what it means is written into
-// #security-status, which screen readers read out when it changes. Only a
-// crashed page adds a control, a real button that reloads it.
+// What the mark means is written into #security-status, which screen readers
+// read out when it changes. The mark's icon and text sit in a button that
+// opens the site information panel (src/site_info.rs) under it, or closes it;
+// a crashed page adds a second button that reloads it.
 (() => {
   const mark = ui.$("security");
   const text = ui.$("security-text");
   const reload = ui.$("security-reload");
   const status = ui.$("security-status");
+  const info = ui.$("site-info");
 
   // state: [text shown, sentence for the tooltip and for screen readers]
   const STATES = {
@@ -27,6 +29,19 @@
   ];
 
   reload.addEventListener("click", () => ui.send("reload"));
+
+  // A press on the button while its panel is up: the panel closes as the UI
+  // takes the focus (blur), so the click that follows must not open it again.
+  let wasOpen = false;
+  info.addEventListener("pointerdown", () => {
+    wasOpen = info.getAttribute("aria-expanded") === "true";
+  });
+  info.addEventListener("click", () => {
+    const skip = wasOpen;
+    wasOpen = false;
+    if (skip) return;
+    ui.send("site-info:" + Math.max(0, Math.round(info.getBoundingClientRect().left)));
+  });
 
   window.xbSecurity = Object.freeze({
     /** `state`: "" (no mark), "secure", "insecure", "cert" or "crashed".
@@ -46,6 +61,11 @@
       mark.dataset.state = state;
       text.textContent = known[0];
       mark.title = known[1];
+      info.title = known[1] + " · Site bilgileri";
+    },
+    /** The panel under the mark is up (`on`) or not. */
+    expanded(on) {
+      info.setAttribute("aria-expanded", on ? "true" : "false");
     },
   });
 })();

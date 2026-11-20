@@ -12,6 +12,7 @@
 @source "./js/extask.js";
 @source "./js/extensions.js";
 @source "./js/ext-button.js";
+@source "./js/site.js";
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;

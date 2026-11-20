@@ -12,6 +12,7 @@ use crate::overlay::OverlayCmd;
 use crate::page_tools::{PageCmd, PageKey};
 use crate::policy::LaunchCmd;
 use crate::settings::SettingsCmd;
+use crate::site_info::SiteCmd;
 use crate::strip::{StripCmd, TabKey};
 use crate::tabs::TabId;
 
@@ -56,6 +57,8 @@ pub enum UiCommand {
     Store(crate::webstore::StoreCmd),
     /// The extensions page and the strip's extensions button (see `ext_ui`).
     Ext(ExtCmd),
+    /// The site information panel (see `site_info`).
+    Site(SiteCmd),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +104,7 @@ impl UiCommand {
             ("launch-open" | "launch-cancel" | "launch-press", None) => Self::Launch(LaunchCmd::parse(name)?),
             (n, None) if crate::webstore::StoreCmd::NAMES.contains(&n) => Self::Store(crate::webstore::StoreCmd::parse(n)?),
             (n, a) if ExtCmd::NAMES.contains(&n) => Self::Ext(ExtCmd::parse(n, a)?),
+            (n, a) if SiteCmd::NAMES.contains(&n) => Self::Site(SiteCmd::parse(n, a)?),
             _ => return None,
         };
         Some(cmd)
@@ -252,6 +256,10 @@ mod tests {
         assert_eq!(UiCommand::parse("ext-actions:900"), Some(UiCommand::Ext(ExtCmd::Actions(900))));
         assert_eq!(UiCommand::parse("ext-check-updates"), Some(UiCommand::Ext(ExtCmd::CheckUpdates)));
         assert_eq!(UiCommand::parse("ext-check-updates:x"), None);
+        assert_eq!(UiCommand::parse("site-info:212"), Some(UiCommand::Site(SiteCmd::Open(212))));
+        assert_eq!(UiCommand::parse("si-perm:3:2"), Some(UiCommand::Site(SiteCmd::Permission { kind: 3, state: 2 })));
+        assert_eq!(UiCommand::parse("si-clear"), Some(UiCommand::Site(SiteCmd::Clear)));
+        assert_eq!(UiCommand::parse("si-perm:3:9"), None);
         assert_eq!(
             UiCommand::parse("ext-enable:mmbkafeccnpmgicaldnppdljpaogpjdm:0"),
             Some(UiCommand::Ext(ExtCmd::Enable { id: "mmbkafeccnpmgicaldnppdljpaogpjdm".into(), on: false }))

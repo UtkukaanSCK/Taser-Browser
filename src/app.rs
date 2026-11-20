@@ -169,6 +169,8 @@ pub struct App {
     pub webstore: crate::webstore::State,
     /// The Uzantılar page and the strip's extensions button (see `ext_ui`).
     pub ext_ui: crate::ext_ui::ExtUi,
+    /// The site information panel (see `site_info`).
+    pub site: crate::site_info::SiteInfo,
     /// Addresses from other starts, to drop a late duplicate.
     handovers: crate::instance::Repeats,
     pub quit: bool,
@@ -246,6 +248,7 @@ impl App {
             extensions: Default::default(),
             webstore: Default::default(),
             ext_ui: Default::default(),
+            site: Default::default(),
             quit: false,
         })
     }
@@ -761,6 +764,7 @@ impl App {
             UiCommand::Launch(cmd) => crate::policy::on_command(self, cmd),
             UiCommand::Store(cmd) => crate::webstore::on_command(self, cmd),
             UiCommand::Ext(cmd) => crate::ext_ui::on_command(self, cmd),
+            UiCommand::Site(cmd) => crate::site_info::on_command(self, cmd),
         }
     }
 

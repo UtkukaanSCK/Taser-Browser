@@ -349,6 +349,19 @@ more than 64 hosts with certificate errors in one run, no https page counts as
 secure until the next start; the indicator then says "Sertifikalara
 güvenilmiyor" (told once, not in a dialog).
 
+A click on the indicator (or Enter on it) opens the site information panel
+under it, for the page's site (`scheme://host[:port]`; http and https pages
+only). It names the site and its connection and lists its permissions — Konum,
+Kamera, Mikrofon, Bildirimler, Pano okuma and Otomatik oynatma always, any
+other kind only once the site has one set — each with "Sor" (for autoplay
+"Varsayılan"), "İzin ver" or "Engelle". A choice is kept in the profile at
+once; some take effect when the page is loaded again. "Bu sitenin verilerini
+sil" asks first, then deletes that one site's cookies and storage (local and
+session storage, IndexedDB, cache storage, service workers), leaving every
+other site and the extensions' storage as they were. Tracker blocking stays
+one profile-wide level (WebView2 has no per-site switch for it); uBlock Origin
+Lite has its own per-site switch in its popup.
+
 A page never starts another application by itself. A `mailto:`, `tel:` or
 similar link the user clicked shows a question in the overlay (the scheme, the
 asking site and the whole address). "Aç" counts only after a short pause
@@ -548,7 +561,7 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/native/privacy.rs` | Global Privacy Control in a tab: the `Sec-GPC` request hook and the `navigator` script |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, tracking prevention, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
-| `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, launch and store questions, Uzantılar); placement and closing |
+| `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, site information, launch and store questions, Uzantılar); placement and closing |
 | `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
@@ -556,6 +569,7 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/newtab.rs` | the new tab page written into blank tabs: search box, most visited sites, bookmarks |
 | `src/error_page.rs` | error status → Turkish error page text, and the script that shows it |
 | `src/policy.rs` | security indicator, certificate-error memory, external-launch question |
+| `src/site_info.rs`, `src/native/site.rs` | the site information panel: a site's permissions (read, set) and deleting its data |
 | `src/extensions.rs` | `extensions.json`, install/remove/enable, start-up reconcile with WebView2's list |
 | `src/native/extensions.rs` | WebView2's extension calls (add, list, enable, remove) on the content profile |
 | `src/ext_ui.rs` | the Uzantılar page and the strip's extensions button; which `chrome-extension://` pages a tab may load |
@@ -576,7 +590,8 @@ dependency, and the window and taskbar icons load that same resource.
 | `ui/js/suggest.js` | address-bar side of suggestions (keys, selection, restore) |
 | `ui/js/bookmarks.js` | the star (UI page), the editor and list (overlay page); keeps no state |
 | `ui/js/menu.js`, `ui/js/settings.js` | menu and settings pages in the overlay; draw and report only |
-| `ui/js/security.js` | draws the connection indicator Rust decides |
+| `ui/js/security.js` | draws the connection indicator Rust decides; its button opens the site panel |
+| `ui/js/site.js` | the site information panel (overlay); draws and reports only |
 | `ui/js/extensions.js`, `ui/js/ext-button.js` | Uzantılar page and the extensions button's list (overlay), the button (strip) |
 | `ui/js/extask.js`, `ui/js/webstore.js` | the store question (overlay) and the address box's "Ekle"/"Kaldır" button |
 | `docs/` | v0.2 and v0.3 design notes, manual test checklists, v0.3 licensing note |

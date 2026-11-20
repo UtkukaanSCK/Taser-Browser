@@ -147,6 +147,8 @@ pub enum Mode {
     Extensions,
     /// The strip's extensions button's list (see `ext_ui`).
     ExtActions,
+    /// The site information panel under the connection mark (see `site_info`).
+    SiteInfo,
 }
 
 impl Mode {
@@ -164,6 +166,7 @@ impl Mode {
                 | Mode::Store
                 | Mode::Extensions
                 | Mode::ExtActions
+                | Mode::SiteInfo
         )
     }
 }
@@ -496,6 +499,9 @@ fn reset(app: &mut App, hide: bool) {
     if was == Mode::ExtActions {
         let _ = app.ui.evaluate_script("xbExtBtn.expanded(false)");
     }
+    if was == Mode::SiteInfo {
+        let _ = app.ui.evaluate_script("xbSecurity.expanded(false)");
+    }
 }
 
 /// Closes the overlay for a reason of its own (a page started loading, the
@@ -744,7 +750,8 @@ pub fn refresh(app: &mut App) {
         | Mode::Launch
         | Mode::Store
         | Mode::Extensions
-        | Mode::ExtActions => {}
+        | Mode::ExtActions
+        | Mode::SiteInfo => {}
     }
 }
 
@@ -783,6 +790,7 @@ mod tests {
             Mode::Store,
             Mode::Extensions,
             Mode::ExtActions,
+            Mode::SiteInfo,
         ] {
             assert!(m.owns_keyboard());
         }

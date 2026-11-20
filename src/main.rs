@@ -26,6 +26,7 @@ mod privacy;
 mod selftest;
 mod session;
 mod settings;
+mod site_info;
 mod store;
 mod strip;
 mod tabs;
