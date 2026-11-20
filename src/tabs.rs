@@ -31,6 +31,10 @@ pub struct Tab {
     /// The address the page last committed (`url` may already show a typed
     /// one): where its title changes go in history.
     pub page_url: String,
+    /// A blank tab the app itself opened (or sent to `about:blank`), not
+    /// navigated since: the only kind the new tab page is written into, as
+    /// running a script in a page counts as a user gesture there.
+    pub new_tab_page: bool,
 }
 
 #[derive(Debug, Default)]
@@ -87,7 +91,7 @@ impl Tabs {
         self.tabs.iter_mut().find(|t| t.id == id)
     }
 
-    #[cfg(any(test, feature = "selftest"))]
+    /// Every tab, in strip order.
     pub fn ids(&self) -> impl Iterator<Item = TabId> + '_ {
         self.tabs.iter().map(|t| t.id)
     }
@@ -125,6 +129,7 @@ impl Tabs {
             user_nav_next: false,
             user_nav: None,
             page_url: String::new(),
+            new_tab_page: false,
         };
         let at = match placement {
             Placement::End => self.tabs.len(),

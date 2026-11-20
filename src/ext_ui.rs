@@ -95,20 +95,29 @@ pub enum ExtCmd {
     /// The popup asked to close (Esc, `window.close()`: `refocus`) or lost
     /// the focus. `generation` names the popup it came from.
     PopupClosed { generation: u32, refocus: bool },
+    /// Time to measure the popup's page again (`popup::measure`).
+    PopupMeasure { generation: u32 },
+    /// The popup's page measured: its content's size in CSS px.
+    PopupSize { generation: u32, w: u32, h: u32 },
     /// The popup picked in the list opens now (`open_popup`), the list
     /// being hidden.
     OpenPopup,
     /// The page's "Güncellemeleri denetle".
     CheckUpdates,
+    /// The page's "Chrome Web Mağazası": the store, in a new tab.
+    Store,
 }
 
 impl ExtCmd {
-    pub const NAMES: &[&str] = &["ext-actions", "ext-enable", "ext-remove", "ext-options", "ext-popup", "ext-check-updates"];
+    pub const NAMES: &[&str] = &["ext-actions", "ext-enable", "ext-remove", "ext-options", "ext-popup", "ext-check-updates", "ext-open-store"];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         let id = |a: &str| (is_extension_id(a) && !extensions::is_builtin(a)).then(|| a.to_owned());
         if name == "ext-check-updates" {
             return arg.is_none().then_some(Self::CheckUpdates);
+        }
+        if name == "ext-open-store" {
+            return arg.is_none().then_some(Self::Store);
         }
         let arg = arg?;
         match name {
@@ -645,8 +654,28 @@ pub fn on_command(app: &mut App, cmd: ExtCmd) {
             }
         }
         ExtCmd::PopupClosed { generation, refocus } => crate::popup::on_closed(app, generation, refocus),
+        ExtCmd::PopupMeasure { generation } => crate::popup::measure(app, generation),
+        ExtCmd::PopupSize { generation, w, h } => crate::popup::on_size(app, generation, w, h),
         ExtCmd::OpenPopup => open_next_popup(app),
         ExtCmd::CheckUpdates => check_updates(app),
+        ExtCmd::Store => open_store(app),
+    }
+}
+
+/// The page's "Chrome Web Mağazası": the store's front page in a new tab,
+/// where an extension's "Chrome'a ekle" installs it (`webstore`).
+fn open_store(app: &mut App) {
+    if app.overlay.mode != Mode::Extensions {
+        return;
+    }
+    overlay::close(app);
+    if app.fullscreen.on() {
+        crate::page_tools::leave_fullscreen(app);
+    }
+    if app.open_tab(crate::cws::STORE_URL, Placement::End, true).is_ok()
+        && let Some(v) = app.active_view()
+    {
+        let _ = v.focus();
     }
 }
 
@@ -783,7 +812,10 @@ mod tests {
         assert_eq!(p("ext-options", Some(ID)), Some(ExtCmd::Options(ID.into())));
         assert_eq!(p("ext-popup", Some(ID)), Some(ExtCmd::Popup(ID.into())));
         assert_eq!(p("ext-check-updates", None), Some(ExtCmd::CheckUpdates));
+        assert_eq!(p("ext-open-store", None), Some(ExtCmd::Store));
         for (n, a) in [
+            ("ext-open-store", Some("")),
+            ("ext-open-store", Some("https://example.com/")),
             ("ext-check-updates", Some("")),
             ("ext-check-updates", Some("1")),
             ("ext-actions", None),

@@ -256,7 +256,7 @@ All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
 | `window.json` | normal rect (physical px), maximized | same |
 | `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
 | `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
-| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session or one blank tab), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced); file at most 64 KiB | on each change |
+| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session, one blank tab or the home page), `home` (an http/https address of at most 2,048 characters; empty: the new tab page), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced); file at most 64 KiB | on each change |
 | `extensions.json` | extensions X-Browser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
 | `extensions\<id>\<version>\` | unpacked extensions X-Browser owns | on install, update and removal |
 
@@ -277,8 +277,21 @@ The strip's ⋮ button, Alt+F or Alt+E opens the main menu: new tab, find, zoom
 (see "Extensions"). Each item calls what its own shortcut calls. Downloads use
 WebView2's own flyout (progress, pause/cancel, "open file", "open folder");
 SmartScreen stays on. The strip's downloads button appears once the session has
-had a download. Settings (search engine, startup, autofill, download folder,
-tracker blocking) are saved on each change and take effect at once.
+had a download. Settings (search engine, startup, home page, autofill,
+download folder, tracker blocking) are saved on each change and take effect at
+once.
+
+**New tab page and home button.** A blank tab (Ctrl+T, the strip's +) shows
+X-Browser's new tab page: a search box (it searches with the chosen engine, or
+goes to what looks like an address), the eight most visited sites (one tile
+per site) and the first eight bookmarks. The tab itself stays `about:blank`,
+with the address bar empty and focused; the page is written into it only when
+it is the app's own empty blank document, so a site's blank page never gets
+it, and the tiles are letters, so drawing it loads nothing. The strip's home
+button, next to reload, goes to the home address set in settings ("Ana
+sayfa"; it takes what the address bar would go to, as long as that is a web
+address, not a search) or, with none, to the new tab page. "Açılışta: Ana
+sayfayı aç" starts with it instead of the last session.
 
 Tracker blocking is WebView2's tracking prevention for the content
 profile (the tabs and their extensions, not the UI's own profile): Temel
@@ -361,7 +374,8 @@ new tab; only for an extension that has one and is turned on) and "Kaldır"
 (asks in the page first; the extension's own settings are deleted with it).
 Each operation shows on its row until WebView2 answers, and turns into an
 error if it does not answer within 10 s. The two extensions built into
-WebView2 (the PDF viewer among them) are not listed.
+WebView2 (the PDF viewer among them) are not listed. The page's "Chrome Web
+Mağazası" link opens the store in a new tab.
 
 An extension that got into the profile without going through X-Browser (Edge's
 own dialog, say) is turned off at the next start and listed as "X-Browser
@@ -372,7 +386,10 @@ off again.
 **Toolbar button and popups.** While a turned-on extension has a popup
 (`action.default_popup`), the strip shows a puzzle-piece button. It lists
 those extensions, and a pick opens the popup under the button. The popup
-stays on its extension's pages: other navigations, new windows and downloads
+stays invisible until its page has been measured, then takes the page's own
+size within Chrome's limits (25 to 800 px wide, 25 to 600 px high), and follows
+it while the page grows or shrinks, so it never shows at a stale size or
+place. The popup stays on its extension's pages: other navigations, new windows and downloads
 are refused, and it cannot start another application, not even after a
 question. It closes on Esc, on its own `window.close()`, when the focus goes
 elsewhere (a click outside, another window), on a tab switch and when the
@@ -494,7 +511,8 @@ dependency, and the window and taskbar icons load that same resource.
 | `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
-| `src/settings.rs` | `settings.json`: engine, startup, autofill, download folder (with its checks), tracking prevention |
+| `src/settings.rs` | `settings.json`: engine, startup, home page, autofill, download folder (with its checks), tracking prevention |
+| `src/newtab.rs` | the new tab page written into blank tabs: search box, most visited sites, bookmarks |
 | `src/error_page.rs` | error status → Turkish error page text, and the script that shows it |
 | `src/policy.rs` | security indicator, certificate-error memory, external-launch question |
 | `src/extensions.rs` | `extensions.json`, install/remove/enable, start-up reconcile with WebView2's list |

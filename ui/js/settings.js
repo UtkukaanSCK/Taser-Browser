@@ -13,6 +13,7 @@
   const autofill = $("s-autofill");
   const folder = $("s-folder");
   const hint = $("s-folder-hint");
+  const home = $("s-home");
   const status = $("s-status");
   const actions = $("s-actions");
   const confirmRow = $("s-confirm");
@@ -22,6 +23,9 @@
     "folder-reset": "Varsayılan indirme klasörüne dönüldü.",
     "tracking-failed": "İzleyici engelleme düzeyi bu WebView2 sürümünde değiştirilemedi.",
     "folder-bad": "Var olan bir klasörün tam yolunu girin, örneğin C:\\Users\\ad\\Downloads.",
+    "home-ok": "Ana sayfa değiştirildi.",
+    "home-reset": "Ana sayfa yeniden yeni sekme sayfası.",
+    "home-bad": "Bir web adresi girin, örneğin example.com.",
   };
 
   const str = (v) => (typeof v === "string" ? v : "");
@@ -43,6 +47,8 @@
     const code = str(d.status);
     // What is being typed in the folder box stays, unless the change was its own.
     if (!keep || (code.startsWith("folder") && code !== "folder-bad") || document.activeElement !== folder) folder.value = str(d.folder);
+    // The home box the same way.
+    if (!keep || (code.startsWith("home") && code !== "home-bad") || document.activeElement !== home) home.value = str(d.home);
     const def = str(d.default_folder);
     hint.textContent = d.folder ? "" : def ? "Varsayılan: " + def : "";
     if (!keep) {
@@ -69,6 +75,15 @@
     if (e.key === "Enter" && !e.isComposing) {
       e.preventDefault();
       applyFolder();
+    }
+  });
+  const applyHome = () => send("st-home:" + home.value.trim());
+  $("s-home-apply").addEventListener("click", applyHome);
+  $("s-home-reset").addEventListener("click", () => send("st-home:"));
+  home.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      applyHome();
     }
   });
 

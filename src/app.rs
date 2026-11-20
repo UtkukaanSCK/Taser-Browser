@@ -285,6 +285,8 @@ impl App {
         let id = self.tabs.add(url, placement);
         if let Some(t) = self.tabs.get_mut(id) {
             t.user_nav_next = true;
+            // Not a tab a page opened.
+            t.new_tab_page = url == url::BLANK && !matches!(placement, Placement::After(_));
         }
         if let Err(e) = self.create_view(id) {
             self.tabs.close(id);
@@ -555,10 +557,16 @@ impl App {
         self.history.flush_if_due(std::time::Instant::now());
         // However the load got merged (`HistoryLoaded`, or a flush that
         // polled first), a list or suggestions shown meanwhile lacked the file.
-        if self.history.take_merged() {
+        let history_merged = self.history.take_merged();
+        if history_merged {
             crate::overlay::refresh(self);
         }
+        let bookmarks_merged = self.bookmarks.poll();
         crate::bookmarks::sync_star(self);
+        // The new tab pages shown meanwhile lacked them too.
+        if history_merged || bookmarks_merged {
+            crate::newtab::refresh(self);
+        }
     }
 
     /// Window caption (taskbar, Alt+Tab) follows the active tab.
@@ -701,6 +709,7 @@ impl App {
             UiCommand::Back => self.with_active(|v| v.go_back()),
             UiCommand::Forward => self.with_active(|v| v.go_forward()),
             UiCommand::Reload => self.reload_active(),
+            UiCommand::Home => self.go_home(),
             UiCommand::Stop => {
                 if let Some(v) = self.active_view() {
                     native::stop(v);
@@ -822,6 +831,10 @@ impl App {
             }
             _ => {}
         }
+        // A blank tab's load has completed: its new tab page goes in.
+        if let PageEvent::Loading(false) = ev {
+            crate::newtab::fill(self, id);
+        }
         let Some(tab) = self.tabs.get_mut(id) else { return };
         match ev {
             PageEvent::CloseRequested
@@ -841,6 +854,9 @@ impl App {
                 self.history.retitle(&tab.page_url, &tab.title);
             }
             PageEvent::Url(u) => {
+                if u != url::BLANK {
+                    tab.new_tab_page = false;
+                }
                 tab.url = crate::url::cap_url(&u);
                 tab.page_url.clone_from(&tab.url);
             }
@@ -880,6 +896,9 @@ impl App {
             }
             Resolved::Url(u) => {
                 let Some(id) = self.tabs.active() else { return };
+                if let Some(t) = self.tabs.get_mut(id) {
+                    t.new_tab_page = u == url::BLANK;
+                }
                 if self.view(id).is_none() {
                     // A tab whose webview could not be made: try again, at
                     // the new address.
@@ -905,6 +924,16 @@ impl App {
                 }
                 self.dirty = true;
             }
+        }
+    }
+
+    /// The strip's home button: the home address in the active tab; with
+    /// none set, the new tab page there, the address bar focused (as Ctrl+T).
+    fn go_home(&mut self) {
+        let home = self.settings.home_url().to_string();
+        self.navigate(&home);
+        if home == url::BLANK {
+            self.focus_address();
         }
     }
 

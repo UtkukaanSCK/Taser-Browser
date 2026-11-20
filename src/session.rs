@@ -333,9 +333,9 @@ pub fn track_window(app: &mut App) {
 /// Appends the saved tabs and shows the saved active one; only that one gets
 /// a webview now. Returns the active tab.
 pub fn restore(app: &mut App, session: &Session) -> Option<TabId> {
-    // The setting asks for a blank start: the saved tabs are not brought back
-    // (and the next save replaces them).
-    if app.settings.value.startup == crate::settings::Startup::Blank {
+    // The setting asks for a blank or home page start: the saved tabs are
+    // not brought back (and the next save replaces them).
+    if app.settings.value.startup != crate::settings::Startup::Last {
         return None;
     }
     let mut active = None;
@@ -344,6 +344,7 @@ pub fn restore(app: &mut App, session: &Session) -> Option<TabId> {
         if let Some(tab) = app.tabs.get_mut(id) {
             tab.title.clone_from(&t.title);
             tab.zoom = t.zoom;
+            tab.new_tab_page = t.url == crate::url::BLANK;
         }
         if i == session.active || active.is_none() {
             active = Some(id);

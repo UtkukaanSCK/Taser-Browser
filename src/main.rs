@@ -16,6 +16,7 @@ mod instance;
 mod menu;
 mod native;
 mod net;
+mod newtab;
 mod overlay;
 mod page_tools;
 mod policy;
@@ -162,14 +163,16 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
     timing::mark("ui-webview-created");
 
     // The last session's tabs (only the active one loads now), then the
-    // address given on the command line in a new tab; else one blank tab.
+    // address given on the command line in a new tab; else one blank tab
+    // (or the home page, as the settings ask).
     let restored = session::restore(&mut app, &saved_tabs);
     match arg.and_then(instance::url_from_arg) {
         Some(start) => {
             app.open_tab(&start, Placement::End, true)?;
         }
         None if restored.is_none() => {
-            app.open_tab(url::BLANK, Placement::End, true)?;
+            let start = app.settings.start_url().to_string();
+            app.open_tab(&start, Placement::End, true)?;
         }
         None => {}
     }

@@ -277,6 +277,11 @@
   }
 
   check.addEventListener("click", () => send("ext-check-updates"));
+  // The store opens in a new tab of the browser, never in the overlay.
+  document.getElementById("x-store").addEventListener("click", (e) => {
+    e.preventDefault();
+    send("ext-open-store");
+  });
 
   page.addEventListener("focusin", (e) => {
     const c = e.target.closest("[data-ctl]");

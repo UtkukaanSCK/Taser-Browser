@@ -290,6 +290,10 @@ mod tests {
         assert!(matches!(ipc_command(ui, "ext-check-updates", true), Some(UiCommand::Ext(crate::ext_ui::ExtCmd::CheckUpdates))));
         assert_eq!(ipc_command(ui, "ext-check-updates", false), None, "not from the strip");
         assert_eq!(ipc_command("https://example.com/", "ext-check-updates", true), None);
+        // The page's store link: the overlay only.
+        assert!(matches!(ipc_command(ui, "ext-open-store", true), Some(UiCommand::Ext(crate::ext_ui::ExtCmd::Store))));
+        assert_eq!(ipc_command(ui, "ext-open-store", false), None, "not from the strip");
+        assert_eq!(ipc_command("https://example.com/", "ext-open-store", true), None);
         assert!(ipc_command(ui, "ext-actions:900", false).is_some());
         assert!(ipc_command(ui, "ext-actions:900", true).is_some());
         assert_eq!(ipc_command("chrome-extension://mmbkafeccnpmgicaldnppdljpaogpjdm/", "ext-actions:9", false), None);

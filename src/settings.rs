@@ -2,7 +2,10 @@
 //! file, `{"v":1, ...}`, read back as untrusted (`sanitize`):
 //!
 //! - `engine`: which search engine the address bar uses for free text.
-//! - `startup`: restore the last session, or open one blank tab.
+//! - `startup`: restore the last session, open one blank tab, or open the
+//!   home page.
+//! - `home`: the address the strip's home button (and a home page start)
+//!   opens; empty is the new tab page (`newtab`).
 //! - `autofill`: WebView2's general autofill in pages (default on). Saving
 //!   passwords is never offered, whatever this says.
 //! - `download_dir`: where downloads go; empty is WebView2's own folder.
@@ -23,6 +26,9 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Longest download folder path kept or accepted (characters).
 pub const MAX_DIR: usize = 1024;
+
+/// Longest home address kept or accepted (characters).
+pub const MAX_HOME: usize = 2048;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -66,6 +72,8 @@ pub enum Startup {
     Last,
     /// One blank tab.
     Blank,
+    /// One tab with the home page (`Settings::home`).
+    Home,
 }
 
 impl Startup {
@@ -73,11 +81,12 @@ impl Startup {
         match self {
             Startup::Last => "last",
             Startup::Blank => "blank",
+            Startup::Home => "home",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        [Startup::Last, Startup::Blank].into_iter().find(|s| s.id() == id)
+        [Startup::Last, Startup::Blank, Startup::Home].into_iter().find(|s| s.id() == id)
     }
 }
 
@@ -139,6 +148,9 @@ pub struct Settings {
     pub download_dir: String,
     #[serde(deserialize_with = "lenient_default")]
     pub tracking: Tracking,
+    /// A web address (`home_address`), or empty for the new tab page.
+    #[serde(deserialize_with = "lenient_default")]
+    pub home: String,
 }
 
 fn lenient_default<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -163,8 +175,35 @@ impl Default for Settings {
             autofill: true,
             download_dir: String::new(),
             tracking: Tracking::default(),
+            home: String::new(),
         }
     }
+}
+
+/// The web address `text` names, as the address bar would go to it, or
+/// `None` when the address bar would search for it, refuse it, or go
+/// somewhere that is not a web page.
+pub fn home_address(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || text.chars().count() > MAX_HOME {
+        return None;
+    }
+    match crate::url::resolve_input(text) {
+        crate::url::Resolved::Url(u)
+            if (u.starts_with("https://") || u.starts_with("http://"))
+                && u.chars().count() <= MAX_HOME
+                && u != crate::url::search_url(text) =>
+        {
+            Some(u)
+        }
+        _ => None,
+    }
+}
+
+/// What a home setting read back may be: empty, or an address as
+/// `home_address` gives it.
+fn valid_home(home: &str) -> bool {
+    home.is_empty() || home_address(home).as_deref() == Some(home)
 }
 
 /// A download folder worth passing to WebView2: absolute, plain text, and not
@@ -253,6 +292,9 @@ impl Stored for Settings {
         if !valid_dir(&self.download_dir) {
             self.download_dir.clear();
         }
+        if !valid_home(&self.home) {
+            self.home.clear();
+        }
     }
 }
 
@@ -299,6 +341,16 @@ impl State {
         if let Some(s) = &mut self.store {
             s.save(&self.value);
         }
+    }
+
+    /// Where the home button goes: the home address, or the new tab page.
+    pub fn home_url(&self) -> &str {
+        if self.value.home.is_empty() { crate::url::BLANK } else { &self.value.home }
+    }
+
+    /// The first tab's address when no session is brought back.
+    pub fn start_url(&self) -> &str {
+        if self.value.startup == Startup::Home { self.home_url() } else { crate::url::BLANK }
     }
 }
 
@@ -375,6 +427,7 @@ struct View<'a> {
     autofill: bool,
     folder: &'a str,
     tracking: &'a str,
+    home: &'a str,
     /// WebView2's own folder, shown when `folder` is empty.
     default_folder: &'a str,
     /// A short code for the page to word (never text from here).
@@ -389,6 +442,7 @@ fn render(app: &mut App, keep: bool, status: &str) {
         autofill: s.value.autofill,
         folder: &s.value.download_dir,
         tracking: s.value.tracking.id(),
+        home: &s.value.home,
         default_folder: s.system_dir.as_deref().unwrap_or(""),
         status,
     };
@@ -416,10 +470,12 @@ pub enum SettingsCmd {
     /// A folder to download to; empty goes back to WebView2's own.
     Folder(String),
     Tracking(Tracking),
+    /// A home address as typed; empty goes back to the new tab page.
+    Home(String),
 }
 
 impl SettingsCmd {
-    pub const NAMES: &[&str] = &["st-engine", "st-startup", "st-autofill", "st-folder", "st-tracking"];
+    pub const NAMES: &[&str] = &["st-engine", "st-startup", "st-autofill", "st-folder", "st-tracking", "st-home"];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         Some(match (name, arg?) {
@@ -429,6 +485,7 @@ impl SettingsCmd {
             ("st-autofill", "0") => Self::Autofill(false),
             ("st-folder", a) if a.chars().count() <= MAX_DIR => Self::Folder(a.to_string()),
             ("st-tracking", a) => Self::Tracking(Tracking::from_id(a)?),
+            ("st-home", a) if a.chars().count() <= MAX_HOME => Self::Home(a.to_string()),
             _ => return None,
         })
     }
@@ -444,6 +501,8 @@ pub fn on_command(app: &mut App, cmd: SettingsCmd) {
         SettingsCmd::Engine(e) => {
             app.settings.value.engine = e;
             set_engine(e);
+            // The new tab pages' search box searches with it too.
+            crate::newtab::refresh(app);
         }
         SettingsCmd::Startup(s) => app.settings.value.startup = s,
         SettingsCmd::Autofill(on) => {
@@ -471,6 +530,17 @@ pub fn on_command(app: &mut App, cmd: SettingsCmd) {
                 status = "tracking-failed";
             }
         }
+        SettingsCmd::Home(text) => {
+            if text.trim().is_empty() {
+                app.settings.value.home.clear();
+                status = "home-reset";
+            } else if let Some(home) = home_address(&text) {
+                app.settings.value.home = home;
+                status = "home-ok";
+            } else {
+                status = "home-bad";
+            }
+        }
     }
     app.settings.save();
     render(app, true, status);
@@ -484,6 +554,34 @@ mod tests {
         let mut s: Settings = serde_json::from_str(json).unwrap();
         s.sanitize();
         s
+    }
+
+    #[test]
+    fn a_home_address_is_a_web_address_the_address_bar_would_go_to() {
+        assert_eq!(home_address("  example.com/x "), Some("https://example.com/x".into()));
+        assert_eq!(home_address("http://intranet:8080/"), Some("http://intranet:8080/".into()));
+        assert_eq!(home_address("localhost:3000"), Some("http://localhost:3000".into()));
+        for bad in [
+            "",
+            "   ",
+            "two words",
+            "javascript:alert(1)",
+            "file:///C:/x",
+            r"C:\x",
+            "about:blank",
+            "about:flags",
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop/p.html",
+            "nodot",
+        ] {
+            assert_eq!(home_address(bad), None, "{bad:?}");
+        }
+        assert_eq!(home_address(&format!("https://e.com/{}", "a".repeat(MAX_HOME))), None);
+        // Read back: kept only as `home_address` would have written it.
+        assert_eq!(read(r#"{"home":"https://e.com/"}"#).home, "https://e.com/");
+        for bad in [r#"{"home":"e.com"}"#, r#"{"home":"javascript:x"}"#, r#"{"home":5}"#, r#"{"home":"a b"}"#] {
+            assert_eq!(read(bad).home, "", "{bad}");
+        }
+        assert_eq!(read(r#"{"startup":"home"}"#).startup, Startup::Home);
     }
 
     #[test]
@@ -636,7 +734,7 @@ mod tests {
         }
         assert_eq!(p("st-folder", Some(&"a".repeat(MAX_DIR + 1))), None);
         for n in SettingsCmd::NAMES {
-            assert!(p(n, Some("x")).is_none() || *n == "st-folder", "{n}");
+            assert!(p(n, Some("x")).is_none() || *n == "st-folder" || *n == "st-home", "{n}");
         }
     }
 }

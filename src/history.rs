@@ -225,6 +225,15 @@ pub fn rank(text: &str, sources: &[&dyn SuggestSource], now: u64, limit: usize) 
     out
 }
 
+/// A web address's host (with its port), `www.` dropped: what counts as
+/// one site.
+pub(crate) fn site_of(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    host.strip_prefix("www.").unwrap_or(host)
+}
+
 // ---------------------------------------------------------------- index
 
 /// One address with its latest title and visit statistics.
@@ -865,6 +874,27 @@ impl History {
         rank(text, &[&self.index], now_secs(), SUGGESTIONS)
     }
 
+    /// The most visited sites, for the new tab page: the addresses the user
+    /// went to most often (then most recently), one per site (host), best
+    /// first.
+    pub fn top_sites(&self, limit: usize) -> Vec<Suggestion> {
+        let mut pages: Vec<&Page> = self.index.pages.iter().filter(|p| p.url.starts_with("https://") || p.url.starts_with("http://")).collect();
+        pages.sort_by(|a, b| b.count.cmp(&a.count).then(b.last.cmp(&a.last)));
+        let mut hosts: Vec<&str> = Vec::new();
+        let mut out = Vec::new();
+        for p in pages {
+            if out.len() >= limit {
+                break;
+            }
+            let host = site_of(&p.url);
+            if !hosts.contains(&host) {
+                hosts.push(host);
+                out.push(Suggestion { u: p.url.clone(), t: p.title.clone() });
+            }
+        }
+        out
+    }
+
     /// `suggest` with one more source (the bookmarks) ranked alongside.
     pub fn suggest_with(&self, text: &str, extra: &dyn SuggestSource) -> Vec<Suggestion> {
         rank(text, &[&self.index, extra], now_secs(), SUGGESTIONS)
@@ -908,6 +938,30 @@ mod tests {
 
     fn urls(s: &[Suggestion]) -> Vec<&str> {
         s.iter().map(|s| s.u.as_str()).collect()
+    }
+
+    #[test]
+    fn top_sites_are_the_most_visited_one_per_site() {
+        let link = |u: &str, ts| Visit { u: u.into(), t: String::new(), ts, k: VISIT_AUTO };
+        let h = History {
+            index: Index::build(&[
+                visit("https://a.com/", "A", 10),
+                visit("https://www.a.com/x", "A x", 11),
+                visit("https://www.a.com/x", "A x", 12),
+                visit("https://b.org/", "B", 20),
+                visit("https://b.org/", "B", 21),
+                visit("https://b.org/", "B", 22),
+                visit("http://c.net:8080/", "C", 30),
+                link("https://d.dev/", 40),
+                visit("https://e.io/", "E", 5),
+            ]),
+            ..History::default()
+        };
+        // Most user visits first, then the latest; www.a.com is a.com.
+        assert_eq!(urls(&h.top_sites(10)), ["https://b.org/", "https://www.a.com/x", "http://c.net:8080/", "https://e.io/", "https://d.dev/"]);
+        assert_eq!(urls(&h.top_sites(2)), ["https://b.org/", "https://www.a.com/x"]);
+        assert!(h.top_sites(0).is_empty());
+        assert_eq!(site_of("https://user@www.x.com:8443/a?b#c"), "x.com:8443");
     }
 
     #[test]

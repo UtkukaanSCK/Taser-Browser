@@ -247,7 +247,7 @@ impl Bookmarks {
         self.file.items = items;
     }
 
-    #[cfg(any(test, feature = "selftest"))]
+    /// The bookmarks, in the order of the list.
     pub fn items(&self) -> &[Bookmark] {
         &self.file.items
     }

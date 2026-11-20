@@ -122,6 +122,7 @@ const ui = {
   fwd.addEventListener("click", () => send("forward"));
   reload.addEventListener("click", () => send(reload.hasAttribute("data-loading") ? "stop" : "reload"));
   newTab.addEventListener("click", () => send("new"));
+  $("home").addEventListener("click", () => send("home"));
   $("menu-btn").addEventListener("click", () => send("menu-toggle"));
   downloadsBtn.addEventListener("click", () => send("menu-pick:downloads"));
   zoomBtn.addEventListener("click", () => {

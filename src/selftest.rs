@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 646;
+const EXPECTED_CHECKS: u32 = 659;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -399,8 +399,29 @@ const DELAYS: &[u64] = &[
     3000, // 311 check 1.4 is in; a timer tick, last check long ago
     1500, // 312 check the tick checked; another tick
     900,  // 313 check it asked nothing
-    900,  // 314 last tab close quits
+    1500, // 314 new tab page: Ctrl+T
+    3500, // 315 check the page; search for an address from its box
+    900,  // 316 check it went; set a home address on the settings page
+    900,  // 317 check it took; a script address, with Enter
+    3500, // 318 check it was refused; the home button
+    900,  // 319 check it went home; reset the home address
+    2500, // 320 check it reset; the home button
+    900,  // 321 check the new tab page lists the visited sites
+    900,  // 322 close it; last tab close quits
 ];
+
+/// What a new tab page shows: `main` (it is there), `ph` (the search box's
+/// placeholder), `bad` (tiles that are not web addresses), `ex` (a tile for
+/// example.com or example.org).
+const NEWTAB_JS: &str = "(() => { const q = document.getElementById('xb-q'); \
+    const hrefs = [...document.querySelectorAll('#xb-newtab a.tile')].map((a) => a.href); \
+    return 'main=' + !!document.getElementById('xb-newtab') + ';ph=' + (q ? q.placeholder : '') \
+    + ';bad=' + hrefs.filter((h) => !/^https?:/.test(h)).length \
+    + ';ex=' + hrefs.some((h) => /^https:\\/\\/example\\.(com|org)\\//.test(h)); })()";
+
+/// The settings page's status line and home box.
+const HOME_STATUS_JS: &str =
+    "'s=' + document.getElementById('s-status').textContent + ';v=' + document.getElementById('s-home').value";
 
 pub fn start(proxy: Proxy) {
     if reached_in_child("selftest") {
@@ -2057,8 +2078,9 @@ pub fn step(app: &mut App, n: u32) {
             let ids = order(app);
             check("ui-drag-moves-tab", ids == [c, d, a, b], format!("{ids:?}"));
             // Narrow tabs, d inactive (two new blank tabs, the last one
-            // active): a drag that starts on d's page icon.
-            app.window.set_inner_size(LogicalSize::new(880.0, 520.0));
+            // active): a drag that starts on d's page icon. (880 px plus the
+            // home button's 36: six tabs just fit.)
+            app.window.set_inner_size(LogicalSize::new(916.0, 520.0));
             for key in ["se", "sf"] {
                 app.handle(UserEvent::Ui(UiCommand::NewTab));
                 remember(key, app.tabs.active().map_or(-1, |id| id as i64));
@@ -4698,7 +4720,7 @@ pub fn step(app: &mut App, n: u32) {
             // still exists and does not throw, so the page cannot tell),
             // and the page sees no host objects.
             let bridge = crate::popup::view(app).and_then(crate::native::host_bridge);
-            const JS: &str = "`url=${document.body.dataset.url};id=${document.body.dataset.id};n=${document.body.dataset.n};href=${location.href};objects=${(() => { try { const w = window.chrome && window.chrome.webview; return !!(w && w.hostObjects && Object.keys(w.hostObjects).length); } catch (e) { return false; } })()}`";
+            const JS: &str = "`url=${document.body.dataset.url};id=${document.body.dataset.id};n=${document.body.dataset.n};href=${location.href};objects=${(() => { try { const w = window.chrome && window.chrome.webview; return !!(w && w.hostObjects && Object.keys(w.hostObjects).length); } catch (e) { return false; } })()};iw=${innerWidth};ih=${innerHeight};sw=${document.documentElement.scrollWidth};sh=${document.documentElement.scrollHeight}`";
             eval(crate::popup::view(app), "ext-popup-tabs-query", JS, move |r| {
                 // WebView2's own tab for the active page, found by its
                 // address: one tab, with WebView2's id.
@@ -4715,6 +4737,14 @@ pub fn step(app: &mut App, n: u32) {
                     "ext-popup-has-no-web-messages",
                     bridge == Some((false, false)) && field(&r, "objects") == "false",
                     format!("web messages and host objects {bridge:?}, {r}"),
+                );
+                // Sized to its page (one short line), as Chrome sizes it:
+                // all of it shows, and no empty box is left around it.
+                let (iw, ih, sw, sh) = (num(&r, "iw"), num(&r, "ih"), num(&r, "sw"), num(&r, "sh"));
+                check(
+                    "ext-popup-sized-to-its-page",
+                    iw >= crate::popup::MIN_W && ih >= crate::popup::MIN_H && iw < crate::popup::POPUP_W && ih < 100.0 && sw <= iw && sh <= ih,
+                    format!("viewport {iw}x{ih}, content {sw}x{sh}"),
                 );
             });
             if let Some(v) = crate::popup::view(app) {
@@ -4754,7 +4784,7 @@ pub fn step(app: &mut App, n: u32) {
             // A click on the frame's mail link (CDP input into the popup's
             // page, a user gesture there; nothing reaches the desktop).
             if let Some(v) = crate::popup::view(app) {
-                cdp_click(v, 40.0, 40.0);
+                cdp_click(v, 10.0, 10.0);
             }
         }
         277 => {
@@ -5422,7 +5452,83 @@ pub fn step(app: &mut App, n: u32) {
             check("update-timer-waits-a-day", new.is_empty() && app.webstore.busy_with().is_none(), format!("asked {new:?}"));
         }
         314 => {
+            // The new tab page.
             crate::overlay::close(app);
+            remember("nt-tabs", app.tabs.len() as i64);
+            press(app, vk::T, CTRL);
+        }
+        315 => {
+            check(
+                "ctrl-t-tab-stays-blank",
+                app.tabs.len() as i64 == recall("nt-tabs") + 1 && active_url(app) == crate::url::BLANK,
+                format!("{} tabs, {}", app.tabs.len(), active_url(app)),
+            );
+            page_eval(app, "newtab-fills-a-new-blank-tab", NEWTAB_JS, |r| {
+                check(
+                    "newtab-fills-a-new-blank-tab",
+                    field(&r, "main") == "true" && field(&r, "ph") == crate::newtab::SEARCH_LABEL && field(&r, "bad") == "0",
+                    &r,
+                );
+            });
+            page_js(
+                app,
+                "document.getElementById('xb-q').value = 'example.com'; document.getElementById('xb-search').requestSubmit();",
+            );
+        }
+        316 => {
+            check("newtab-search-box-goes-to-an-address", active_url(app).starts_with("https://example.com"), active_url(app));
+            // A home address, through the settings page.
+            crate::settings::open(app);
+            overlay_js(
+                app,
+                "document.getElementById('s-home').value = ' example.org '; document.getElementById('s-home-apply').click();",
+            );
+        }
+        317 => {
+            check("home-setting-takes-a-web-address", app.settings.home_url() == "https://example.org", app.settings.home_url());
+            overlay_eval(app, "home-setting-says-so", HOME_STATUS_JS, |r| {
+                check("home-setting-says-so", field(&r, "s") == "Ana sayfa değiştirildi." && field(&r, "v") == "https://example.org", &r);
+            });
+            overlay_js(
+                app,
+                "const h = document.getElementById('s-home'); h.focus(); h.value = 'javascript:alert(1)'; \
+                 h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));",
+            );
+        }
+        318 => {
+            check("home-setting-refuses-a-script", app.settings.home_url() == "https://example.org", app.settings.home_url());
+            overlay_eval(app, "home-setting-says-it-refused", HOME_STATUS_JS, |r| {
+                // The refused text stays in the box, to be corrected.
+                check(
+                    "home-setting-says-it-refused",
+                    field(&r, "s") == "Bir web adresi girin, örneğin example.com." && field(&r, "v") == "javascript:alert(1)",
+                    &r,
+                );
+            });
+            crate::overlay::close(app);
+            ui_js(app, "document.getElementById('home').click()");
+        }
+        319 => {
+            check("home-button-goes-to-the-home-address", active_url(app).starts_with("https://example.org"), active_url(app));
+            crate::settings::open(app);
+            overlay_js(app, "document.getElementById('s-home-reset').click();");
+        }
+        320 => {
+            check("home-setting-resets-to-the-new-tab-page", app.settings.home_url() == crate::url::BLANK, app.settings.home_url());
+            crate::overlay::close(app);
+            ui_js(app, "document.getElementById('home').click()");
+        }
+        321 => {
+            check("home-button-opens-the-new-tab-page", active_url(app) == crate::url::BLANK, active_url(app));
+            page_eval(app, "newtab-lists-visited-sites", NEWTAB_JS, |r| {
+                check("newtab-lists-visited-sites", field(&r, "main") == "true" && field(&r, "ex") == "true" && field(&r, "bad") == "0", &r);
+            });
+        }
+        322 => {
+            crate::overlay::close(app);
+            // The new tab page's tab, then the last one.
+            app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
+            check("only-the-first-tab-is-left", app.tabs.len() == 1 && !app.quit, app.tabs.len());
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
             check("last-tab-close-quits", app.quit, "app still running");
             let passes = PASSES.load(Ordering::Relaxed);

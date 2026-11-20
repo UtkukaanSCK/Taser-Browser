@@ -29,6 +29,8 @@ pub enum UiCommand {
     Forward,
     Reload,
     Stop,
+    /// The strip's home button.
+    Home,
     Minimize,
     ToggleMaximize,
     CloseWindow,
@@ -81,6 +83,7 @@ impl UiCommand {
             ("forward", None) => Self::Forward,
             ("reload", None) => Self::Reload,
             ("stop", None) => Self::Stop,
+            ("home", None) => Self::Home,
             ("min", None) => Self::Minimize,
             ("max", None) => Self::ToggleMaximize,
             ("quit", None) => Self::CloseWindow,
@@ -226,6 +229,7 @@ mod tests {
         assert_eq!(UiCommand::parse("navigate:"), Some(UiCommand::Navigate(String::new())));
         assert_eq!(UiCommand::parse("resize:nw"), Some(UiCommand::ResizeTop(TopEdge::Left)));
         assert_eq!(UiCommand::parse("quit"), Some(UiCommand::CloseWindow));
+        assert_eq!(UiCommand::parse("home"), Some(UiCommand::Home));
         assert_eq!(UiCommand::parse("move:4:2"), Some(UiCommand::Strip(StripCmd::Move { id: 4, to: 2 })));
         assert_eq!(UiCommand::parse("mute:4"), Some(UiCommand::Strip(StripCmd::ToggleMute(4))));
         assert_eq!(UiCommand::parse("zoom-reset:4"), Some(UiCommand::Page(PageCmd::ZoomReset(4))));
@@ -261,12 +265,20 @@ mod tests {
             "suggest", "suggest:1", "suggest:x:1:a", "suggest-key:left", "ov-open:1", "ov-close:1", "ov-cleared:1",
             "ov-data-cleared", "menu-toggle:1", "menu-pick", "menu-pick:", "menu-pick:Find", "menu-pick:exit",
             "st-engine", "st-engine:yahoo", "st-startup:x", "st-autofill:2", "st-folder", "st-theme:dark",
+            "home:1", "Home", "st-home",
             "ext-actions", "ext-actions:x", "ext-remove", "ext-remove:abc", "ext-popup:", "ext-timeout:1",
         ] {
             assert_eq!(UiCommand::parse(bad), None, "{bad:?}");
         }
         let huge = format!("navigate:{}", "a".repeat(MAX_NAV_INPUT + 1));
         assert_eq!(UiCommand::parse(&huge), None);
+        let home = "a".repeat(crate::settings::MAX_HOME);
+        assert_eq!(
+            UiCommand::parse(&format!("st-home:{home}")),
+            Some(UiCommand::Settings(SettingsCmd::Home(home.clone())))
+        );
+        assert_eq!(UiCommand::parse(&format!("st-home:{home}a")), None);
+        assert_eq!(UiCommand::parse("st-home:"), Some(UiCommand::Settings(SettingsCmd::Home(String::new()))));
     }
 
     const CTRL: Mods = Mods { ctrl: true, shift: false, alt: false };

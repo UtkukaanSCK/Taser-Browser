@@ -8,6 +8,8 @@
 use crate::crx::is_extension_id;
 use crate::net::MAX_URL;
 
+/// The store's front page (the extensions page's "Chrome Web Mağazası").
+pub const STORE_URL: &str = "https://chromewebstore.google.com/";
 const DETAIL_PREFIX: &str = "https://chromewebstore.google.com/detail/";
 /// Everything under this path is X-Browser's and never reaches the store.
 const SENTINEL_ROOT: &str = "https://chromewebstore.google.com/_xb";
