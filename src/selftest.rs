@@ -43,7 +43,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 659;
+const EXPECTED_CHECKS: u32 = 661;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -398,16 +398,18 @@ const DELAYS: &[u64] = &[
     1500, // 310 check 1.4 waits; answer "no"
     3000, // 311 check 1.4 is in; a timer tick, last check long ago
     1500, // 312 check the tick checked; another tick
-    900,  // 313 check it asked nothing
-    1500, // 314 new tab page: Ctrl+T
-    3500, // 315 check the page; search for an address from its box
-    900,  // 316 check it went; set a home address on the settings page
-    900,  // 317 check it took; a script address, with Enter
-    3500, // 318 check it was refused; the home button
-    900,  // 319 check it went home; reset the home address
-    2500, // 320 check it reset; the home button
-    900,  // 321 check the new tab page lists the visited sites
-    900,  // 322 close it; last tab close quits
+    900,  // 313 check it asked nothing; the page open, its button: 1.5 wants more
+    1500, // 314 check the question is over the page; answer "no"
+    1500, // 315 check the page is back and 1.4 stays; close it
+    1500, // 316 new tab page: Ctrl+T
+    3500, // 317 check the page; search for an address from its box
+    900,  // 318 check it went; set a home address on the settings page
+    900,  // 319 check it took; a script address, with Enter
+    3500, // 320 check it was refused; the home button
+    900,  // 321 check it went home; reset the home address
+    2500, // 322 check it reset; the home button
+    900,  // 323 check the new tab page lists the visited sites
+    900,  // 324 close it; last tab close quits
 ];
 
 /// What a new tab page shows: `main` (it is there), `ph` (the search box's
@@ -5124,15 +5126,16 @@ pub fn step(app: &mut App, n: u32) {
             // Store updates (task 5B), against the fake store
             // (`webstore::fake`): a fresh self-signed key, its packages at
             // 1.0 to 1.4, the 1.0 one behind the store URL and the others at
-            // their own addresses. All want storage; 1.3 also wants a site.
+            // their own addresses. All want storage; 1.3 and 1.5 also want a
+            // site.
             use crate::crx::testpkg::{TestKey, crx, stored, zip};
             use crate::webstore::fake;
             fake::clear();
             let key = TestKey::rsa();
             let id = key.id();
             let mut sums = Vec::new();
-            for v in ["1.0", "1.1", "1.2", "1.3", "1.4"] {
-                let hosts = if v == "1.3" { r#","host_permissions":["https://example.com/*"]"# } else { "" };
+            for v in ["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] {
+                let hosts = if v == "1.3" || v == "1.5" { r#","host_permissions":["https://example.com/*"]"# } else { "" };
                 let manifest = format!(r#"{{"manifest_version":3,"name":"XB Update","version":"{v}","permissions":["storage"]{hosts}}}"#);
                 let body = crx(&zip(&[stored("manifest.json", manifest.as_bytes())]), &[&key]);
                 let hex: String = crate::crx::sha256(&[&body]).unwrap_or_default().iter().map(|b| format!("{b:02x}")).collect();
@@ -5450,14 +5453,50 @@ pub fn step(app: &mut App, n: u32) {
             let asked = crate::webstore::fake::asked();
             let new = &asked[(recall("upd-asked") as usize).min(asked.len())..];
             check("update-timer-waits-a-day", new.is_empty() && app.webstore.busy_with().is_none(), format!("asked {new:?}"));
+            // A version that wants more, found by the page's button with
+            // the page open: the question comes over the page. In front to
+            // step 315 (`App::in_front`).
+            app.foreground = Some(true);
+            crate::ext_ui::open(app);
+            serve_update_check(&update_id(), "1.5", None);
+            overlay_click(app, "#x-check");
         }
         314 => {
+            let id = update_id();
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "update-asks-over-the-extensions-page",
+                app.overlay.mode == Mode::Store && shown && app.webstore.busy_with() == Some(id.as_str()),
+                format!("{:?}, visible {shown}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+            app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::No)));
+        }
+        315 => {
+            // "No": the old version stays, and the page is back.
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "update-no-returns-to-the-extensions-page",
+                app.overlay.mode == Mode::Extensions
+                    && shown
+                    && app.webstore.busy_with().is_none()
+                    && rec == Some(("1.4".into(), true))
+                    && !home.join("1.5").exists(),
+                format!("{:?}, visible {shown}, job {:?}, record {rec:?}, 1.5 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.5").exists()),
+            );
+            crate::overlay::close(app);
+            app.focus_after_switch();
+            app.foreground = None;
+        }
+        316 => {
             // The new tab page.
             crate::overlay::close(app);
             remember("nt-tabs", app.tabs.len() as i64);
             press(app, vk::T, CTRL);
         }
-        315 => {
+        317 => {
             check(
                 "ctrl-t-tab-stays-blank",
                 app.tabs.len() as i64 == recall("nt-tabs") + 1 && active_url(app) == crate::url::BLANK,
@@ -5475,7 +5514,7 @@ pub fn step(app: &mut App, n: u32) {
                 "document.getElementById('xb-q').value = 'example.com'; document.getElementById('xb-search').requestSubmit();",
             );
         }
-        316 => {
+        318 => {
             check("newtab-search-box-goes-to-an-address", active_url(app).starts_with("https://example.com"), active_url(app));
             // A home address, through the settings page.
             crate::settings::open(app);
@@ -5484,7 +5523,7 @@ pub fn step(app: &mut App, n: u32) {
                 "document.getElementById('s-home').value = ' example.org '; document.getElementById('s-home-apply').click();",
             );
         }
-        317 => {
+        319 => {
             check("home-setting-takes-a-web-address", app.settings.home_url() == "https://example.org", app.settings.home_url());
             overlay_eval(app, "home-setting-says-so", HOME_STATUS_JS, |r| {
                 check("home-setting-says-so", field(&r, "s") == "Ana sayfa değiştirildi." && field(&r, "v") == "https://example.org", &r);
@@ -5495,7 +5534,7 @@ pub fn step(app: &mut App, n: u32) {
                  h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));",
             );
         }
-        318 => {
+        320 => {
             check("home-setting-refuses-a-script", app.settings.home_url() == "https://example.org", app.settings.home_url());
             overlay_eval(app, "home-setting-says-it-refused", HOME_STATUS_JS, |r| {
                 // The refused text stays in the box, to be corrected.
@@ -5508,23 +5547,23 @@ pub fn step(app: &mut App, n: u32) {
             crate::overlay::close(app);
             ui_js(app, "document.getElementById('home').click()");
         }
-        319 => {
+        321 => {
             check("home-button-goes-to-the-home-address", active_url(app).starts_with("https://example.org"), active_url(app));
             crate::settings::open(app);
             overlay_js(app, "document.getElementById('s-home-reset').click();");
         }
-        320 => {
+        322 => {
             check("home-setting-resets-to-the-new-tab-page", app.settings.home_url() == crate::url::BLANK, app.settings.home_url());
             crate::overlay::close(app);
             ui_js(app, "document.getElementById('home').click()");
         }
-        321 => {
+        323 => {
             check("home-button-opens-the-new-tab-page", active_url(app) == crate::url::BLANK, active_url(app));
             page_eval(app, "newtab-lists-visited-sites", NEWTAB_JS, |r| {
                 check("newtab-lists-visited-sites", field(&r, "main") == "true" && field(&r, "ex") == "true" && field(&r, "bad") == "0", &r);
             });
         }
-        322 => {
+        324 => {
             crate::overlay::close(app);
             // The new tab page's tab, then the last one.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));

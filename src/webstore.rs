@@ -30,11 +30,14 @@
 //! the CRX checks above; its manifest must carry the version offered
 //! (`verify_update`). It asks only when the new version wants a permission
 //! the installed one did not have ("Güncelle", listing only what is new),
-//! and only when nothing else is on screen: with the overlay open, in
-//! fullscreen or in the background it is left for the next check. Else it
-//! goes on unseen. Once WebView2 has the new version, the folder of the old
-//! one is deleted (`retire`). A version whose package or install failed is
-//! not fetched again this start (`State::failed`).
+//! and only when nothing else is on screen but the Extensions page: over
+//! another overlay page or an extension's popup, in fullscreen or in the
+//! background it is left for the next check. Asked over the Extensions page
+//! (its "Güncellemeleri denetle"), the page comes back once the question
+//! goes (`ExtCmd::BackToPage`). Else it goes on unseen. Once WebView2 has
+//! the new version, the folder of the old one is deleted (`retire`). A
+//! version whose package or install failed is not fetched again this start
+//! (`State::failed`).
 //!
 //! The check runs at most once a day (`update_check_due`, the time kept in
 //! `extensions.json`), asked for by a timer (`start_update_timer`) and run
@@ -247,6 +250,9 @@ struct Job {
     /// The folder recorded for the id when unpacking began, deleted once the
     /// new version is in (`retire`).
     replaced: Option<PathBuf>,
+    /// The question went over the Extensions page, which comes back when
+    /// the job ends.
+    over_page: bool,
     /// Set when the job ends (`finish`): its download, if still running,
     /// stops at its next read (`net::Limits::cancel`).
     cancel: Arc<AtomicBool>,
@@ -406,6 +412,7 @@ fn new_job(app: &mut App, id: &str, action: Action, confirm: bool, tab: Option<T
         spot: crate::overlay::store_spot(),
         offered: None,
         replaced: None,
+        over_page: false,
         cancel: Arc::default(),
     });
     w.next
@@ -678,12 +685,15 @@ fn fetched(app: &mut App, result: Result<Fetched, Failure>) {
     match result {
         Err(f) => end(app, Err(f)),
         // New permissions: the update waits for the user's yes, from now on
-        // like an install that asks. Never over something else on screen
-        // (a menu, a question, an extension's popup, a page in fullscreen)
-        // or while X-Browser is in the background: then it is left for the
-        // next check (Cancelled is not remembered as failed).
+        // like an install that asks. Over nothing or over the Extensions
+        // page (whose button may have asked for the check), which comes
+        // back afterwards. Never over something else on screen (a menu, a
+        // question, an extension's popup, a page in fullscreen) or while
+        // X-Browser is in the background: then it is left for the next
+        // check (Cancelled is not remembered as failed).
         Ok(Fetched { bytes, info, widened: true }) if update => {
-            let free = app.overlay.mode == Mode::Hidden
+            let over_page = app.overlay.mode == Mode::Extensions;
+            let free = (app.overlay.mode == Mode::Hidden || over_page)
                 && crate::popup::extension(app).is_none()
                 && !app.fullscreen.on()
                 && app.in_front();
@@ -692,6 +702,7 @@ fn fetched(app: &mut App, result: Result<Fetched, Failure>) {
             }
             let Some(job) = app.webstore.job.as_mut() else { return };
             job.confirm = true;
+            job.over_page = over_page;
             job.stage = Stage::Asking { bytes: Some(bytes), info };
             show(app);
         }
@@ -910,6 +921,11 @@ fn finish(app: &mut App, job: Job, result: Result<String, Failure>) {
     // or a busy answer may go another way next time.
     if let (Some(version), Err(Failure::Package(_) | Failure::Install(_))) = (&job.offered, &result) {
         app.webstore.remember_failed(&job.id, version);
+    }
+    // Asked over the Extensions page: it comes back, later, as this may run
+    // while the overlay is still closing the question (`overlay::reset`).
+    if job.over_page {
+        let _ = app.proxy().send_event(UserEvent::Ui(crate::commands::UiCommand::Ext(crate::ext_ui::ExtCmd::BackToPage)));
     }
     match job.action {
         // `on_installed` moves the queue on, after first-run.
