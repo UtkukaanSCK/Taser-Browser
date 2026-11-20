@@ -12,6 +12,9 @@
 //! - `tracking`: WebView2's tracking prevention level for the content
 //!   profile (off, basic, balanced or strict; default balanced, WebView2's
 //!   own default).
+//! - `https_only`, `strip_params`, `gpc`: HTTPS-only, dropping tracking
+//!   parameters from addresses, and Global Privacy Control (`privacy`; all
+//!   on by default).
 //!
 //! The page is drawn by the overlay (`ui/js/settings.js`), never in a content
 //! tab, and talks over the same origin-checked IPC as the rest of the UI.
@@ -142,7 +145,7 @@ pub struct Settings {
     pub engine: Engine,
     #[serde(deserialize_with = "lenient_default")]
     pub startup: Startup,
-    #[serde(deserialize_with = "lenient_autofill")]
+    #[serde(deserialize_with = "lenient_on")]
     pub autofill: bool,
     #[serde(deserialize_with = "lenient_default")]
     pub download_dir: String,
@@ -151,6 +154,12 @@ pub struct Settings {
     /// A web address (`home_address`), or empty for the new tab page.
     #[serde(deserialize_with = "lenient_default")]
     pub home: String,
+    #[serde(deserialize_with = "lenient_on")]
+    pub https_only: bool,
+    #[serde(deserialize_with = "lenient_on")]
+    pub strip_params: bool,
+    #[serde(deserialize_with = "lenient_on")]
+    pub gpc: bool,
 }
 
 fn lenient_default<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -162,8 +171,8 @@ where
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
-/// Anything but a boolean reads as on (the default).
-fn lenient_autofill<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+/// Anything but a boolean reads as on (the default of every switch here).
+fn lenient_on<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(true))
 }
 
@@ -176,6 +185,9 @@ impl Default for Settings {
             download_dir: String::new(),
             tracking: Tracking::default(),
             home: String::new(),
+            https_only: true,
+            strip_params: true,
+            gpc: true,
         }
     }
 }
@@ -310,6 +322,10 @@ fn set_engine(e: Engine) {
     ENGINE.store(i as u8, Ordering::Relaxed);
 }
 
+fn set_privacy(s: &Settings) {
+    crate::privacy::set(s.https_only, s.strip_params, s.gpc);
+}
+
 /// What `App` keeps: the values, and where they are saved.
 #[derive(Default)]
 pub struct State {
@@ -334,6 +350,7 @@ impl State {
             eprintln!("x-browser: {} restored from its backup", Settings::NAME);
         }
         set_engine(loaded.value.engine);
+        set_privacy(&loaded.value);
         Self { value: loaded.value, store: Some(store), system_dir: None, folder_pending: false, tracking_pending: false }
     }
 
@@ -388,6 +405,15 @@ fn apply_autofill(app: &App) {
     }
 }
 
+/// The privacy switches, for every tab's next navigation; GPC's header and
+/// script into or out of every tab (new tabs get them when made).
+fn apply_privacy(app: &App) {
+    set_privacy(&app.settings.value);
+    for (id, v) in &app.views {
+        let _ = crate::native::apply_gpc(v, *id, app.settings.value.gpc);
+    }
+}
+
 /// The download folder belongs to the content tabs' profile (the UI has its
 /// own, `ui::UI_PROFILE`), so it is set through a tab; any tab will do. With
 /// none yet (the restored tab's webview could not be made), the first one
@@ -428,6 +454,9 @@ struct View<'a> {
     folder: &'a str,
     tracking: &'a str,
     home: &'a str,
+    https_only: bool,
+    strip_params: bool,
+    gpc: bool,
     /// WebView2's own folder, shown when `folder` is empty.
     default_folder: &'a str,
     /// A short code for the page to word (never text from here).
@@ -443,6 +472,9 @@ fn render(app: &mut App, keep: bool, status: &str) {
         folder: &s.value.download_dir,
         tracking: s.value.tracking.id(),
         home: &s.value.home,
+        https_only: s.value.https_only,
+        strip_params: s.value.strip_params,
+        gpc: s.value.gpc,
         default_folder: s.system_dir.as_deref().unwrap_or(""),
         status,
     };
@@ -472,10 +504,15 @@ pub enum SettingsCmd {
     Tracking(Tracking),
     /// A home address as typed; empty goes back to the new tab page.
     Home(String),
+    HttpsOnly(bool),
+    StripParams(bool),
+    Gpc(bool),
 }
 
 impl SettingsCmd {
-    pub const NAMES: &[&str] = &["st-engine", "st-startup", "st-autofill", "st-folder", "st-tracking", "st-home"];
+    pub const NAMES: &[&str] = &[
+        "st-engine", "st-startup", "st-autofill", "st-folder", "st-tracking", "st-home", "st-https", "st-strip", "st-gpc",
+    ];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         Some(match (name, arg?) {
@@ -486,8 +523,20 @@ impl SettingsCmd {
             ("st-folder", a) if a.chars().count() <= MAX_DIR => Self::Folder(a.to_string()),
             ("st-tracking", a) => Self::Tracking(Tracking::from_id(a)?),
             ("st-home", a) if a.chars().count() <= MAX_HOME => Self::Home(a.to_string()),
+            ("st-https", a) => Self::HttpsOnly(switch(a)?),
+            ("st-strip", a) => Self::StripParams(switch(a)?),
+            ("st-gpc", a) => Self::Gpc(switch(a)?),
             _ => return None,
         })
+    }
+}
+
+/// A switch's "1" or "0".
+fn switch(a: &str) -> Option<bool> {
+    match a {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -540,6 +589,18 @@ pub fn on_command(app: &mut App, cmd: SettingsCmd) {
             } else {
                 status = "home-bad";
             }
+        }
+        SettingsCmd::HttpsOnly(on) => {
+            app.settings.value.https_only = on;
+            apply_privacy(app);
+        }
+        SettingsCmd::StripParams(on) => {
+            app.settings.value.strip_params = on;
+            apply_privacy(app);
+        }
+        SettingsCmd::Gpc(on) => {
+            app.settings.value.gpc = on;
+            apply_privacy(app);
         }
     }
     app.settings.save();
@@ -643,9 +704,10 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_duckduckgo_last_session_autofill_on() {
+    fn defaults_are_duckduckgo_last_session_autofill_and_privacy_on() {
         let s = Settings::default();
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::DuckDuckGo, Startup::Last, true));
+        assert_eq!((s.https_only, s.strip_params, s.gpc), (true, true, true));
         assert_eq!(s.download_dir, "");
         assert_eq!(s.tracking, Tracking::Balanced);
         assert_eq!(read("{}"), s);
@@ -654,8 +716,11 @@ mod tests {
 
     #[test]
     fn reads_what_was_saved() {
-        let s = read(r#"{"v":1,"engine":"bing","startup":"blank","autofill":false,"download_dir":"C:\\Users\\x\\Downloads","tracking":"strict"}"#);
+        let s = read(
+            r#"{"v":1,"engine":"bing","startup":"blank","autofill":false,"download_dir":"C:\\Users\\x\\Downloads","tracking":"strict","https_only":false,"strip_params":false,"gpc":false}"#,
+        );
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::Bing, Startup::Blank, false));
+        assert_eq!((s.https_only, s.strip_params, s.gpc), (false, false, false));
         assert_eq!(s.tracking, Tracking::Strict);
         assert_eq!(s.download_dir, "C:\\Users\\x\\Downloads");
         let again: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -664,7 +729,9 @@ mod tests {
 
     #[test]
     fn hostile_values_cost_only_their_field() {
-        let s = read(r#"{"engine":"evil","startup":7,"autofill":"yes","download_dir":"..\\x","tracking":"none"}"#);
+        let s = read(
+            r#"{"engine":"evil","startup":7,"autofill":"yes","download_dir":"..\\x","tracking":"none","https_only":0,"strip_params":null,"gpc":"off"}"#,
+        );
         assert_eq!(s, Settings::default(), "unknown or mistyped values read as the defaults");
         let s = read(r#"{"engine":"google","startup":[],"autofill":false,"download_dir":{"a":1}}"#);
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::Google, Startup::Last, false));
@@ -718,6 +785,9 @@ mod tests {
         assert_eq!(p("st-folder", Some("C:\\a:b")), Some(SettingsCmd::Folder("C:\\a:b".into())));
         assert_eq!(p("st-tracking", Some("strict")), Some(SettingsCmd::Tracking(Tracking::Strict)));
         assert_eq!(p("st-tracking", Some("off")), Some(SettingsCmd::Tracking(Tracking::Off)));
+        assert_eq!(p("st-https", Some("0")), Some(SettingsCmd::HttpsOnly(false)));
+        assert_eq!(p("st-strip", Some("1")), Some(SettingsCmd::StripParams(true)));
+        assert_eq!(p("st-gpc", Some("0")), Some(SettingsCmd::Gpc(false)));
         for (n, a) in [
             ("st-engine", None),
             ("st-engine", Some("")),
@@ -728,6 +798,10 @@ mod tests {
             ("st-folder", None),
             ("st-tracking", Some("none")),
             ("st-tracking", Some("")),
+            ("st-https", None),
+            ("st-https", Some("true")),
+            ("st-strip", Some("")),
+            ("st-gpc", Some("on")),
             ("st-theme", Some("dark")),
         ] {
             assert_eq!(p(n, a), None, "{n} {a:?}");

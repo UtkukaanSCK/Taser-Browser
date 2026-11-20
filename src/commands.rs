@@ -247,6 +247,8 @@ mod tests {
             UiCommand::parse("st-autofill:0"),
             Some(UiCommand::Settings(SettingsCmd::Autofill(false)))
         );
+        assert_eq!(UiCommand::parse("st-https:0"), Some(UiCommand::Settings(SettingsCmd::HttpsOnly(false))));
+        assert_eq!(UiCommand::parse("st-gpc:1"), Some(UiCommand::Settings(SettingsCmd::Gpc(true))));
         assert_eq!(UiCommand::parse("ext-actions:900"), Some(UiCommand::Ext(ExtCmd::Actions(900))));
         assert_eq!(UiCommand::parse("ext-check-updates"), Some(UiCommand::Ext(ExtCmd::CheckUpdates)));
         assert_eq!(UiCommand::parse("ext-check-updates:x"), None);
@@ -264,7 +266,7 @@ mod tests {
             "zoom-reset", "zoom-reset:", "zoom-reset:x", "zoom-reset:1:2", "zoom", "zoom:1", "fullscreen",
             "suggest", "suggest:1", "suggest:x:1:a", "suggest-key:left", "ov-open:1", "ov-close:1", "ov-cleared:1",
             "ov-data-cleared", "menu-toggle:1", "menu-pick", "menu-pick:", "menu-pick:Find", "menu-pick:exit",
-            "st-engine", "st-engine:yahoo", "st-startup:x", "st-autofill:2", "st-folder", "st-theme:dark",
+            "st-engine", "st-engine:yahoo", "st-startup:x", "st-autofill:2", "st-strip:2", "st-gpc", "st-folder", "st-theme:dark",
             "home:1", "Home", "st-home",
             "ext-actions", "ext-actions:x", "ext-remove", "ext-remove:abc", "ext-popup:", "ext-timeout:1",
         ] {

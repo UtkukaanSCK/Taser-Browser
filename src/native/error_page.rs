@@ -1,8 +1,11 @@
 //! Puts X-Browser's own error page (`crate::error_page`) into a tab whose
 //! load failed. WebView2's built-in page is turned off (`harden_content`),
 //! so the failed load leaves an empty error document; once its navigation
-//! has completed, the page is written into it.
+//! has completed, the page is written into it. When the address that
+//! failed was an `http://` one tried as https (`privacy`), the page is the
+//! HTTPS-only one, which offers the http address.
 
+use crate::tabs::TabId;
 use wry::WebView;
 
 #[cfg(windows)]
@@ -16,7 +19,7 @@ mod imp {
     use wry::WebViewExtWindows;
 
     /// A tab without it still never shows WebView2's page, only an empty one.
-    pub fn attach_error_page(view: &WebView) -> windows::core::Result<()> {
+    pub fn attach_error_page(view: &WebView, tab: TabId) -> windows::core::Result<()> {
         let wv = view.webview();
         let mut token = 0i64;
         // Whether an error document has been put on screen since the last
@@ -47,7 +50,14 @@ mod imp {
                 &NavigationCompletedEventHandler::create(Box::new(move |wv, args| {
                     let (Some(wv), Some(args)) = (wv, args) else { return Ok(()) };
                     let mut ok = BOOL(0);
-                    if args.IsSuccess(&mut ok).is_err() || ok.as_bool() || !error_shown.get() {
+                    if args.IsSuccess(&mut ok).is_err() {
+                        return Ok(());
+                    }
+                    if ok.as_bool() {
+                        crate::privacy::on_loaded(tab);
+                        return Ok(());
+                    }
+                    if !error_shown.get() {
                         return Ok(());
                     }
                     let mut status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
@@ -56,7 +66,11 @@ mod imp {
                     // entry, and so the address bar, has.
                     let mut uri = PWSTR::null();
                     let url = if wv.Source(&mut uri).is_ok() { take_pwstr(uri) } else { String::new() };
-                    if let Some(js) = crate::error_page::script(status.0, &url) {
+                    let js = match crate::privacy::on_failed(tab, &url, status.0) {
+                        Some(http) => Some(crate::error_page::https_only_script(&http, crate::privacy::HTTP_SENTINEL)),
+                        None => crate::error_page::script(status.0, &url),
+                    };
+                    if let Some(js) = js {
                         // Scripts run in the order given: one sent for a later
                         // error document replaces this one's page.
                         wv.ExecuteScript(&HSTRING::from(js), None)?;
@@ -74,7 +88,7 @@ mod imp {
 mod imp {
     use super::*;
 
-    pub fn attach_error_page(_: &WebView) -> Result<(), ()> {
+    pub fn attach_error_page(_: &WebView, _: TabId) -> Result<(), ()> {
         Ok(())
     }
 }

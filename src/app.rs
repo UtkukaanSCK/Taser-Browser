@@ -74,6 +74,9 @@ pub enum PageEvent {
     /// A navigation started; `user`: WebView2 says the user started it
     /// (a link click), as opposed to a script or redirect.
     Navigating { nav: u64, user: bool },
+    /// Navigation `nav` was stopped for `url` to load in its place: https
+    /// for http, or the address without tracking parameters (`privacy`).
+    Rewrite { url: String, nav: u64 },
     /// Navigation `nav` completed successfully: a history entry (checked there).
     Visited { url: String, title: String, nav: u64 },
 }
@@ -305,6 +308,8 @@ impl App {
     /// activation (`sync_visibility`).
     fn create_view(&mut self, id: TabId) -> wry::Result<()> {
         let Some((url, zoom)) = self.tabs.get(id).map(|t| (t.url.clone(), t.zoom)) else { return Ok(()) };
+        // (`load_url` comes last, but its address is settled now.)
+        let url = crate::privacy::before_load(id, &url);
         let url = url.as_str();
         let p = self.proxy.clone();
         let bounds = self.content_bounds();
@@ -360,6 +365,12 @@ impl App {
                 native::attach_accelerators(view, &self.proxy)?;
                 native::attach_downloads(view, &self.proxy)?;
                 let _ = native::apply_content_settings(view, self.settings.value.autofill);
+                // Global Privacy Control: a tab without it still works.
+                if let Err(e) = native::attach_privacy(view, id)
+                    .and_then(|()| native::apply_gpc(view, id, self.settings.value.gpc))
+                {
+                    eprintln!("x-browser: tab {id}: no Global Privacy Control: {e}");
+                }
             }
             view.load_url(url)
         };
@@ -396,6 +407,8 @@ impl App {
         if !self.tabs.close(id) {
             return;
         }
+        crate::privacy::forget(id);
+        native::forget_gpc(id);
         if let Some(i) = self.views.iter().position(|(v, _)| *v == id) {
             // Hide first so the removal never flashes; drop destroys the webview.
             let (_, view) = self.views.remove(i);
@@ -818,6 +831,23 @@ impl App {
                 }
                 return;
             }
+            PageEvent::Rewrite { url, nav } => {
+                let Some(tab) = self.tabs.get_mut(id) else { return };
+                // The address loaded in its place is the same visit: it is
+                // the user's if the stopped navigation was.
+                tab.user_nav_next = tab.user_nav == Some(nav);
+                tab.url = crate::url::cap_url(&url);
+                tab.loading = true;
+                self.dirty = true;
+                if let Some(v) = self.view(id)
+                    && v.load_url(&url).is_err()
+                    && let Some(tab) = self.tabs.get_mut(id)
+                {
+                    tab.user_nav_next = false;
+                    tab.loading = false;
+                }
+                return;
+            }
             PageEvent::Visited { url, title, nav } => {
                 let Some(tab) = self.tabs.get_mut(id) else { return };
                 let user = tab.user_nav == Some(nav);
@@ -842,6 +872,7 @@ impl App {
             | PageEvent::Zoom(_)
             | PageEvent::Fullscreen(_)
             | PageEvent::Navigating { .. }
+            | PageEvent::Rewrite { .. }
             | PageEvent::Visited { .. } => {}
             PageEvent::Audio { playing, muted } => {
                 tab.audible = playing;
@@ -899,6 +930,7 @@ impl App {
                 if let Some(t) = self.tabs.get_mut(id) {
                     t.new_tab_page = u == url::BLANK;
                 }
+                let u = crate::privacy::before_load(id, &u);
                 if self.view(id).is_none() {
                     // A tab whose webview could not be made: try again, at
                     // the new address.

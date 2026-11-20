@@ -119,7 +119,9 @@ const CSS: &str = ":root { color-scheme: light dark; --surface: #ffffff; --ink: 
   button { font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 6px; padding: 6px 16px; \
   cursor: pointer; } \
   button:hover { filter: brightness(1.08); } \
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }";
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } \
+  .xb-buttons { display: flex; flex-wrap: wrap; gap: 8px; } \
+  button.xb-alt { color: var(--ink); background: transparent; border: 1px solid var(--line); }";
 
 /// The script that turns the empty error document into this page, or
 /// `None` when there is nothing to explain (`kind`). `url` is the failed
@@ -131,6 +133,30 @@ const CSS: &str = ":root { color-scheme: light dark; --surface: #ffffff; --ink: 
 /// address again, in the same history entry.
 pub fn script(web_error_status: i32, url: &str) -> Option<String> {
     let (title, text) = texts(kind(web_error_status)?);
+    Some(page(title, text, url, None))
+}
+
+/// The HTTPS-only page's title and explanation (`privacy`).
+pub const HTTPS_ONLY_TEXTS: (&str, &str) = (
+    "Bu site güvenli bağlantı sunmuyor",
+    "Sitenin şifreli (https) sürümü açılamadı. Yine de açarsanız gönderdiğiniz ve gördüğünüz her şey yolda \
+     okunabilir ya da değiştirilebilir.",
+);
+
+/// The HTTPS-only page's button that opens the http address anyway.
+pub const OPEN_HTTP: &str = "Yine de http ile aç";
+
+/// The page for an `http://` address whose `https://` form failed to load
+/// (`privacy`): the failed https address is the document's, `http_url` is
+/// shown. "Yine de http ile aç" goes to `sentinel`, an address the tab's
+/// navigation hook stops and answers with `http_url` (only for this error
+/// document); "Yeniden dene" tries https again.
+pub fn https_only_script(http_url: &str, sentinel: &str) -> String {
+    let (title, text) = HTTPS_ONLY_TEXTS;
+    page(title, text, http_url, Some((OPEN_HTTP, sentinel)))
+}
+
+fn page(title: &str, text: &str, url: &str, open: Option<(&str, &str)>) -> String {
     let shown: String = if url.chars().count() > MAX_SHOWN_URL {
         url.chars().take(MAX_SHOWN_URL).chain(['…']).collect()
     } else {
@@ -141,7 +167,17 @@ pub fn script(web_error_status: i32, url: &str) -> Option<String> {
         crate::tabs::push_json_str(&mut out, s);
         out
     };
-    Some(format!(
+    // A first button that leaves for `to` (the retry button then steps back).
+    let open = open.map_or(String::new(), |(label, to)| {
+        format!(
+            "const open = make('button', {{ id: 'xb-error-open', type: 'button', textContent: {label} }}); \
+             open.addEventListener('click', () => {{ location.href = {to}; }}); \
+             retry.className = 'xb-alt'; buttons.prepend(open); ",
+            label = lit(label),
+            to = lit(to),
+        )
+    });
+    format!(
         "(() => {{ if (!document.URL.startsWith('chrome-error:')) return 'skip'; \
          const make = (tag, props) => Object.assign(document.createElement(tag), props); \
          const sheet = new CSSStyleSheet(); sheet.replaceSync({css}); \
@@ -150,8 +186,9 @@ pub fn script(web_error_status: i32, url: &str) -> Option<String> {
          const main = make('main', {{ id: 'xb-error' }}); \
          const retry = make('button', {{ id: 'xb-error-retry', type: 'button', textContent: {retry} }}); \
          retry.addEventListener('click', () => location.reload()); \
-         main.append(make('h1', {{ textContent: {title} }}), make('p', {{ textContent: {text} }}), \
-           make('p', {{ id: 'xb-error-url', textContent: {url} }}), retry); \
+         const buttons = make('div', {{ className: 'xb-buttons' }}); buttons.append(retry); \
+         {open}main.append(make('h1', {{ textContent: {title} }}), make('p', {{ textContent: {text} }}), \
+           make('p', {{ id: 'xb-error-url', textContent: {url} }}), buttons); \
          root.replaceChildren(make('head'), make('body')); \
          document.body.append(main); \
          document.title = {title}; \
@@ -161,7 +198,7 @@ pub fn script(web_error_status: i32, url: &str) -> Option<String> {
         title = lit(title),
         text = lit(text),
         url = lit(&shown),
-    ))
+    )
 }
 
 #[cfg(test)]
@@ -254,6 +291,20 @@ mod tests {
         assert!(!js.contains('\u{2028}'), "no raw line separator");
         assert!(js.contains("\\u003c/script>\\u003cimg src=x onerror=alert(1)>\\\"';`${x}`\\u2028"), "{js}");
         assert!(js.contains("\"Bu siteye ulaşılamıyor\"") && js.contains("\"Yeniden dene\"") && js.contains("location.reload()"));
+    }
+
+    #[test]
+    fn the_https_only_page_offers_http_through_the_sentinel_only() {
+        let js = https_only_script("http://evil.example/<b>'\"", "https://xb-http.invalid/");
+        assert!(js.starts_with("(() => { if (!document.URL.startsWith('chrome-error:')) return 'skip';"), "guard first");
+        assert!(!js.contains("innerHTML") && !js.contains("insertAdjacentHTML") && !js.contains("document.write"), "text only");
+        assert!(!js.contains('<'), "no markup can open");
+        assert!(js.contains("\"Bu site güvenli bağlantı sunmuyor\"") && js.contains("\"Yine de http ile aç\""));
+        assert!(js.contains("location.href = \"https://xb-http.invalid/\""), "{js}");
+        assert!(!js.contains("location.href = \"http://evil"), "the http address is only shown, never gone to from here");
+        assert!(js.contains("\"Yeniden dene\"") && js.contains("location.reload()"));
+        let plain = script(status::TIMEOUT, "https://example.com/").unwrap();
+        assert!(!plain.contains("xb-error-open") && !plain.contains("location.href"), "other pages have no such button");
     }
 
     #[test]

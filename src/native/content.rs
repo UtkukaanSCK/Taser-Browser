@@ -36,7 +36,7 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::{
         WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_NCDESTROY, WM_PARENTNOTIFY, WM_RBUTTONDOWN, WM_XBUTTONDOWN,
     };
-    use windows::core::{BOOL, PWSTR};
+    use windows::core::{BOOL, Interface, PWSTR};
     use wry::WebViewExtWindows;
 
     /// The last mouse button pressed over the page (`true` = middle), and when.
@@ -201,7 +201,7 @@ mod imp {
         let mut token = 0i64;
         attach_process_failed(view, Some(tab), proxy)?;
         crate::native::attach_policy(view, tab, proxy)?;
-        if let Err(e) = crate::native::attach_error_page(view) {
+        if let Err(e) = crate::native::attach_error_page(view, tab) {
             eprintln!("x-browser: tab {tab}: no error page: {e}");
         }
         // Icons and the sound mark are extras: a tab without them still works.
@@ -292,9 +292,46 @@ mod imp {
                         crate::cws::is_sentinel(&to)
                             || wv.as_ref().and_then(source).is_some_and(|from| crate::url::same_document(&from, &to))
                     });
-                    if !same_page {
-                        let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(true)));
+                    if same_page {
+                        return Ok(());
                     }
+                    // HTTPS-only and tracking parameters (`privacy`): this
+                    // navigation stops and the app loads the address meant.
+                    if let Some(args) = &args
+                        && let Ok(uri) = nav_uri(args)
+                    {
+                        let mut redirected = BOOL(0);
+                        let _ = args.IsRedirected(&mut redirected);
+                        // (Unknown on an older runtime: taken as a new page.)
+                        let mut kind = COREWEBVIEW2_NAVIGATION_KIND_NEW_DOCUMENT;
+                        if let Ok(a3) = args.cast::<ICoreWebView2NavigationStartingEventArgs3>() {
+                            let _ = a3.NavigationKind(&mut kind);
+                        }
+                        let from = wv.as_ref().and_then(source).unwrap_or_default();
+                        let nav = crate::privacy::Nav {
+                            uri: &uri,
+                            redirected: redirected.as_bool(),
+                            new_document: kind == COREWEBVIEW2_NAVIGATION_KIND_NEW_DOCUMENT,
+                            source: &from,
+                        };
+                        match crate::privacy::on_start(tab, nav) {
+                            crate::privacy::Start::Go => {}
+                            crate::privacy::Start::Load(url) => {
+                                args.SetCancel(true)?;
+                                let mut id = 0u64;
+                                let _ = args.NavigationId(&mut id);
+                                let _ = p.send_event(UserEvent::Page(tab, PageEvent::Rewrite { url, nav: id }));
+                                return Ok(());
+                            }
+                            crate::privacy::Start::Refuse => {
+                                args.SetCancel(true)?;
+                                let _ = p.send_event(UserEvent::Page(tab, PageEvent::Url(from)));
+                                let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(false)));
+                                return Ok(());
+                            }
+                        }
+                    }
+                    let _ = p.send_event(UserEvent::Page(tab, PageEvent::Loading(true)));
                     Ok(())
                 })),
                 &mut token,

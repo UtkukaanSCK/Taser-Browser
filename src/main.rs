@@ -21,6 +21,7 @@ mod overlay;
 mod page_tools;
 mod policy;
 mod popup;
+mod privacy;
 #[cfg(feature = "selftest")]
 mod selftest;
 mod session;
@@ -31,6 +32,7 @@ mod tabs;
 mod timing;
 mod ui;
 mod url;
+mod url_clean;
 mod webstore;
 
 use app::{App, UserEvent};
