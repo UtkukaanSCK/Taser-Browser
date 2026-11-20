@@ -1850,6 +1850,12 @@ pub fn step(app: &mut App, n: u32) {
             check("window-title-not-reset-when-unchanged", app.title_sets == sets, format!("{} -> {}", sets, app.title_sets));
             // A fresh tab (no input ever) whose own script starts unmuted audio:
             // Chromium's default policy refuses it without a user gesture.
+            // Not a new tab page any more: writing that page in runs a script,
+            // which is a gesture, and whether it lands before this load was
+            // a race (`newtab::fill`).
+            if let Some(t) = app.tabs.active().and_then(|id| app.tabs.get_mut(id)) {
+                t.new_tab_page = false;
+            }
             if let Some(v) = app.tabs.active().and_then(|id| app.view(id)) {
                 let _ = v.load_html(AUTOPLAY_HTML);
             }
