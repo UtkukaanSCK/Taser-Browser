@@ -5749,7 +5749,7 @@ pub fn step(app: &mut App, n: u32) {
                         && field(&r, "host") == "127.0.0.1"
                         && field(&r, "names") == "Konum,Kamera,Mikrofon,Bildirimler,Pano okuma,Otomatik oynatma"
                         && field(&r, "geo") == "0"
-                        && field(&r, "focus") == "SELECT",
+                        && field(&r, "focus") == "INPUT",
                     &r,
                 );
             });
@@ -5759,7 +5759,7 @@ pub fn step(app: &mut App, n: u32) {
             page_eval(app, "site-data-stored", "`ls=${localStorage.getItem('xbsite')};ck=${document.cookie.includes('xbsite=1')}`", |r| {
                 check("site-data-stored", field(&r, "ls") == "1" && field(&r, "ck") == "true", &r);
             });
-            overlay_js(app, "(() => { const s = document.querySelector('#si-perms select[data-kind=\"3\"]'); s.value = '2'; s.dispatchEvent(new Event('change')); })()");
+            overlay_js(app, "document.querySelector('#si-perms input[name=\"si-k-3\"][value=\"2\"]').click()");
         }
         336 => {
             let origin = app.site.origin().to_string();
@@ -5773,7 +5773,7 @@ pub fn step(app: &mut App, n: u32) {
             overlay_eval(app, "site-permission-panel-says-saved", SITE_JS, |r| {
                 check("site-permission-panel-says-saved", field(&r, "geo") == "2" && field(&r, "status") == crate::site_info::SAID_SAVED, &r);
             });
-            overlay_js(app, "(() => { const s = document.querySelector('#si-perms select[data-kind=\"3\"]'); s.value = '0'; s.dispatchEvent(new Event('change')); })()");
+            overlay_js(app, "document.querySelector('#si-perms input[name=\"si-k-3\"][value=\"0\"]').click()");
         }
         337 => {
             let origin = app.site.origin().to_string();
@@ -6226,9 +6226,9 @@ fn click_page(app: &App) {
 }
 
 /// The site information panel as the overlay page draws it.
-const SITE_JS: &str = "(() => { const g = (id) => document.getElementById(id), geo = document.querySelector('#si-perms select[data-kind=\"3\"]'); \
+const SITE_JS: &str = "(() => { const g = (id) => document.getElementById(id), geo = document.querySelector('#si-perms input[name=\"si-k-3\"]:checked'); \
   return [`hidden=${g('site').hidden}`, `host=${g('si-host').textContent}`, \
-  `names=${[...document.querySelectorAll('#si-perms li span')].map((e) => e.textContent).join(',')}`, \
+  `names=${[...document.querySelectorAll('#si-perms li > span')].map((e) => e.textContent).join(',')}`, \
   `geo=${geo ? geo.value : ''}`, `focus=${document.activeElement ? document.activeElement.tagName : ''}`, \
   `status=${g('si-status').textContent}`].join(';'); })()";
 

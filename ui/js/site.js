@@ -24,26 +24,41 @@
     actions.hidden = false;
   }
 
+  // A row: the permission's name, then its three choices as one radio group
+  // drawn as a segmented control (no <select>: its dropdown would be a
+  // window of its own, and the panel closes when the overlay loses focus).
   function row(r, i) {
+    const kind = int(r.kind);
+    const state = [0, 1, 2].includes(r.state) ? r.state : 0;
     const li = document.createElement("li");
     li.className = "flex h-9 items-center gap-2 px-4";
     const name = document.createElement("span");
     name.id = "si-name-" + i;
     name.className = "mr-auto min-w-0 truncate";
     name.textContent = str(r.name);
-    const pick = document.createElement("select");
-    pick.dataset.kind = String(int(r.kind));
-    pick.setAttribute("aria-labelledby", name.id);
-    pick.className = "h-7 w-28 shrink-0 rounded-md border border-line bg-surface px-1 outline-none focus:border-accent";
+    const group = document.createElement("div");
+    group.setAttribute("role", "radiogroup");
+    group.setAttribute("aria-labelledby", name.id);
+    group.dataset.kind = String(kind);
+    group.className = "flex shrink-0 overflow-hidden rounded-md border border-line";
     for (const [value, label] of [[0, str(r.default) || "Sor"], [1, "İzin ver"], [2, "Engelle"]]) {
-      const o = document.createElement("option");
-      o.value = String(value);
-      o.textContent = label;
-      pick.append(o);
+      const l = document.createElement("label");
+      l.className = "flex border-line not-first:border-l";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "si-k-" + kind;
+      input.value = String(value);
+      input.checked = value === state;
+      input.className = "peer sr-only";
+      input.addEventListener("change", () => input.checked && send("si-perm:" + kind + ":" + value));
+      const text = document.createElement("span");
+      text.textContent = label;
+      text.className =
+        "flex h-6 items-center px-2 text-[12px] text-muted hover:bg-hover peer-checked:bg-hover peer-checked:font-semibold peer-checked:text-ink peer-checked:shadow-[inset_0_-2px_0_var(--color-accent)] peer-focus-visible:outline-2 peer-focus-visible:-outline-offset-2 peer-focus-visible:outline-accent";
+      l.append(input, text);
+      group.append(l);
     }
-    pick.value = String([0, 1, 2].includes(r.state) ? r.state : 0);
-    pick.addEventListener("change", () => send("si-perm:" + pick.dataset.kind + ":" + pick.value));
-    li.append(name, pick);
+    li.append(name, group);
     return li;
   }
 
@@ -54,18 +69,20 @@
     host.textContent = str(d.host);
     host.title = str(d.origin);
     conn.textContent = str(d.conn);
-    // The select that has the focus is rebuilt as the same select.
-    const focused = keep && document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.kind : null;
+    // The choice that has the focus is rebuilt; the focus goes to its group's
+    // choice again.
+    const active = document.activeElement;
+    const focused = keep && active && active.type === "radio" && list.contains(active) ? active.name : null;
     const rows = Array.isArray(d.rows) ? d.rows : [];
     list.replaceChildren(...rows.map(row));
     status.textContent = str(d.status);
     if (focused) {
-      const again = list.querySelector(`select[data-kind="${CSS.escape(focused)}"]`);
+      const again = list.querySelector(`input[name="${CSS.escape(focused)}"]:checked`);
       if (again) again.focus();
     }
     if (!keep) {
       hideConfirm();
-      const first = list.querySelector("select");
+      const first = list.querySelector("input:checked");
       (first || clear).focus();
     }
   }
