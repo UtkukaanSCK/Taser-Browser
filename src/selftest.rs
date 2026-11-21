@@ -44,7 +44,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 697;
+const EXPECTED_CHECKS: u32 = 698;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -4799,6 +4799,10 @@ pub fn step(app: &mut App, n: u32) {
                     format!("viewport {iw}x{ih}, content {sw}x{sh}"),
                 );
             });
+            // The strip's button still holds the UI's focus from its click
+            // (step 271): let it go, so only the popup's close can give it
+            // back (step 274).
+            ui_js(app, "document.activeElement && document.activeElement.blur()");
             if let Some(v) = crate::popup::view(app) {
                 log(&format!("INFO the popup's address: {}", v.url().unwrap_or_default()));
                 let _ = v.evaluate_script("window.close()");
@@ -4806,6 +4810,17 @@ pub fn step(app: &mut App, n: u32) {
         }
         274 => {
             check("ext-popup-closes-on-window-close", crate::popup::view(app).is_none(), "still open");
+            // The focus goes back to the button the popup hangs from, as
+            // a menu button's does. (The UI document has the focus only
+            // while Taser really is in front.)
+            let front = crate::native::is_foreground(&app.window);
+            ui_eval(app, "ext-popup-close-focuses-its-button", "`el=${document.activeElement && document.activeElement.id};focus=${document.hasFocus()}`", move |r| {
+                check(
+                    "ext-popup-close-focuses-its-button",
+                    field(&r, "el") == "ext-btn" && (!front || field(&r, "focus") == "true"),
+                    format!("{r}, Taser in front {front}"),
+                );
+            });
             // A tab switch closes it.
             crate::ext_ui::on_command(app, crate::ext_ui::ExtCmd::Actions(1100));
             crate::ext_ui::on_command(app, crate::ext_ui::ExtCmd::Popup(EXT_ID.into()));

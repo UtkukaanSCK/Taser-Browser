@@ -22,9 +22,9 @@
 //!   browser tab, so WebView2 would not know which tab is meant. None of the
 //!   app's tab ids reaches the extension.
 //! - It closes on Esc and on its own `window.close()` (focus goes back to
-//!   the page), and when the focus goes to another webview or program (a
-//!   click outside, another window), on a tab switch, and when the window
-//!   moves or is resized.
+//!   the strip's button it hangs from), and when the focus goes to another
+//!   webview or program (a click outside, another window), on a tab switch,
+//!   and when the window moves or is resized.
 //! - It opens on the event loop's next pass after its list (the overlay)
 //!   is hidden (`ext_ui::open_popup`), and takes the keyboard itself: the
 //!   page is not given it in between (WebView2 would hand it over after
@@ -288,7 +288,8 @@ pub fn on_size(app: &mut App, generation: u32, w: u32, h: u32) {
 }
 
 /// Closes the popup, if one is open. `refocus`: the popup had the keyboard
-/// and nothing else took it; it goes back to the page (or the address bar).
+/// and nothing else took it; it goes back to the strip's button the popup
+/// hangs from, or, with the button gone, to the page (or the address bar).
 #[track_caller]
 pub fn close(app: &mut App, refocus: bool) {
     #[cfg(feature = "selftest")]
@@ -305,7 +306,7 @@ pub fn close(app: &mut App, refocus: bool) {
     let Some(view) = p.view.take() else { return };
     let _ = view.set_visible(false);
     drop(view);
-    if refocus {
+    if refocus && !crate::ext_ui::focus_button(app) {
         app.focus_after_switch();
     }
 }
@@ -344,7 +345,7 @@ pub fn on_closed(app: &mut App, generation: u32, refocus: bool) {
             return;
         }
     }
-    close(app, refocus && native::is_foreground(&app.window));
+    close(app, refocus && app.in_front());
 }
 
 /// The extension whose popup is open.
@@ -355,7 +356,7 @@ pub fn extension(app: &App) -> Option<&str> {
 /// The window moved, was resized or rescaled.
 pub fn on_window_changed(app: &mut App) {
     if app.popup.view.is_some() && app.popup.placed != Some(place(app)) {
-        close(app, native::is_foreground(&app.window));
+        close(app, app.in_front());
     }
 }
 

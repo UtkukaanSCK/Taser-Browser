@@ -530,7 +530,8 @@ place. The popup stays on its extension's pages: other navigations, new windows 
 are refused, and it cannot start another application, not even after a
 question. It closes on Esc, on its own `window.close()`, when the focus goes
 elsewhere (a click outside, another window), on a tab switch and when the
-window moves or is resized.
+window moves or is resized. Closed by Esc or `window.close()`, it gives the
+keyboard back to the puzzle-piece button, as a menu button gets it back.
 
 **Updates.** Extensions installed from the store and turned on are checked for
 updates at most once a day, on their own: a timer looks every minute, and the

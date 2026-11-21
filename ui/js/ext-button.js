@@ -16,5 +16,9 @@
     expanded: (on) => {
       btn.setAttribute("aria-expanded", on === true ? "true" : "false");
     },
+    // Back from the popup it opened (ext_ui.rs focus_button).
+    focus: () => {
+      if (!btn.hidden) btn.focus();
+    },
   });
 })();

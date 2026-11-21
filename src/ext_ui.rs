@@ -746,6 +746,18 @@ fn sync_button(app: &mut App) {
     }
 }
 
+/// Gives the keyboard to the strip's button, as a menu button gets it back
+/// when what it opened closes. False when the button is not there (no
+/// extension with a popup left, or the strip hidden in fullscreen).
+pub fn focus_button(app: &App) -> bool {
+    if app.ext_ui.button != Some(true) || app.fullscreen.on() {
+        return false;
+    }
+    let _ = app.ui.focus();
+    let _ = app.ui.evaluate_script("xbExtBtn.focus()");
+    true
+}
+
 /// Something about the extensions changed (an `extensions` event, an
 /// operation started): finishes the rows that have an answer, and brings
 /// the allowed ids, the button, the open popup and the page up to date.
