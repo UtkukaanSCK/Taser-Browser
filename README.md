@@ -1,7 +1,93 @@
-# X-Browser
+<div align="center">
 
-Light, minimal desktop browser in Rust on the system WebView (WebView2 on
-Windows), built with `wry` + `tao` only.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/banner-dark.svg">
+  <img alt="X-Browser: a light, minimal desktop browser in Rust on WebView2" src="docs/media/banner-light.svg" width="100%">
+</picture>
+
+**Light, minimal desktop browser in Rust on the system WebView (WebView2 on
+Windows), built with `wry` + `tao` only.**
+
+[![Rust 2024](https://img.shields.io/badge/Rust-2024_edition-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![WebView2](https://img.shields.io/badge/WebView2-system_runtime-2f62e9?logo=microsoftedge&logoColor=white)](https://developer.microsoft.com/microsoft-edge/webview2/)
+[![Windows](https://img.shields.io/badge/platform-Windows-0078d4?logo=windows&logoColor=white)](#requirements)
+[![Binary](https://img.shields.io/badge/binary-1.66_MB-7c5cff)](#startup-timing)
+[![ui-ready](https://img.shields.io/badge/ui--ready-%E2%89%88420_ms-15803d)](#startup-timing)
+[![License: MIT](https://img.shields.io/badge/license-MIT-52525b)](LICENSE)
+
+[Highlights](#highlights) · [Build and run](#build-and-run) · [Shortcuts](#keyboard-shortcuts) · [Privacy](#privacy) · [Extensions](#extensions-v03) · [Data files](#data-files) · [Layout](#layout)
+
+</div>
+
+## Highlights
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### ⚡ Small and quick
+One 1.66 MB executable, two crates for the window and the webview, no
+framework. The window is usable about 420 ms after the process starts.
+</td>
+<td width="33%" valign="top">
+
+### 🛡️ Private by default
+HTTPS-only, tracking parameters stripped before a page loads, Global Privacy
+Control, and WebView2's tracking prevention on "Dengeli".
+</td>
+<td width="33%" valign="top">
+
+### 🧩 Chrome extensions
+Manifest V3 extensions from the Chrome Web Store, each package's signature
+checked before it is unpacked. uBlock Origin Lite comes on the first start.
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🔒 Site information panel
+The connection mark opens a panel with each permission (location, camera,
+microphone, notifications…) and one button to delete that site's data.
+</td>
+<td valign="top">
+
+### 💾 Picks up where you left off
+Tabs, zoom and the window's place come back after a restart or a crash.
+Saves are atomic, with a `.bak` copy kept. One instance per profile.
+</td>
+<td valign="top">
+
+### ⌨️ Keyboard first
+Tabs, zoom, history, bookmarks and the menu have shortcuts, and the strip,
+menu and suggestion list work with the keys alone. AltGr on Turkish layouts always types its character.
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 🔎 Suggestions that learn
+The address bar ranks history and bookmarks by what you typed and visited
+often, not by what pages did on their own.
+</td>
+<td valign="top">
+
+### 🧭 Its own pages
+A new tab page with your most visited sites and bookmarks, and Turkish error
+pages, never WebView2's Edge-branded ones.
+</td>
+<td valign="top">
+
+### 🚪 Pages stay in the browser
+A page cannot start another application. `mailto:` and its kind ask first,
+and the "Aç" button only works after a short pause.
+</td>
+</tr>
+</table>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/timing-dark.svg">
+  <img alt="Start-up to ui-ready: v0.1 308 ms, v0.2 362 ms, v0.3 421 ms; binary 0.68, 1.26 and 1.66 MB" src="docs/media/timing-light.svg" width="100%">
+</picture>
 
 ## Requirements
 
@@ -536,7 +622,15 @@ Known limits, open until checked by hand (`docs/v0.3-manual-checklist.md`):
 design). `build.rs` embeds it in the exe as icon resource 1 without any build
 dependency, and the window and taskbar icons load that same resource.
 
+The README's banner, timing chart and architecture picture (`docs/media/*.svg`,
+light and dark) are drawn the same way by `docs/media/make_media.py`.
+
 ## Layout
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/architecture-dark.svg">
+  <img alt="One tao window holding the UI strip webview, one webview per content tab and an overlay webview, all driven by the Rust core over IPC" src="docs/media/architecture-light.svg" width="100%">
+</picture>
 
 | Path | Purpose |
 | --- | --- |
