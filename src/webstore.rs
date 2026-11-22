@@ -33,8 +33,10 @@
 //! and only when nothing else is on screen but the Extensions page: over
 //! another overlay page or an extension's popup, in fullscreen or in the
 //! background it is left for the next check. Asked over the Extensions page
-//! (its "Güncellemeleri denetle"), the page comes back once the question
-//! goes (`ExtCmd::BackToPage`). Else it goes on unseen. Once WebView2 has
+//! (found by its "Güncellemeleri denetle" or by the daily timer), the page
+//! comes back once the question goes (`ExtCmd::BackToPage`), and an install
+//! that fails after "Güncelle" says why under the extension's row there, not
+//! in the question. Else it goes on unseen. Once WebView2 has
 //! the new version, the folder of the old one is deleted (`retire`). A
 //! version whose package or install failed is not fetched again this start
 //! (`State::failed`).
@@ -907,11 +909,16 @@ fn finish(app: &mut App, job: Job, result: Result<String, Failure>) {
         Err(Failure::Cancelled) => {}
         Err(f) => {
             eprintln!("x-browser: extension {} not installed: {f:?}", job.id);
-            // The question is gone: kept for the Extensions page to show at
-            // the next start.
-            if !show_error(app, &f.message(), job.spot)
-                && let Some(e) = LastError::new(&job.id, &f.message(), crate::history::now_secs())
-            {
+            // Asked over the Extensions page: not said in the question, whose
+            // "Kapat" would leave the page gone, but under the extension's
+            // row on the page, which comes back (below). The question goes.
+            let shown = !job.over_page && show_error(app, &f.message(), job.spot);
+            if job.over_page && app.overlay.mode == Mode::Store {
+                crate::overlay::dismiss(app);
+            }
+            // Else the question is gone: kept for the Extensions page to
+            // show, now or at the next start.
+            if !shown && let Some(e) = LastError::new(&job.id, &f.message(), crate::history::now_secs()) {
                 app.extensions.set_last_error(e);
             }
         }
