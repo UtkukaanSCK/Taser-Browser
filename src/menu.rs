@@ -1,4 +1,4 @@
-//! The main menu (the strip's ⋮ button, Alt+F, Alt+E): a list in the overlay.
+//! The main menu (the toolbar's menu button, Alt+F, Alt+E): a list in the overlay.
 //! It only chooses; every item calls what its own shortcut already calls
 //! (`page_tools`, `overlay`, `downloads`, `native::{find, print}`), so there
 //! is no second copy of any of them.
@@ -212,10 +212,10 @@ mod tests {
 
     #[test]
     fn menu_sits_at_the_top_right_inside_the_window() {
-        assert_eq!(parts(menu_rect(LogicalSize::new(1200.0, 800.0))), (928.0, 42.0, 264.0, 324.0));
+        assert_eq!(parts(menu_rect(LogicalSize::new(1200.0, 800.0))), (928.0, 78.0, 264.0, 324.0));
         // A short window shortens it (it scrolls); a narrow one narrows it.
-        assert_eq!(parts(menu_rect(LogicalSize::new(480.0, 240.0))), (208.0, 42.0, 264.0, 190.0));
-        assert_eq!(parts(menu_rect(LogicalSize::new(200.0, 240.0))), (8.0, 42.0, 184.0, 190.0));
+        assert_eq!(parts(menu_rect(LogicalSize::new(480.0, 240.0))), (208.0, 78.0, 264.0, 154.0));
+        assert_eq!(parts(menu_rect(LogicalSize::new(200.0, 240.0))), (8.0, 78.0, 184.0, 154.0));
         // Windows at least as large as the app's minimum (480x240) hold it.
         for (w, h) in [(480.0, 240.0), (500.0, 300.0), (1920.0, 1080.0)] {
             let (x, y, mw, mh) = parts(menu_rect(LogicalSize::new(w, h)));

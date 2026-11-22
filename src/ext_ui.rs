@@ -1008,7 +1008,7 @@ mod tests {
             (p.x, p.y, s.width, s.height)
         };
         let size = tao::dpi::LogicalSize::new(1200.0, 800.0);
-        assert_eq!(parts(actions_rect(size, 1100.0, 2)), (820.0, 42.0, 280.0, 82.0));
+        assert_eq!(parts(actions_rect(size, 1100.0, 2)), (820.0, 78.0, 280.0, 82.0));
         // Never off the left or right edge, nor below the window.
         assert_eq!(parts(actions_rect(size, 100.0, 1)).0, 0.0);
         assert_eq!(parts(actions_rect(size, 1200.0, 1)).0, 912.0);

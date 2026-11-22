@@ -1039,10 +1039,10 @@ pub fn step(app: &mut App, n: u32) {
             let (us, cs, cp) = (size(ui_b.size), size(c.size), pos(c.position));
             log(&format!("INFO after resize: ui {}x{}, content at y={} {}x{}", us.width, us.height, cp.y, cs.width, cs.height));
             let close = |a: f64, b: f64| (a - b).abs() <= 1.0;
-            check("ui-resized", close(us.width, 820.0) && close(us.height, 40.0), format!("{us:?}"));
+            check("ui-resized", close(us.width, 820.0) && close(us.height, crate::app::UI_HEIGHT), format!("{us:?}"));
             check(
                 "content-resized",
-                close(cs.width, 820.0) && close(cs.height, 480.0) && close(cp.y, 40.0),
+                close(cs.width, 820.0) && close(cs.height, 520.0 - crate::app::UI_HEIGHT) && close(cp.y, crate::app::UI_HEIGHT),
                 format!("{cs:?} {cp:?}"),
             );
             capture(app, "03-resized");
@@ -1050,7 +1050,7 @@ pub fn step(app: &mut App, n: u32) {
             app.handle(UserEvent::Shortcut(Shortcut::NextTab));
             let v = app.view(app.tabs.active().unwrap()).unwrap();
             let cs = size(v.bounds().unwrap().size);
-            check("hidden-tab-resized-on-show", close(cs.width, 820.0) && close(cs.height, 480.0), format!("{cs:?}"));
+            check("hidden-tab-resized-on-show", close(cs.width, 820.0) && close(cs.height, 520.0 - crate::app::UI_HEIGHT), format!("{cs:?}"));
             app.handle(UserEvent::Shortcut(Shortcut::PrevTab));
         }
         15 => {
@@ -1140,9 +1140,9 @@ pub fn step(app: &mut App, n: u32) {
                         && field(&r, "res_hidden") == "false",
                     &r,
                 );
-                check("drag-region-present", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+                check("drag-region-present", ["tabs", "tabbar", "strip"].contains(&field(&r, "drag_el")), &r);
                 check("ui-prefers-color-scheme-matches-system", field(&r, "dark") == dark.to_string(), format!("{r} system dark={dark}"));
-                let want_bg = if dark { "rgb(28, 28, 30)" } else { "rgb(244, 244, 245)" };
+                let want_bg = if dark { "rgb(27, 28, 32)" } else { "rgb(227, 229, 234)" };
                 check("ui-palette-matches-theme", field(&r, "bg") == want_bg, format!("{r} want {want_bg}"));
             });
             type_in_address(app, "example.com");
@@ -1535,6 +1535,8 @@ pub fn step(app: &mut App, n: u32) {
         }
         44 => {
             capture(app, "06-30-tabs-820");
+            let native = app.window.inner_size().to_logical::<f64>(app.window.scale_factor());
+            log(&format!("INFO tab-strip-820 native window {}x{}", native.width, native.height));
             ui_eval(app, "many-tabs-820px-window-buttons-visible", &tab_strip_js(), |r| {
                 log(&format!("INFO tab-strip-820 {r}"));
                 // iw proves the resize reached the UI; otherwise this measured 1200 px.
@@ -1547,7 +1549,7 @@ pub fn step(app: &mut App, n: u32) {
                 );
                 check("many-tabs-820px-new-tab-visible", field(&r, "newtab") == "true", &r);
                 check("many-tabs-820px-active-tab-identifiable", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
-                check("many-tabs-820px-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+                check("many-tabs-820px-drag-area", ["tabs", "tabbar", "strip"].contains(&field(&r, "drag_el")), &r);
             });
             let target = app.tabs.ids().nth(4).unwrap();
             remember("click", target as i64);
@@ -1578,7 +1580,7 @@ pub fn step(app: &mut App, n: u32) {
                 check("many-tabs-min-width-chrome-visible", field(&r, "chrome") == "ok", &r);
                 check("many-tabs-min-width-new-tab-visible", field(&r, "newtab") == "true", &r);
                 check("many-tabs-min-width-active-tab-identifiable", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
-                check("many-tabs-min-width-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+                check("many-tabs-min-width-drag-area", ["tabs", "tabbar", "strip"].contains(&field(&r, "drag_el")), &r);
             });
             // Every one of the 30 tabs can be brought into view with the mouse.
             ui_eval(app, "many-tabs-min-width-every-tab-reachable", &reach_js(), |r| {
@@ -1841,7 +1843,7 @@ pub fn step(app: &mut App, n: u32) {
                 log(&format!("INFO ui-static-min {r}"));
                 check("min-size-iw-is-minimum", num(&r, "iw") == MIN_W, &r);
                 check("min-size-chrome-complete", field(&r, "chrome") == "ok", format!("not visible: {}", field(&r, "chrome")));
-                check("min-size-drag-area", ["tabs", "strip"].contains(&field(&r, "drag_el")), &r);
+                check("min-size-drag-area", ["tabs", "tabbar", "strip"].contains(&field(&r, "drag_el")), &r);
                 check("min-size-active-tab-visible", field(&r, "sel_vis") == "true" && num(&r, "sel_w") >= 24.0, &r);
                 check("min-size-address-box-usable", num(&r, "addr_w") >= 100.0, &r);
             });
@@ -2102,11 +2104,12 @@ pub fn step(app: &mut App, n: u32) {
             let [a, b, c, d] = ["sa", "sb", "sc", "sd"].map(|k| recall(k) as TabId);
             let ids = order(app);
             check("ui-drag-moves-tab", ids == [c, d, a, b], format!("{ids:?}"));
-            // Narrow tabs, d inactive (two new blank tabs, the last one
-            // active): a drag that starts on d's page icon. (880 px plus the
-            // home button's 36: six tabs just fit.)
-            app.window.set_inner_size(LogicalSize::new(916.0, 520.0));
-            for key in ["se", "sf"] {
+            // Narrow tabs, d inactive (four new blank tabs, the last one
+            // active): a drag that starts on d's page icon. (The tab row has
+            // the window's full width, so it takes eight tabs at the minimum
+            // width to bring them under 52 px, and they still fit.)
+            app.window.set_inner_size(LogicalSize::new(570.0, 520.0));
+            for key in ["se", "sf", "sg", "sh"] {
                 app.handle(UserEvent::Ui(UiCommand::NewTab));
                 remember(key, app.tabs.active().map_or(-1, |id| id as i64));
             }
@@ -2114,7 +2117,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         74 => {
             let [b, d] = ["sb", "sd"].map(|k| recall(k) as TabId);
-            check("drag-on-icon-tab-inactive", app.tabs.active() != Some(d) && app.tabs.len() == 6, app.tabs.to_json());
+            check("drag-on-icon-tab-inactive", app.tabs.active() != Some(d) && app.tabs.len() == 8, app.tabs.to_json());
             set_spot([f64::NAN; 4]);
             ui_eval(
                 app,
@@ -2150,9 +2153,9 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         76 => {
-            let [a, b, c, d, e, f] = ["sa", "sb", "sc", "sd", "se", "sf"].map(|k| recall(k) as TabId);
+            let [a, b, c, d, e, f, g, h] = ["sa", "sb", "sc", "sd", "se", "sf", "sg", "sh"].map(|k| recall(k) as TabId);
             let ids = order(app);
-            check("ui-drag-from-page-icon-moves-tab", ids == [c, a, b, d, e, f], format!("{ids:?}"));
+            check("ui-drag-from-page-icon-moves-tab", ids == [c, a, b, d, e, f, g, h], format!("{ids:?}"));
             // Next: a drag of a to the far left, cancelled with Escape.
             set_spot([f64::NAN; 4]);
             ui_eval(
@@ -2190,17 +2193,17 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         79 => {
-            let [a, b, c, d, e, f] = ["sa", "sb", "sc", "sd", "se", "sf"].map(|k| recall(k) as TabId);
+            let [a, b, c, d, e, f, g, h] = ["sa", "sb", "sc", "sd", "se", "sf", "sg", "sh"].map(|k| recall(k) as TabId);
             let ids = order(app);
-            let want = ids_csv(&[c, a, b, d, e, f]);
-            check("escape-cancels-drag", ids == [c, a, b, d, e, f], format!("{ids:?}"));
+            let want = ids_csv(&[c, a, b, d, e, f, g, h]);
+            check("escape-cancels-drag", ids == [c, a, b, d, e, f, g, h], format!("{ids:?}"));
             ui_eval(
                 app,
                 "escape-restores-ui-order",
                 &format!("`order=${{{UI_ORDER_JS}}};dragging=${{document.querySelectorAll('[data-dragging]').length}}`"),
                 move |r| check("escape-restores-ui-order", field(&r, "order") == want && field(&r, "dragging") == "0", &r),
             );
-            for id in [e, f] {
+            for id in [e, f, g, h] {
                 app.close_tab(id, true);
             }
             app.window.set_inner_size(LogicalSize::new(1200.0, 800.0));

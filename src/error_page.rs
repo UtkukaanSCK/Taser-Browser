@@ -104,24 +104,27 @@ pub const RETRY: &str = "Yeniden dene";
 /// with "…"); the address bar still has all of it.
 const MAX_SHOWN_URL: usize = 1000;
 
-/// The page's look: the colors and type of `ui/input.css`, light and dark.
-const CSS: &str = ":root { color-scheme: light dark; --surface: #ffffff; --ink: #27272a; --muted: #71717a; \
-  --line: #d4d4d8; --accent: oklch(0.62 0.16 252); } \
-  @media (prefers-color-scheme: dark) { :root { --surface: #2c2c2e; --ink: #e4e4e7; --muted: #a1a1aa; --line: #3f3f43; } } \
+/// The page's look: the colors and type of `ui/input.css`, light and dark,
+/// on the toolbar's color like the new tab page.
+const CSS: &str = ":root { color-scheme: light dark; --page: #f9fafb; --field: #eceef2; --ink: #1f2023; \
+  --muted: #5f636b; --line: #d5d8de; --hover: rgb(24 26 32 / 0.06); --accent: oklch(0.62 0.16 252); } \
+  @media (prefers-color-scheme: dark) { :root { --page: #2a2b30; --field: #1e1f23; --ink: #ececef; \
+  --muted: #a0a2a9; --line: #3b3c42; --hover: rgb(255 255 255 / 0.07); } } \
   html, body { height: 100%; margin: 0; } \
-  body { background: var(--surface); color: var(--ink); display: flex; justify-content: center; \
+  body { background: var(--page); color: var(--ink); display: flex; justify-content: center; \
   font: 14px/1.5 \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } \
-  main { box-sizing: border-box; width: 100%; max-width: 600px; padding: 15vh 24px 24px; } \
-  h1 { font-size: 22px; font-weight: 600; line-height: 1.3; margin: 0 0 8px; } \
-  p { margin: 0 0 16px; color: var(--muted); } \
-  #xb-error-url { color: var(--ink); overflow-wrap: anywhere; padding: 6px 10px; border: 1px solid var(--line); \
-  border-radius: 6px; user-select: text; } \
-  button { font: inherit; color: #fff; background: var(--accent); border: 0; border-radius: 6px; padding: 6px 16px; \
-  cursor: pointer; } \
+  main { box-sizing: border-box; width: 100%; max-width: 600px; padding: 16vh 24px 24px; } \
+  h1 { font-size: 24px; font-weight: 600; line-height: 1.3; margin: 0 0 10px; } \
+  p { margin: 0 0 18px; color: var(--muted); } \
+  #xb-error-url { color: var(--ink); overflow-wrap: anywhere; padding: 8px 12px; background: var(--field); \
+  border-radius: 8px; user-select: text; } \
+  button { font: inherit; font-weight: 500; color: #fff; background: var(--accent); border: 0; border-radius: 8px; \
+  height: 32px; padding: 0 16px; cursor: pointer; } \
   button:hover { filter: brightness(1.08); } \
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } \
   .xb-buttons { display: flex; flex-wrap: wrap; gap: 8px; } \
-  button.xb-alt { color: var(--ink); background: transparent; border: 1px solid var(--line); }";
+  button.xb-alt { color: var(--ink); background: transparent; border: 1px solid var(--line); } \
+  button.xb-alt:hover { filter: none; background: var(--hover); }";
 
 /// The script that turns the empty error document into this page, or
 /// `None` when there is nothing to explain (`kind`). `url` is the failed

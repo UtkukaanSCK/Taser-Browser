@@ -129,8 +129,9 @@ const ui = {
     if (ui.state.active != null) send("zoom-reset:" + ui.state.active);
   });
 
-  // Window chrome. Empty strip space drags the window; double-click maximizes.
-  for (const el of [$("tabs"), $("strip")]) {
+  // Window chrome. Empty tab bar and toolbar space drags the window;
+  // double-click maximizes.
+  for (const el of [$("tabs"), $("tablist"), $("tabbar"), $("toolbar"), $("strip")]) {
     el.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || e.target !== el) return;
       e.preventDefault();

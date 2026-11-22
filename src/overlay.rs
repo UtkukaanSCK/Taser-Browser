@@ -829,30 +829,30 @@ mod tests {
     #[test]
     fn suggestion_list_sits_under_the_address_box_inside_the_window() {
         let size = LogicalSize::new(1200.0, 800.0);
-        assert_eq!(parts(suggest_rect(size, 120.0, 600.0, 8)), (120.0, 36.0, 600.0, 250.0));
+        assert_eq!(parts(suggest_rect(size, 120.0, 600.0, 8)), (120.0, 72.0, 600.0, 250.0));
         // Never narrower than the minimum, never past the right edge.
-        assert_eq!(parts(suggest_rect(size, 1000.0, 100.0, 1)), (840.0, 36.0, 360.0, 40.0));
+        assert_eq!(parts(suggest_rect(size, 1000.0, 100.0, 1)), (840.0, 72.0, 360.0, 40.0));
         let small = LogicalSize::new(480.0, 240.0);
-        assert_eq!(parts(suggest_rect(small, 300.0, 600.0, 8)), (0.0, 36.0, 480.0, 204.0));
+        assert_eq!(parts(suggest_rect(small, 300.0, 600.0, 8)), (0.0, 72.0, 480.0, 168.0));
     }
 
     #[test]
     fn history_panel_fits_the_window() {
-        assert_eq!(parts(panel_rect(LogicalSize::new(1200.0, 800.0))), (672.0, 44.0, 520.0, 560.0));
-        assert_eq!(parts(panel_rect(LogicalSize::new(480.0, 240.0))), (8.0, 44.0, 464.0, 188.0));
+        assert_eq!(parts(panel_rect(LogicalSize::new(1200.0, 800.0))), (672.0, 80.0, 520.0, 560.0));
+        assert_eq!(parts(panel_rect(LogicalSize::new(480.0, 240.0))), (8.0, 80.0, 464.0, 152.0));
     }
 
     #[test]
     fn launch_question_moves_but_stays_in_the_window() {
         let size = LogicalSize::new(1200.0, 800.0);
-        assert_eq!(parts(launch_rect(size, (0.5, 0.0))), (380.0, 44.0, 440.0, 230.0), "the middle, under the strip");
-        assert_eq!(parts(launch_rect(size, (0.0, 0.0))), (260.0, 44.0, 440.0, 230.0));
-        assert_eq!(parts(launch_rect(size, (1.0, 1.0))), (500.0, 104.0, 440.0, 230.0));
-        assert_eq!(parts(launch_rect(size, (7.0, -3.0))), (500.0, 44.0, 440.0, 230.0), "out of range is clamped");
+        assert_eq!(parts(launch_rect(size, (0.5, 0.0))), (380.0, 80.0, 440.0, 230.0), "the middle, under the strip");
+        assert_eq!(parts(launch_rect(size, (0.0, 0.0))), (260.0, 80.0, 440.0, 230.0));
+        assert_eq!(parts(launch_rect(size, (1.0, 1.0))), (500.0, 140.0, 440.0, 230.0));
+        assert_eq!(parts(launch_rect(size, (7.0, -3.0))), (500.0, 80.0, 440.0, 230.0), "out of range is clamped");
         // A small window leaves less room, never a place outside it.
         let small = LogicalSize::new(480.0, 240.0);
-        assert_eq!(parts(launch_rect(small, (0.0, 1.0))), (0.0, 44.0, 440.0, 188.0));
-        assert_eq!(parts(launch_rect(small, (1.0, 1.0))), (40.0, 44.0, 440.0, 188.0));
+        assert_eq!(parts(launch_rect(small, (0.0, 1.0))), (0.0, 80.0, 440.0, 152.0));
+        assert_eq!(parts(launch_rect(small, (1.0, 1.0))), (40.0, 80.0, 440.0, 152.0));
         // A new place from one question to the next.
         let spots: Vec<_> = (0..8).map(|_| launch_spot()).collect();
         assert!(spots.iter().all(|&(x, y)| (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)));

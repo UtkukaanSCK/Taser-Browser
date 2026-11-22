@@ -190,8 +190,8 @@ impl Rect {
     }
 }
 
-/// Height of the window's top band (the tab strip, where it is dragged).
-const GRAB_BAND: i32 = 40;
+/// Height of the window's top band (the tab row, where it is dragged).
+const GRAB_BAND: i32 = 36;
 
 /// Where to open a window saved at `saved`, given the monitors now attached
 /// (`monitors[0]` is the primary). It stays put while enough of its top band

@@ -12,8 +12,12 @@
 <script src="/js/webstore.js" defer></script>
 <script src="/js/ext-button.js" defer></script>
 </head>
-<body class="bg-strip text-ink font-sans text-[13px] leading-none">
-<div id="strip" class="relative flex h-10 items-center gap-1 border-b border-line pl-1.5">
+<body class="bg-frame text-ink font-sans text-[13px] leading-none">
+<!-- Two rows, as UI_HEIGHT in app.rs: the tab bar (36px: tabs, "+", empty
+     drag space, window buttons) over the toolbar (40px: navigation, the
+     address field, extensions, downloads, menu). The active tab takes the
+     toolbar's color and joins it, so the page it shows reads as one piece. -->
+<div id="strip" class="relative flex h-[76px] flex-col overflow-hidden">
   <!-- Top-edge resize handles (the native window has no top border to grab). -->
   <div id="resizer" class="absolute inset-x-0 top-0 z-10 flex h-[3px]">
     <div data-resize="nw" class="w-2 cursor-nw-resize"></div>
@@ -21,109 +25,115 @@
     <div data-resize="ne" class="w-2 cursor-ne-resize"></div>
   </div>
 
-  <button id="back" class="nav" title="Geri (Alt+Sol)" aria-label="Geri" disabled>
-    <svg viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
-  </button>
-  <button id="forward" class="nav" title="İleri (Alt+Sağ)" aria-label="İleri" disabled>
-    <svg viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>
-  </button>
-  <button id="reload" class="nav group" title="Yenile (Ctrl+R)" aria-label="Yenile">
-    <svg class="group-data-[loading]:hidden" viewBox="0 0 16 16"><path d="M12.5 8a4.5 4.5 0 1 1-1.3-3.2M12.5 3v2.5H10"/></svg>
-    <svg class="hidden group-data-[loading]:block" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg>
-  </button>
-  <button id="home" class="nav" title="Ana sayfa" aria-label="Ana sayfa">
-    <svg viewBox="0 0 16 16"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5v6h3V9.5h2v3h3v-6"/></svg>
-  </button>
-
-  <!-- Narrow windows: the address box gives up width first (down to min-w-25). -->
-  <div id="address-box" class="ml-1 flex h-7 w-[clamp(140px,34vw,520px)] min-w-25 shrink items-center rounded-md border border-line bg-surface px-2 transition-colors duration-100 focus-within:border-accent data-[blocked]:border-danger">
-    <!-- Connection state of the shown page (security.js): a lock, "not secure",
-         a certificate error, or a crashed page with its reload button. Its
-         meaning is the status text after it, unseen but read out whenever it
-         changes. The mark is a button that opens the site information panel
-         (site_info.rs): the site's permissions and its data. -->
-    <div id="security" hidden
-         class="group/sec -ml-1 mr-1 flex h-5 max-w-[60%] shrink-0 items-center gap-1 text-[11px] text-muted">
-      <button id="site-info" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Site bilgileri"
-              aria-describedby="security-status"
-              class="flex h-5 min-w-0 items-center gap-1 rounded px-1 hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent aria-expanded:bg-hover">
-        <svg aria-hidden="true" class="hidden size-3 shrink-0 group-data-[state=secure]/sec:block" viewBox="0 0 16 16"><path d="M4.5 7.5h7V13h-7zM6 7.5v-2a2 2 0 0 1 4 0v2"/></svg>
-        <svg aria-hidden="true" class="size-3 shrink-0 group-data-[state=cert]/sec:text-danger group-data-[state=crashed]/sec:text-danger group-data-[state=secure]/sec:hidden" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.25v.01"/></svg>
-        <span id="security-text" aria-hidden="true" class="min-w-0 truncate text-ink empty:hidden"></span>
+  <div id="tabbar" class="flex h-9 min-w-0 shrink-0 items-stretch pl-2">
+    <!-- Tab zone: never narrower than the scroll arrows + one tab + "+" + pr-8
+         of empty drag area. Tabs that do not fit scroll inside #tablist; the
+         arrows show only then (data-overflow, set by strip.js). -->
+    <div id="tabs" data-drag class="group/tabs flex h-full min-w-[130px] flex-1 items-center overflow-hidden pr-8">
+      <button id="tab-left" class="arrow" tabindex="-1" aria-hidden="true" title="Önceki sekmeler" aria-label="Önceki sekmeler">
+        <svg class="size-3" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
       </button>
-      <button id="security-reload" type="button" hidden title="Sayfayı yeniden yükle (Ctrl+R)"
-              class="shrink-0 rounded px-1 text-ink underline hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent">Yeniden yükle</button>
+      <div id="tablist" role="tablist" aria-label="Sekmeler" class="relative flex h-full min-w-0 flex-[0_1_auto] items-end overflow-x-auto px-1.5 overflow-y-hidden [scrollbar-width:none]"></div>
+      <button id="tab-right" class="arrow" tabindex="-1" aria-hidden="true" title="Sonraki sekmeler" aria-label="Sonraki sekmeler">
+        <svg class="size-3" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>
+      </button>
+      <button id="new-tab" class="nav ml-0.5 size-7 shrink-0" title="Yeni sekme (Ctrl+T)" aria-label="Yeni sekme">
+        <svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>
+      </button>
     </div>
-    <!-- Outside the mark, so it is still there to say that a mark went away. -->
-    <span id="security-status" role="status" aria-live="polite" class="sr-only"></span>
-    <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Adres"
-           placeholder="Ara ya da adres gir"
-           class="h-full w-full min-w-0 bg-transparent text-ink outline-none select-text placeholder:text-muted">
-    <!-- Page zoom other than 100% (core.js); a click resets it. -->
-    <button id="zoom" hidden tabindex="-1"
-            class="ml-1 flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-muted hover:bg-hover hover:text-ink">
-      <svg class="size-3" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg>
-      <span id="zoom-level"></span>
-    </button>
-    <!-- On a Chrome Web Store detail page (webstore.js): add its extension,
-         or remove it if X-Browser has it. Rust asks before either. -->
-    <button id="ext-store" type="button" hidden
-            class="ml-1 flex h-5 shrink-0 items-center gap-1 rounded border border-line px-1.5 text-[11px] text-ink hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent aria-busy:opacity-60">
-      <svg aria-hidden="true" class="size-3 shrink-0" viewBox="0 0 16 16"><path d="M6 2.5h3V4a1 1 0 0 0 2 0V2.5h2.5V6H12a1 1 0 0 0 0 2h1.5v5.5H10V12a1 1 0 0 0-2 0v1.5H2.5V10H4a1 1 0 0 0 0-2H2.5V4.5H6z"/></svg>
-      <span id="ext-store-text"></span>
-    </button>
-    <!-- Bookmark star (bookmarks.js): filled while the page is bookmarked. -->
-    <button id="bm-star" type="button" disabled aria-label="Yer imi" aria-pressed="false" title="Bu sayfayı yer imlerine ekle (Ctrl+D)"
-            class="group ml-1 flex size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-35 disabled:hover:bg-transparent aria-pressed:text-accent">
-      <svg class="size-3.5 group-aria-pressed:fill-current" viewBox="0 0 16 16"><path d="M8 1.5l1.95 4.1 4.55.6-3.3 3.15.8 4.45L8 11.55 3.99 13.8l.8-4.45L1.5 6.2l4.55-.6z"/></svg>
-    </button>
+
+    <div class="flex h-full shrink-0">
+      <button id="min" class="win" title="Simge durumuna küçült" aria-label="Küçült">
+        <svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg>
+      </button>
+      <button id="max" class="win group" title="Ekranı kapla" aria-label="Ekranı kapla">
+        <svg class="group-data-[max]:hidden" viewBox="0 0 16 16"><path d="M3.5 3.5h9v9h-9z"/></svg>
+        <svg class="hidden group-data-[max]:block" viewBox="0 0 16 16"><path d="M3.5 5.5h7v7h-7zM5.5 5.5v-2h7v7h-2"/></svg>
+      </button>
+      <button id="close" class="win hover:bg-danger hover:text-white" title="Kapat" aria-label="Kapat">
+        <svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
+      </button>
+    </div>
   </div>
 
-  <!-- Tab zone: never narrower than the scroll arrows + one tab + "+" + pr-8 of
-       empty drag area. Tabs that do not fit scroll inside #tablist; the arrows
-       show only then (data-overflow, set by strip.js). -->
-  <div id="tabs" data-drag class="group/tabs ml-1 flex h-full min-w-[130px] flex-1 items-center overflow-hidden pr-8">
-    <button id="tab-left" class="arrow" tabindex="-1" aria-hidden="true" title="Önceki sekmeler" aria-label="Önceki sekmeler">
-      <svg class="size-3" viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>
+  <div id="toolbar" class="relative flex h-10 min-w-0 shrink-0 items-center gap-0.5 border-b border-line bg-toolbar px-1.5">
+    <button id="back" class="nav" title="Geri (Alt+Sol)" aria-label="Geri" disabled>
+      <svg viewBox="0 0 16 16"><path d="M13 8H3.5M7.5 4 3.5 8l4 4"/></svg>
     </button>
-    <div id="tablist" role="tablist" aria-label="Sekmeler" class="relative flex h-full min-w-0 flex-[0_1_auto] items-center overflow-x-auto overflow-y-hidden [scrollbar-width:none]"></div>
-    <button id="tab-right" class="arrow" tabindex="-1" aria-hidden="true" title="Sonraki sekmeler" aria-label="Sonraki sekmeler">
-      <svg class="size-3" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>
+    <button id="forward" class="nav" title="İleri (Alt+Sağ)" aria-label="İleri" disabled>
+      <svg viewBox="0 0 16 16"><path d="M3 8h9.5M8.5 4l4 4-4 4"/></svg>
     </button>
-    <button id="new-tab" class="nav shrink-0" title="Yeni sekme (Ctrl+T)" aria-label="Yeni sekme">
-      <svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg>
+    <button id="reload" class="nav group" title="Yenile (Ctrl+R)" aria-label="Yenile">
+      <svg class="group-data-[loading]:hidden" viewBox="0 0 16 16"><path d="M12.5 8a4.5 4.5 0 1 1-1.3-3.2M12.5 3v2.5H10"/></svg>
+      <svg class="hidden group-data-[loading]:block" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg>
     </button>
+    <button id="home" class="nav" title="Ana sayfa" aria-label="Ana sayfa">
+      <svg viewBox="0 0 16 16"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5v6h3V9.5h2v3h3v-6"/></svg>
+    </button>
+
+    <!-- The address field takes all the width the buttons leave (down to
+         min-w-25 in the narrowest window). Filled, borderless at rest; on
+         focus it turns to the surface color with an accent ring. -->
+    <div id="address-box" class="mx-1.5 flex h-[30px] min-w-25 flex-1 items-center rounded-lg border border-transparent bg-field px-2.5 transition-[background-color,border-color,box-shadow] duration-100 hover:bg-field-hover focus-within:border-accent focus-within:bg-surface focus-within:ring-3 focus-within:ring-accent/20 data-[blocked]:border-danger">
+      <!-- Connection state of the shown page (security.js): a lock, "not secure",
+           a certificate error, or a crashed page with its reload button. Its
+           meaning is the status text after it, unseen but read out whenever it
+           changes. The mark is a button that opens the site information panel
+           (site_info.rs): the site's permissions and its data. -->
+      <div id="security" hidden
+           class="group/sec -ml-1.5 mr-1.5 flex h-6 max-w-[60%] shrink-0 items-center gap-1 text-[12px] text-muted">
+        <button id="site-info" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Site bilgileri"
+                aria-describedby="security-status"
+                class="flex h-6 min-w-0 items-center gap-1.5 rounded-md px-1.5 hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent aria-expanded:bg-hover">
+          <svg aria-hidden="true" class="hidden size-3.5 shrink-0 group-data-[state=secure]/sec:block" viewBox="0 0 16 16"><path d="M4.5 7.5h7V13h-7zM6 7.5v-2a2 2 0 0 1 4 0v2"/></svg>
+          <svg aria-hidden="true" class="size-3.5 shrink-0 group-data-[state=cert]/sec:text-danger group-data-[state=crashed]/sec:text-danger group-data-[state=secure]/sec:hidden" viewBox="0 0 16 16"><path d="M8 2.5 14 13H2zM8 6.5v3M8 11.25v.01"/></svg>
+          <span id="security-text" aria-hidden="true" class="min-w-0 truncate text-ink empty:hidden"></span>
+        </button>
+        <button id="security-reload" type="button" hidden title="Sayfayı yeniden yükle (Ctrl+R)"
+                class="shrink-0 rounded-md px-1 text-ink underline hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent">Yeniden yükle</button>
+      </div>
+      <!-- Outside the mark, so it is still there to say that a mark went away. -->
+      <span id="security-status" role="status" aria-live="polite" class="sr-only"></span>
+      <input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="Adres"
+             placeholder="Ara ya da adres gir"
+             class="h-full w-full min-w-0 bg-transparent text-[13.5px] text-ink outline-none select-text placeholder:text-muted">
+      <!-- Page zoom other than 100% (core.js); a click resets it. -->
+      <button id="zoom" hidden tabindex="-1"
+              class="ml-1 flex h-6 shrink-0 items-center gap-0.5 rounded-md px-1.5 text-[11px] tabular-nums text-muted hover:bg-hover hover:text-ink">
+        <svg class="size-3" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3.25 3.25"/></svg>
+        <span id="zoom-level"></span>
+      </button>
+      <!-- On a Chrome Web Store detail page (webstore.js): add its extension,
+           or remove it if X-Browser has it. Rust asks before either. -->
+      <button id="ext-store" type="button" hidden
+              class="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-accent px-2 text-[11px] font-medium text-white hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent aria-busy:opacity-60">
+        <svg aria-hidden="true" class="size-3 shrink-0" viewBox="0 0 16 16"><path d="M6 2.5h3V4a1 1 0 0 0 2 0V2.5h2.5V6H12a1 1 0 0 0 0 2h1.5v5.5H10V12a1 1 0 0 0-2 0v1.5H2.5V10H4a1 1 0 0 0 0-2H2.5V4.5H6z"/></svg>
+        <span id="ext-store-text"></span>
+      </button>
+      <!-- Bookmark star (bookmarks.js): filled while the page is bookmarked. -->
+      <button id="bm-star" type="button" disabled aria-label="Yer imi" aria-pressed="false" title="Bu sayfayı yer imlerine ekle (Ctrl+D)"
+              class="group -mr-1 ml-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-35 disabled:hover:bg-transparent aria-pressed:text-accent">
+        <svg class="size-4 group-aria-pressed:fill-current" viewBox="0 0 16 16"><path d="M8 1.5l1.95 4.1 4.55.6-3.3 3.15.8 4.45L8 11.55 3.99 13.8l.8-4.45L1.5 6.2l4.55-.6z"/></svg>
+      </button>
+    </div>
+
+    <!-- Extensions with a popup (shown only while an enabled one has one;
+         ext-button.js, src/ext_ui.rs). -->
+    <button id="ext-btn" class="nav" title="Uzantılar" aria-label="Uzantılar" aria-haspopup="menu" hidden>
+      <svg viewBox="0 0 16 16"><path d="M3 5.5h2.5a1.5 1.5 0 1 1 3 0H11v2.5a1.5 1.5 0 1 1 0 3V13.5H8.5a1.5 1.5 0 1 0-3 0H3v-2.5a1.5 1.5 0 1 0 0-3z"/></svg>
+    </button>
+    <!-- Downloads (shown once this session has had a download; core.js,
+         xb.downloads) and the main menu. -->
+    <button id="downloads-btn" class="nav group relative" title="İndirilenler (Ctrl+J)" aria-label="İndirilenler" hidden>
+      <svg viewBox="0 0 16 16"><path d="M8 2.5v8m-3-3 3 3 3-3M3.5 13h9"/></svg>
+      <span class="absolute right-1.5 top-1.5 hidden size-2 rounded-full border-2 border-toolbar bg-accent group-data-[busy]:block"></span>
+    </button>
+    <button id="menu-btn" class="nav" title="Menü (Alt+F)" aria-label="Menü" aria-haspopup="menu">
+      <svg viewBox="0 0 16 16"><path d="M2.75 4.5h10.5M2.75 8h10.5M2.75 11.5h10.5"/></svg>
+    </button>
+
+    <div id="loadbar" class="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-accent opacity-0 transition-opacity duration-100 data-[on]:opacity-100"></div>
   </div>
-
-  <!-- Extensions with a popup (shown only while an enabled one has one;
-       ext-button.js, src/ext_ui.rs). -->
-  <button id="ext-btn" class="nav" title="Uzantılar" aria-label="Uzantılar" aria-haspopup="menu" hidden>
-    <svg viewBox="0 0 16 16"><path d="M3 5.5h2.5a1.5 1.5 0 1 1 3 0H11v2.5a1.5 1.5 0 1 1 0 3V13.5H8.5a1.5 1.5 0 1 0-3 0H3v-2.5a1.5 1.5 0 1 0 0-3z"/></svg>
-  </button>
-  <!-- Downloads (shown once this session has had a download; core.js,
-       xb.downloads) and the main menu. -->
-  <button id="downloads-btn" class="nav group relative" title="İndirilenler (Ctrl+J)" aria-label="İndirilenler" hidden>
-    <svg viewBox="0 0 16 16"><path d="M8 2.5v8m-3-3 3 3 3-3M3.5 13h9"/></svg>
-    <span class="absolute right-1 top-1 hidden size-1.5 rounded-full bg-accent group-data-[busy]:block"></span>
-  </button>
-  <button id="menu-btn" class="nav mr-1" title="Menü (Alt+F)" aria-label="Menü" aria-haspopup="menu">
-    <svg viewBox="0 0 16 16"><path d="M8 3.5v.01M8 8v.01m0 4.49v.01" stroke-width="2"/></svg>
-  </button>
-
-  <div class="flex h-full shrink-0 self-stretch">
-    <button id="min" class="win" title="Simge durumuna küçült" aria-label="Küçült">
-      <svg viewBox="0 0 16 16"><path d="M3.5 8h9"/></svg>
-    </button>
-    <button id="max" class="win group" title="Ekranı kapla" aria-label="Ekranı kapla">
-      <svg class="group-data-[max]:hidden" viewBox="0 0 16 16"><path d="M3.5 3.5h9v9h-9z"/></svg>
-      <svg class="hidden group-data-[max]:block" viewBox="0 0 16 16"><path d="M3.5 5.5h7v7h-7zM5.5 5.5v-2h7v7h-2"/></svg>
-    </button>
-    <button id="close" class="win hover:bg-danger hover:text-white" title="Kapat" aria-label="Kapat">
-      <svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
-    </button>
-  </div>
-
-  <div id="loadbar" class="pointer-events-none absolute inset-x-0 -bottom-px h-0.5 bg-accent opacity-0 transition-opacity duration-100 data-[on]:opacity-100"></div>
 </div>
 
 <!-- Fullscreen notice (core.js, xb.notice). While it is up the UI webview is
@@ -134,29 +144,32 @@
   <span id="fs-notice-site" dir="ltr" class="font-semibold"></span><span id="fs-notice-text"></span>
 </div>
 
-<!-- A tab shrinks from 200px down to min-w-9 (36px); past that the list scrolls.
+<!-- A tab shrinks from 232px down to min-w-9 (36px); past that the list scrolls.
      The visible part (.tab-body) is inset inside it and sheds its contents as
      the tab narrows (container queries on the tab's own width; which child
      shows when is in input.css, .tab rules):
      76px = an inactive tab hides its close button, every tab its sound button,
      52px = no title: an inactive tab shows its icon, the active tab only its
-            close button (and an accent border).
+            close button.
      Below 76px, in place of the sound button, a tab playing audio has a dot
-     in its corner (.tab-body::after). -->
+     in its corner (.tab-body::after).
+     The active tab's body reaches the toolbar and has its color, with the
+     rounded top and the outward curves at its feet drawn by .tab-body rules
+     in input.css; an inactive tab is a quieter pill that stops short of it. -->
 <template id="tab-tpl">
-  <div role="tab" tabindex="-1" aria-selected="false" class="tab group @container relative h-7 w-[200px] min-w-9 flex-[0_1_200px] overflow-hidden outline-none data-[dragging]:z-10 data-[dragging]:opacity-85">
-    <div class="tab-body absolute inset-x-px inset-y-0 flex items-center gap-1.5 overflow-hidden rounded-md border border-transparent ps-2 pe-1 text-muted transition-colors duration-100 group-hover:bg-hover group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-accent group-aria-selected:border-line group-aria-selected:bg-surface group-aria-selected:text-ink @max-[52px]:justify-center @max-[52px]:gap-0 @max-[52px]:px-0 @max-[52px]:group-aria-selected:border-accent">
+  <div role="tab" tabindex="-1" aria-selected="false" class="tab group @container relative h-8 w-[232px] min-w-9 flex-[0_1_232px] outline-none data-[dragging]:z-10 data-[dragging]:opacity-85 aria-selected:z-[1]">
+    <div class="tab-body group-focus-visible:outline-2 group-focus-visible:-outline-offset-2 group-focus-visible:outline-accent @max-[52px]:justify-center @max-[52px]:gap-0 @max-[52px]:px-0">
       <span class="fav size-4 shrink-0 items-center justify-center">
         <span class="dot size-1.5 rounded-full bg-accent"></span>
         <img class="icon size-4" alt="" draggable="false">
         <svg class="glyph size-3.5" viewBox="0 0 16 16"><path d="M4.5 2.5H9l2.5 2.5v8.5h-7zM9 2.5V5h2.5"/></svg>
       </span>
       <span class="title min-w-0 flex-1 truncate leading-normal"></span>
-      <button class="audio size-5 shrink-0 items-center justify-center rounded hover:bg-line hover:text-ink" tabindex="-1" aria-hidden="true" title="Sesi kapat" aria-label="Sesi kapat">
+      <button class="audio size-5 shrink-0 items-center justify-center rounded-md hover:bg-hover hover:text-ink" tabindex="-1" aria-hidden="true" title="Sesi kapat" aria-label="Sesi kapat">
         <svg class="sound size-3.5" viewBox="0 0 16 16"><path d="M2.5 6h2l3-2.5v9l-3-2.5h-2zM10 6a2.5 2.5 0 0 1 0 4m1.5-6a5 5 0 0 1 0 8"/></svg>
         <svg class="silent size-3.5" viewBox="0 0 16 16"><path d="M2.5 6h2l3-2.5v9l-3-2.5h-2zM10 6l4 4m0-4-4 4"/></svg>
       </button>
-      <button class="close size-5 shrink-0 items-center justify-center rounded text-muted hover:bg-line hover:text-ink" tabindex="-1" aria-hidden="true" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
+      <button class="close size-5 shrink-0 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-ink" tabindex="-1" aria-hidden="true" title="Sekmeyi kapat (Ctrl+W)" aria-label="Sekmeyi kapat">
         <svg class="size-3" viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
       </button>
     </div>

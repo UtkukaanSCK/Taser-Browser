@@ -117,10 +117,11 @@
     focusTab(to);
   }
 
-  // Scrolls the list just enough to show `el` whole.
+  // Scrolls the list just enough to show `el` whole, with the active tab's
+  // feet (6px each side) in view too.
   function reveal(el) {
-    const l = el.offsetLeft;
-    const r = l + el.offsetWidth;
+    const l = Math.max(0, el.offsetLeft - 6);
+    const r = Math.min(tabsEl.scrollWidth, el.offsetLeft + el.offsetWidth + 6);
     if (l < tabsEl.scrollLeft) tabsEl.scrollLeft = l;
     else if (r > tabsEl.scrollLeft + tabsEl.clientWidth) tabsEl.scrollLeft = r - tabsEl.clientWidth;
   }

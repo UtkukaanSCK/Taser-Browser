@@ -18,24 +18,34 @@
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   /* The one accent color. */
   --color-accent: oklch(0.62 0.16 252);
-  /* Neutral surfaces (light). Dark values are swapped in below. */
-  --color-strip: #f4f4f5;
+  /* Neutral surfaces (light). Dark values are swapped in below. Three
+     steps of depth: the frame behind the tabs (also the window's own
+     background, app.rs background()), the toolbar and the active tab on it,
+     and the address field set into the toolbar. Surface is for panels and
+     the focused field. Hover is see-through, so one value works on all. */
+  --color-frame: #e3e5ea;
+  --color-toolbar: #f9fafb;
+  --color-field: #eceef2;
+  --color-field-hover: #e4e6eb;
   --color-surface: #ffffff;
-  --color-hover: #e4e4e7;
-  --color-line: #d4d4d8;
-  --color-ink: #27272a;
-  --color-muted: #71717a;
+  --color-hover: rgb(24 26 32 / 0.075);
+  --color-line: #d5d8de;
+  --color-ink: #1f2023;
+  --color-muted: #5f636b;
   --color-danger: #c42b1c;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-strip: #1c1c1e;
-    --color-surface: #2c2c2e;
-    --color-hover: #38383b;
-    --color-line: #3f3f43;
-    --color-ink: #e4e4e7;
-    --color-muted: #a1a1aa;
+    --color-frame: #1b1c20;
+    --color-toolbar: #2a2b30;
+    --color-field: #1e1f23;
+    --color-field-hover: #18191c;
+    --color-surface: #2f3035;
+    --color-hover: rgb(255 255 255 / 0.09);
+    --color-line: #3b3c42;
+    --color-ink: #ececef;
+    --color-muted: #a0a2a9;
   }
 }
 
@@ -68,11 +78,11 @@
 @layer components {
   /* Toolbar icon button. */
   .nav {
-    @apply flex size-7 shrink-0 items-center justify-center rounded-md transition-colors duration-100 hover:bg-hover disabled:opacity-35 disabled:hover:bg-transparent;
+    @apply flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-100 hover:bg-hover disabled:opacity-35 disabled:hover:bg-transparent;
   }
-  /* Window caption button (full strip height, Windows-like width). */
+  /* Window caption button (full tab bar height, Windows' width). */
   .win {
-    @apply flex h-full w-11 items-center justify-center transition-colors duration-100 hover:bg-hover;
+    @apply flex h-full w-[46px] items-center justify-center transition-colors duration-100 hover:bg-hover;
   }
   /* Main menu row and its zoom buttons (overlay.html, menu.js). */
   .mi {
@@ -86,7 +96,60 @@
   }
   /* Tab list scroll arrows, shown only while the tabs overflow. */
   .arrow {
-    @apply hidden h-7 w-4 shrink-0 items-center justify-center rounded text-muted transition-colors duration-100 group-data-[overflow]/tabs:flex hover:bg-hover hover:text-ink disabled:opacity-35 disabled:hover:bg-transparent;
+    @apply hidden h-7 w-5 shrink-0 items-center justify-center rounded-md text-muted transition-colors duration-100 group-data-[overflow]/tabs:flex hover:bg-hover hover:text-ink disabled:opacity-35 disabled:hover:bg-transparent;
+  }
+
+  /* A tab's visible part. An inactive tab is a pill that stops 4px short
+     of the toolbar and shows only on hover; the active one reaches down into
+     the toolbar with its color, square at the foot, with an outward curve
+     each side (::before) so tab and toolbar read as one shape. Its contents
+     keep the inactive tabs' line (padding-bottom). */
+  .tab-body {
+    position: absolute;
+    inset: 0 2px 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+    border-radius: 8px;
+    padding-inline: 10px 6px;
+    color: var(--color-muted);
+    transition:
+      background-color 100ms,
+      color 100ms;
+  }
+  .tab[aria-selected="false"]:hover .tab-body {
+    background: color-mix(in oklab, var(--color-toolbar) 60%, transparent);
+    color: var(--color-ink);
+  }
+  .tab[aria-selected="true"] .tab-body {
+    bottom: 0;
+    padding-bottom: 4px;
+    border-radius: 8px 8px 0 0;
+    background: var(--color-toolbar);
+    color: var(--color-ink);
+  }
+  /* The feet sit on the tab itself, just outside the body's 2px inset, so
+     the body can keep clipping its own contents. */
+  .tab[aria-selected="true"]::before,
+  .tab[aria-selected="true"]::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    pointer-events: none;
+  }
+  .tab[aria-selected="true"]::before {
+    left: -6px;
+    background: radial-gradient(circle at 0 0, transparent 7.5px, var(--color-toolbar) 8px);
+  }
+  .tab[aria-selected="true"]::after {
+    right: -6px;
+    background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--color-toolbar) 8px);
+  }
+  .tab[aria-selected="true"] .title {
+    font-weight: 500;
   }
 
   /* Which parts of a tab show, by state and by the tab's own width (it is the

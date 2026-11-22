@@ -1058,14 +1058,14 @@ mod tests {
         };
         let size = LogicalSize::new(1200.0, 800.0);
         // Right edge at the star's right edge (700 + 20).
-        assert_eq!(parts(editor_rect(size, (700, 20))), (400.0, 38.0, 320.0, 156.0));
+        assert_eq!(parts(editor_rect(size, (700, 20))), (400.0, 74.0, 320.0, 156.0));
         // Star unknown: at the window's right.
-        assert_eq!(parts(editor_rect(size, (0, 0))), (872.0, 38.0, 320.0, 156.0));
+        assert_eq!(parts(editor_rect(size, (0, 0))), (872.0, 74.0, 320.0, 156.0));
         // Star near the left edge or the right edge: never outside.
         assert_eq!(parts(editor_rect(size, (100, 20))).0, 0.0);
         assert_eq!(parts(editor_rect(size, (1190, 20))).0, 872.0);
         // A small window: narrower, shorter.
         let small = LogicalSize::new(300.0, 120.0);
-        assert_eq!(parts(editor_rect(small, (250, 20))), (0.0, 38.0, 284.0, 74.0));
+        assert_eq!(parts(editor_rect(small, (250, 20))), (0.0, 74.0, 284.0, 38.0));
     }
 }

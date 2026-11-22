@@ -383,7 +383,7 @@ mod tests {
     #[test]
     fn popup_hangs_under_the_button_inside_the_window() {
         let size = tao::dpi::LogicalSize::new(1200.0, 800.0);
-        assert_eq!(parts(popup_rect(size, 1100.0, POPUP_W, POPUP_H)), (740.0, 42.0, 360.0, 480.0));
+        assert_eq!(parts(popup_rect(size, 1100.0, POPUP_W, POPUP_H)), (740.0, 78.0, 360.0, 480.0));
         assert_eq!(parts(popup_rect(size, 1200.0, POPUP_W, POPUP_H)).0, 832.0);
         assert_eq!(parts(popup_rect(size, 10.0, POPUP_W, POPUP_H)).0, 0.0);
         for (w, h, right) in [(480.0, 240.0, 400.0), (300.0, 200.0, 290.0), (1920.0, 1080.0, 1900.0)] {
@@ -398,9 +398,9 @@ mod tests {
     fn popup_takes_its_pages_size_within_chromes_limits() {
         let size = tao::dpi::LogicalSize::new(1200.0, 800.0);
         // Its right edge stays under the button whatever its width.
-        assert_eq!(parts(popup_rect(size, 1100.0, 216.0, 90.0)), (884.0, 42.0, 216.0, 90.0));
-        assert_eq!(parts(popup_rect(size, 1100.0, 3.0, 0.0)), (1075.0, 42.0, 25.0, 25.0));
-        assert_eq!(parts(popup_rect(size, 1100.0, 5000.0, 5000.0)), (300.0, 42.0, 800.0, 600.0));
+        assert_eq!(parts(popup_rect(size, 1100.0, 216.0, 90.0)), (884.0, 78.0, 216.0, 90.0));
+        assert_eq!(parts(popup_rect(size, 1100.0, 3.0, 0.0)), (1075.0, 78.0, 25.0, 25.0));
+        assert_eq!(parts(popup_rect(size, 1100.0, 5000.0, 5000.0)), (300.0, 78.0, 800.0, 600.0));
     }
 
     #[test]

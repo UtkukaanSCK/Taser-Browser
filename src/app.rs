@@ -12,8 +12,9 @@ use tao::dpi::{LogicalPosition, LogicalSize};
 use tao::window::{ResizeDirection, Theme, Window};
 use wry::{Rect, WebContext, WebView, WebViewBuilder};
 
-/// Height of the UI strip in logical pixels. Must match `--strip-h` in the CSS.
-pub const UI_HEIGHT: f64 = 40.0;
+/// Height of the UI webview (tab bar + toolbar) in logical pixels. Must match
+/// `#strip` (h-[76px]: a 36px tab bar over a 40px toolbar) in ui/index.html.
+pub const UI_HEIGHT: f64 = 76.0;
 
 #[derive(Debug)]
 pub enum UserEvent {
@@ -179,8 +180,8 @@ pub struct App {
 /// Palette background, so nothing flashes white in dark mode before first paint.
 pub fn background(theme: Theme) -> (u8, u8, u8, u8) {
     match theme {
-        Theme::Dark => (0x1c, 0x1c, 0x1e, 0xff),
-        _ => (0xf4, 0xf4, 0xf5, 0xff),
+        Theme::Dark => (0x1b, 0x1c, 0x20, 0xff),
+        _ => (0xe3, 0xe5, 0xea, 0xff),
     }
 }
 

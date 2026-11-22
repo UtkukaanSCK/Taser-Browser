@@ -57,28 +57,34 @@ impl Tile {
 }
 
 /// The page's look: the colors and type of `ui/input.css`, light and dark.
-const CSS: &str = ":root { color-scheme: light dark; --surface: #ffffff; --ink: #27272a; --muted: #71717a; \
-  --line: #d4d4d8; --hover: #f4f4f5; --accent: oklch(0.62 0.16 252); } \
-  @media (prefers-color-scheme: dark) { :root { --surface: #2c2c2e; --ink: #e4e4e7; --muted: #a1a1aa; \
-  --line: #3f3f43; --hover: #3a3a3d; } } \
+/// The page has the toolbar's color, so the active tab, the toolbar and the
+/// page above the fold read as one surface; the search box is a field set
+/// into it, like the address field.
+const CSS: &str = ":root { color-scheme: light dark; --page: #f9fafb; --field: #eceef2; --surface: #ffffff; \
+  --ink: #1f2023; --muted: #5f636b; --line: #d5d8de; --hover: rgb(24 26 32 / 0.06); --accent: oklch(0.62 0.16 252); } \
+  @media (prefers-color-scheme: dark) { :root { --page: #2a2b30; --field: #1e1f23; --surface: #2f3035; \
+  --ink: #ececef; --muted: #a0a2a9; --line: #3b3c42; --hover: rgb(255 255 255 / 0.07); } } \
   html, body { margin: 0; min-height: 100%; } \
-  body { background: var(--surface); color: var(--ink); \
+  body { background: var(--page); color: var(--ink); \
   font: 14px/1.5 \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } \
-  main { box-sizing: border-box; max-width: 680px; margin: 0 auto; padding: 18vh 24px 48px; } \
-  form { margin: 0 0 40px; } \
-  input { box-sizing: border-box; width: 100%; font: inherit; font-size: 16px; color: inherit; \
-  background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 10px 18px; outline: none; } \
-  input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); } \
+  main { box-sizing: border-box; max-width: 720px; margin: 0 auto; padding: 20vh 24px 48px; } \
+  form { margin: 0 0 44px; } \
+  input { box-sizing: border-box; width: 100%; height: 48px; font: inherit; font-size: 15px; color: inherit; \
+  background: var(--field); border: 1px solid transparent; border-radius: 12px; padding: 0 18px; outline: none; \
+  transition: background-color 100ms, border-color 100ms, box-shadow 100ms; } \
+  input::placeholder { color: var(--muted); } \
+  input:focus-visible { background: var(--surface); border-color: var(--accent); \
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 20%, transparent); } \
   section { margin: 0 0 28px; } \
-  h2 { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 8px 8px; } \
+  h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 10px 10px; } \
   ul { list-style: none; margin: 0; padding: 0; display: grid; \
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 4px; } \
-  .tile { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px; \
-  border-radius: 8px; color: inherit; text-decoration: none; } \
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; } \
+  .tile { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px 8px 12px; \
+  border-radius: 12px; color: inherit; text-decoration: none; transition: background-color 100ms; } \
   .tile:hover { background: var(--hover); } \
   .tile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; } \
-  .icon { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: #fff; \
-  font-weight: 600; font-size: 16px; } \
+  .icon { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; color: #fff; \
+  font-weight: 600; font-size: 18px; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06); } \
   .label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }";
 
 fn lit(s: &str) -> String {
