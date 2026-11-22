@@ -44,7 +44,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 695;
+const EXPECTED_CHECKS: u32 = 697;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -401,32 +401,35 @@ const DELAYS: &[u64] = &[
     1500, // 312 check the tick checked; another tick
     900,  // 313 check it asked nothing; the page open, its button: 1.5 wants more
     1500, // 314 check the question is over the page; answer "no"
-    1500, // 315 check the page is back and 1.4 stays; close it
-    1500, // 316 new tab page: Ctrl+T
-    3500, // 317 check the page; search for an address from its box
-    900,  // 318 check it went; set a home address on the settings page
-    900,  // 319 check it took; a script address, with Enter
-    3500, // 320 check it was refused; the home button
-    900,  // 321 check it went home; reset the home address
-    2500, // 322 check it reset; the home button
-    900,  // 323 check the new tab page lists the visited sites
-    900,  // 324 privacy: a loopback page with tracking parameters
-    2500, // 325 check stripped, not upgraded, GPC; a page's own link
-    2500, // 326 check it was stripped too; a public http address
-    6000, // 327 check https was tried and the page offers http; take it
-    4000, // 328 check http opened; the same host again
-    3000, // 329 check it is remembered; the sentinel from a plain page
-    1500, // 330 check it was refused; open the settings
-    900,  // 331 check the switches; turn all three off
-    900,  // 332 check them saved; the loopback page again
-    2500, // 333 check nothing stripped and no GPC
-    1500, // 334 site info: store data on the loopback page; open the panel
-    1500, // 335 check the panel; block the location permission
-    1500, // 336 check it is kept in the profile; back to ask
-    2000, // 337 check it is gone; delete the site's data
-    1500, // 338 check it was deleted; close the panel; reload the page
-    900,  // 339 check the page's data is gone
-    900,  // 340 close the new tab page's tab; last tab close quits
+    1500, // 315 check the page is back and 1.4 stays; the timer finds 1.5 too
+    900,  // 316 check the question is over the page
+    1500, // 317 answer "Güncelle"
+    1500, // 318 check the install error is on the page; close it
+    1500, // 319 new tab page: Ctrl+T
+    3500, // 320 check the page; search for an address from its box
+    900,  // 321 check it went; set a home address on the settings page
+    900,  // 322 check it took; a script address, with Enter
+    3500, // 323 check it was refused; the home button
+    900,  // 324 check it went home; reset the home address
+    2500, // 325 check it reset; the home button
+    900,  // 326 check the new tab page lists the visited sites
+    900,  // 327 privacy: a loopback page with tracking parameters
+    2500, // 328 check stripped, not upgraded, GPC; a page's own link
+    2500, // 329 check it was stripped too; a public http address
+    6000, // 330 check https was tried and the page offers http; take it
+    4000, // 331 check http opened; the same host again
+    3000, // 332 check it is remembered; the sentinel from a plain page
+    1500, // 333 check it was refused; open the settings
+    900,  // 334 check the switches; turn all three off
+    900,  // 335 check them saved; the loopback page again
+    2500, // 336 check nothing stripped and no GPC
+    1500, // 337 site info: store data on the loopback page; open the panel
+    1500, // 338 check the panel; block the location permission
+    1500, // 339 check it is kept in the profile; back to ask
+    2000, // 340 check it is gone; delete the site's data
+    1500, // 341 check it was deleted; close the panel; reload the page
+    900,  // 342 check the page's data is gone
+    900,  // 343 close the new tab page's tab; last tab close quits
 ];
 
 /// What a new tab page shows: `main` (it is there), `ph` (the search box's
@@ -5501,7 +5504,7 @@ pub fn step(app: &mut App, n: u32) {
             check("update-timer-waits-a-day", new.is_empty() && app.webstore.busy_with().is_none(), format!("asked {new:?}"));
             // A version that wants more, found by the page's button with
             // the page open: the question comes over the page. In front to
-            // step 315 (`App::in_front`).
+            // step 318 (`App::in_front`).
             app.foreground = Some(true);
             crate::ext_ui::open(app);
             serve_update_check(&update_id(), "1.5", None);
@@ -5532,17 +5535,62 @@ pub fn step(app: &mut App, n: u32) {
                     && !home.join("1.5").exists(),
                 format!("{:?}, visible {shown}, job {:?}, record {rec:?}, 1.5 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.5").exists()),
             );
+            // The same 1.5, found by the daily timer with the page open: it
+            // asks over the page too. Every folder name it could unpack to
+            // is taken, so after "Güncelle" its install fails.
+            for name in update_blockers() {
+                let _ = std::fs::write(home.join(name), b"");
+            }
+            serve_update_check(&id, "1.5", None);
+            app.extensions.set_last_update_check(0);
+            app.handle(UserEvent::UpdateTimer);
+        }
+        316 => {
+            let id = update_id();
+            let shown = app.overlay.view().is_some_and(visible);
+            check(
+                "update-timer-asks-over-the-extensions-page",
+                app.overlay.mode == Mode::Store && shown && app.webstore.busy_with() == Some(id.as_str()),
+                format!("{:?}, visible {shown}, job {:?}", app.overlay.mode, app.webstore.busy_with()),
+            );
+        }
+        317 => {
+            // "Güncelle", once the answer delay is over.
+            app.handle(UserEvent::Ui(UiCommand::Store(crate::webstore::StoreCmd::Yes)));
+        }
+        318 => {
+            // The install failed: not said in a question left over the page
+            // (its "Kapat" would leave the page gone), but under the
+            // extension's row on the page, which is back.
+            let id = update_id();
+            let home = app.extensions.root().map_or_else(|| PathBuf::from("."), |r| r.join(&id));
+            let rec = app.extensions.records().iter().find(|e| e.id == id).map(|e| (e.version.clone(), e.enabled));
+            let shown = app.overlay.view().is_some_and(visible);
+            let unseen = app.extensions.last_error().cloned();
+            let state = format!("{:?}, visible {shown}, job {:?}, record {rec:?}, unseen {unseen:?}", app.overlay.mode, app.webstore.busy_with());
+            let back = app.overlay.mode == Mode::Extensions && shown && app.webstore.busy_with().is_none() && rec == Some(("1.4".into(), true)) && unseen.is_none();
+            const ROW_JS: &str = "(() => { const row = document.querySelector('#x-list li[data-id=\"__ID__\"] > p.text-danger');                 return `row=${row ? row.textContent : ''};top=${document.getElementById('x-error').hidden}`; })()";
+            overlay_eval(app, "update-install-error-shows-on-the-extensions-page", &ROW_JS.replace("__ID__", &id), move |r| {
+                check(
+                    "update-install-error-shows-on-the-extensions-page",
+                    back && field(&r, "row").starts_with("Son hata: Uzantı eklenemedi (") && field(&r, "top") == "true",
+                    format!("{r}; {state}"),
+                );
+            });
+            for name in update_blockers() {
+                let _ = std::fs::remove_file(home.join(name));
+            }
             crate::overlay::close(app);
             app.focus_after_switch();
             app.foreground = None;
         }
-        316 => {
+        319 => {
             // The new tab page.
             crate::overlay::close(app);
             remember("nt-tabs", app.tabs.len() as i64);
             press(app, vk::T, CTRL);
         }
-        317 => {
+        320 => {
             check(
                 "ctrl-t-tab-stays-blank",
                 app.tabs.len() as i64 == recall("nt-tabs") + 1 && active_url(app) == crate::url::BLANK,
@@ -5560,7 +5608,7 @@ pub fn step(app: &mut App, n: u32) {
                 "document.getElementById('xb-q').value = 'example.com'; document.getElementById('xb-search').requestSubmit();",
             );
         }
-        318 => {
+        321 => {
             check("newtab-search-box-goes-to-an-address", active_url(app).starts_with("https://example.com"), active_url(app));
             // A home address, through the settings page.
             crate::settings::open(app);
@@ -5569,7 +5617,7 @@ pub fn step(app: &mut App, n: u32) {
                 "document.getElementById('s-home').value = ' example.org '; document.getElementById('s-home-apply').click();",
             );
         }
-        319 => {
+        322 => {
             check("home-setting-takes-a-web-address", app.settings.home_url() == "https://example.org", app.settings.home_url());
             overlay_eval(app, "home-setting-says-so", HOME_STATUS_JS, |r| {
                 check("home-setting-says-so", field(&r, "s") == "Ana sayfa değiştirildi." && field(&r, "v") == "https://example.org", &r);
@@ -5580,7 +5628,7 @@ pub fn step(app: &mut App, n: u32) {
                  h.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));",
             );
         }
-        320 => {
+        323 => {
             check("home-setting-refuses-a-script", app.settings.home_url() == "https://example.org", app.settings.home_url());
             overlay_eval(app, "home-setting-says-it-refused", HOME_STATUS_JS, |r| {
                 // The refused text stays in the box, to be corrected.
@@ -5593,17 +5641,17 @@ pub fn step(app: &mut App, n: u32) {
             crate::overlay::close(app);
             ui_js(app, "document.getElementById('home').click()");
         }
-        321 => {
+        324 => {
             check("home-button-goes-to-the-home-address", active_url(app).starts_with("https://example.org"), active_url(app));
             crate::settings::open(app);
             overlay_js(app, "document.getElementById('s-home-reset').click();");
         }
-        322 => {
+        325 => {
             check("home-setting-resets-to-the-new-tab-page", app.settings.home_url() == crate::url::BLANK, app.settings.home_url());
             crate::overlay::close(app);
             ui_js(app, "document.getElementById('home').click()");
         }
-        323 => {
+        326 => {
             check("home-button-opens-the-new-tab-page", active_url(app) == crate::url::BLANK, active_url(app));
             page_eval(app, "newtab-lists-visited-sites", NEWTAB_JS, |r| {
                 check("newtab-lists-visited-sites", field(&r, "main") == "true" && field(&r, "ex") == "true" && field(&r, "bad") == "0", &r);
@@ -5611,7 +5659,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         // ---- Privacy (src/privacy.rs): tracking parameters, HTTPS-only,
         // Global Privacy Control ----
-        324 => {
+        327 => {
             crate::overlay::close(app);
             let port = serve_privacy_page();
             check("privacy-server-started", port.is_ok(), format!("{port:?}"));
@@ -5619,7 +5667,7 @@ pub fn step(app: &mut App, n: u32) {
             remember("privacy-port", i64::from(port));
             app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{port}/gpc?utm_source=x&a=1&fbclid=y#f"))));
         }
-        325 => {
+        328 => {
             let port = recall("privacy-port");
             let want = format!("http://127.0.0.1:{port}/gpc?a=1#f");
             check("strip-tracking-before-the-load", active_url(app) == want, format!("{} (want {want})", active_url(app)));
@@ -5642,7 +5690,7 @@ pub fn step(app: &mut App, n: u32) {
             PRIVACY_HITS.lock().unwrap().clear();
             page_js(app, "location.href = '/gpc?utm_source=z&b=2&gclid=w';");
         }
-        326 => {
+        329 => {
             // A navigation the page starts itself: its hook rewrites it.
             let port = recall("privacy-port");
             let want = format!("http://127.0.0.1:{port}/gpc?b=2");
@@ -5652,7 +5700,7 @@ pub fn step(app: &mut App, n: u32) {
             log(&format!("INFO page link, server saw the tracked request first: {leaked} {hits:?}"));
             app.handle(UserEvent::Ui(UiCommand::Navigate(HTTPS_ONLY_HTTP.into())));
         }
-        327 => {
+        330 => {
             // msftconnecttest.com's https answers with another name's
             // certificate: the upgrade fails.
             check("https-only-tries-https-first", active_url(app) == HTTPS_ONLY_HTTP.replacen("http:", "https:", 1), active_url(app));
@@ -5670,14 +5718,14 @@ pub fn step(app: &mut App, n: u32) {
             });
             page_js(app, "document.getElementById('xb-error-open').click()");
         }
-        328 => {
+        331 => {
             check("https-only-opens-http-when-asked", active_url(app) == HTTPS_ONLY_HTTP, active_url(app));
             page_eval(app, "https-only-http-page-is-the-sites", "`doc=${document.URL}`", |r| {
                 check("https-only-http-page-is-the-sites", field(&r, "doc") == HTTPS_ONLY_HTTP, &r);
             });
             app.handle(UserEvent::Ui(UiCommand::Navigate("http://www.msftconnecttest.com/connecttest.txt?again".into())));
         }
-        329 => {
+        332 => {
             check(
                 "https-only-exception-lasts-the-session",
                 active_url(app) == "http://www.msftconnecttest.com/connecttest.txt?again",
@@ -5686,7 +5734,7 @@ pub fn step(app: &mut App, n: u32) {
             // The "open http" address answers only the HTTPS-only page.
             page_js(app, &format!("location.href = '{}'", crate::privacy::HTTP_SENTINEL));
         }
-        330 => {
+        333 => {
             let id = app.tabs.active().unwrap();
             let loading = app.tabs.get(id).is_some_and(|t| t.loading);
             check(
@@ -5696,11 +5744,11 @@ pub fn step(app: &mut App, n: u32) {
             );
             crate::settings::open(app);
         }
-        331 => {
+        334 => {
             check("privacy-settings-open", app.overlay.mode == Mode::Settings, format!("mode {:?}", app.overlay.mode));
             overlay_js(app, "for (const id of ['s-https', 's-strip', 's-gpc']) document.getElementById(id).click();");
         }
-        332 => {
+        335 => {
             let s = &app.settings.value;
             check("privacy-switches-turn-off", !s.https_only && !s.strip_params && !s.gpc, format!("{s:?}"));
             let flushed = crate::store::flush(Duration::from_secs(2));
@@ -5715,7 +5763,7 @@ pub fn step(app: &mut App, n: u32) {
             let port = recall("privacy-port");
             app.handle(UserEvent::Ui(UiCommand::Navigate(format!("http://127.0.0.1:{port}/gpc?utm_source=x&a=1"))));
         }
-        333 => {
+        336 => {
             let port = recall("privacy-port");
             let want = format!("http://127.0.0.1:{port}/gpc?utm_source=x&a=1");
             check("strip-off-keeps-the-address", active_url(app) == want, format!("{} (want {want})", active_url(app)));
@@ -5729,13 +5777,13 @@ pub fn step(app: &mut App, n: u32) {
                 check("gpc-off-hidden-from-new-pages", field(&r, "gpc") != "true", &r);
             });
         }
-        334 => {
+        337 => {
             // The site information panel, on the loopback page of the privacy
             // steps: something stored first, for the deletion to remove.
             page_js(app, "localStorage.setItem('xbsite', '1'); document.cookie = 'xbsite=1; max-age=3600; path=/';");
             app.handle(UserEvent::Ui(UiCommand::Site(SiteCmd::Open(120))));
         }
-        335 => {
+        338 => {
             let want = format!("http://127.0.0.1:{}", recall("privacy-port"));
             check(
                 "site-info-opens-for-the-page",
@@ -5761,7 +5809,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_js(app, "document.querySelector('#si-perms input[name=\"si-k-3\"][value=\"2\"]').click()");
         }
-        336 => {
+        339 => {
             let origin = app.site.origin().to_string();
             if let Some(v) = app.content_view() {
                 let o = origin.clone();
@@ -5775,7 +5823,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             overlay_js(app, "document.querySelector('#si-perms input[name=\"si-k-3\"][value=\"0\"]').click()");
         }
-        337 => {
+        340 => {
             let origin = app.site.origin().to_string();
             if let Some(v) = app.content_view() {
                 crate::native::site_permissions(v, move |list| {
@@ -5793,7 +5841,7 @@ pub fn step(app: &mut App, n: u32) {
                 |r| check("site-data-clear-asks-first", r == "asked=true", &r),
             );
         }
-        338 => {
+        341 => {
             check("site-data-deleted", app.site.cleared == Some(true), format!("{:?}", app.site.cleared));
             overlay_eval(app, "site-data-panel-says-deleted", SITE_JS, |r| {
                 check("site-data-panel-says-deleted", field(&r, "status") == crate::site_info::SAID_CLEARED, &r);
@@ -5807,12 +5855,12 @@ pub fn step(app: &mut App, n: u32) {
             let url = active_url(app);
             app.handle(UserEvent::Ui(UiCommand::Navigate(url)));
         }
-        339 => {
+        342 => {
             page_eval(app, "site-data-gone-after-reload", "`ls=${localStorage.getItem('xbsite')};ck=${document.cookie.includes('xbsite=1')}`", |r| {
                 check("site-data-gone-after-reload", field(&r, "ls") == "null" && field(&r, "ck") == "false", &r);
             });
         }
-        340 => {
+        343 => {
             crate::overlay::close(app);
             // The new tab page's tab (the privacy steps ran in it), then the last one.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));
@@ -5835,6 +5883,12 @@ pub fn step(app: &mut App, n: u32) {
 
 /// The update service, as the fake store answers it (`cws::UPDATE_SERVICE`).
 const STORE_URL: &str = "https://clients2.google.com/service/update2/crx";
+
+/// File names that take every folder name an unpacked 1.5 could go to
+/// (`webstore::unpack_to`), so its install fails.
+fn update_blockers() -> Vec<String> {
+    std::iter::once("1.5".to_owned()).chain((2..=9).map(|n| format!("1.5_{n}"))).collect()
+}
 
 /// The update steps' extension: its id, and `(version, sha256 hex, size)`
 /// of each package the fake store holds.

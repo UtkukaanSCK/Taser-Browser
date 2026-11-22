@@ -546,9 +546,11 @@ have, or lets sites or other extensions message it, runs its scripts in more
 frames, replaces a browser page or changes its manifest version ("Güncelle" or
 "İptal", listing only what is new). An update of an extension the Uzantılar
 page is still switching or removing waits for the next check. It asks only when nothing
-else is on screen or only the Uzantılar page is: an update found by the page's
-button asks over the page, and the page comes back once the question is
-answered or closed ("İptal" keeps the installed version). With another overlay
+else is on screen or only the Uzantılar page is: an update found with the page
+open (by its button or by the daily check) asks over the page, and the page
+comes back once the question is answered or closed ("İptal" keeps the
+installed version); if the install fails after "Güncelle", the page says why
+under the extension's row. With another overlay
 page open (a menu, a question), an extension's popup open, in fullscreen or
 with X-Browser in the background it waits for the next check. Otherwise it goes
 in without a question. A version whose download
