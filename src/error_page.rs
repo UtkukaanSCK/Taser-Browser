@@ -1,4 +1,4 @@
-//! X-Browser's own page for a load that failed, in place of WebView2's
+//! Taser's own page for a load that failed, in place of WebView2's
 //! built-in (Edge-branded) one, which every tab turns off
 //! (`native::harden_content`).
 //!
@@ -106,10 +106,10 @@ const MAX_SHOWN_URL: usize = 1000;
 
 /// The page's look: the colors and type of `ui/input.css`, light and dark,
 /// on the toolbar's color like the new tab page.
-const CSS: &str = ":root { color-scheme: light dark; --page: #f9fafb; --field: #eceef2; --ink: #1f2023; \
-  --muted: #5f636b; --line: #d5d8de; --hover: rgb(24 26 32 / 0.06); --accent: oklch(0.62 0.16 252); } \
-  @media (prefers-color-scheme: dark) { :root { --page: #2a2b30; --field: #1e1f23; --ink: #ececef; \
-  --muted: #a0a2a9; --line: #3b3c42; --hover: rgb(255 255 255 / 0.07); } } \
+const CSS: &str = ":root { color-scheme: light dark; --page: #f3f7fe; --field: #e3ebf9; --ink: #121c33; \
+  --muted: #4b5b7c; --line: #c3d1ea; --hover: rgb(29 64 160 / 0.07); --accent: oklch(0.57 0.19 258); } \
+  @media (prefers-color-scheme: dark) { :root { --page: #18264a; --field: #101b38; --ink: #e9effc; \
+  --muted: #9fb1d6; --line: #2b3d6b; --hover: rgb(160 190 255 / 0.10); } } \
   html, body { height: 100%; margin: 0; } \
   body { background: var(--page); color: var(--ink); display: flex; justify-content: center; \
   font: 14px/1.5 \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } \

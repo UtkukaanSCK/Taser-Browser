@@ -5,7 +5,7 @@
 //! site stored (its cookies and storage, nothing else).
 //!
 //! A permission chosen in a page's own prompt is kept in the profile, and
-//! until now nothing in X-Browser could take one back; this is where it is
+//! until now nothing in Taser could take one back; this is where it is
 //! taken back. The panel is about one origin (`https://host[:port]`), the
 //! one WebView2 keeps permissions under; only http(s) pages have one.
 //!

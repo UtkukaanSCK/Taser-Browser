@@ -33,7 +33,7 @@ pub enum UserEvent {
     NoticeTimeout(u32),
     /// From a content webview's policy hooks (see `policy`). Untrusted.
     Policy(TabId, crate::policy::Event),
-    /// X-Browser was started again (see `instance`): open this checked web
+    /// Taser was started again (see `instance`): open this checked web
     /// address in a new tab, or with None just come to the front.
     OpenFromOtherInstance(Option<String>),
     /// The history file has been read in the background (see `history`).
@@ -91,11 +91,11 @@ pub enum Failure {
 }
 
 /// Shown when the WebView2 browser process dies under us.
-const BROWSER_DIED: &str = "X-Browser beklenmedik bir hatayla karşılaştı: Microsoft Edge WebView2 \
+const BROWSER_DIED: &str = "Taser beklenmedik bir hatayla karşılaştı: Microsoft Edge WebView2 \
                             tarayıcı işlemi kapandı.\n\nUygulama kapanacak. Yeniden başlatmanız yeterlidir.";
 
 /// Shown when the UI renderer keeps dying or hanging, so reloading it is futile.
-const UI_FAILED: &str = "X-Browser beklenmedik bir hatayla karşılaştı: arayüz işlemi kısa sürede \
+const UI_FAILED: &str = "Taser beklenmedik bir hatayla karşılaştı: arayüz işlemi kısa sürede \
                          defalarca çöktü veya yanıt vermedi.\n\nUygulama kapanacak. Yeniden başlatmanız yeterlidir.";
 
 /// The UI is reloaded after a renderer failure, but not after this many
@@ -180,8 +180,8 @@ pub struct App {
 /// Palette background, so nothing flashes white in dark mode before first paint.
 pub fn background(theme: Theme) -> (u8, u8, u8, u8) {
     match theme {
-        Theme::Dark => (0x1b, 0x1c, 0x20, 0xff),
-        _ => (0xe3, 0xe5, 0xea, 0xff),
+        Theme::Dark => (0x0e, 0x18, 0x30, 0xff),
+        _ => (0xcd, 0xdc, 0xf6, 0xff),
     }
 }
 
@@ -373,7 +373,7 @@ impl App {
                 if let Err(e) = native::attach_privacy(view, id)
                     .and_then(|()| native::apply_gpc(view, id, self.settings.value.gpc))
                 {
-                    eprintln!("x-browser: tab {id}: no Global Privacy Control: {e}");
+                    eprintln!("taser: tab {id}: no Global Privacy Control: {e}");
                 }
             }
             view.load_url(url)
@@ -465,7 +465,7 @@ impl App {
             && self.view(id).is_none()
             && let Err(e) = self.create_view(id)
         {
-            eprintln!("x-browser: cannot create the webview of tab {id}: {e}");
+            eprintln!("taser: cannot create the webview of tab {id}: {e}");
             if let Some(t) = self.tabs.get_mut(id) {
                 t.loading = false;
             }
@@ -499,7 +499,7 @@ impl App {
         }
     }
 
-    /// Whether X-Browser is the foreground window (not some other program).
+    /// Whether Taser is the foreground window (not some other program).
     /// The self-test can fix the answer with `foreground`.
     pub fn in_front(&self) -> bool {
         #[cfg(feature = "selftest")]
@@ -625,7 +625,7 @@ impl App {
                 let _ = self.ui.reload();
             }
             // A dead page leaves the tab empty (WebView2's own error page is
-            // off, and a dead renderer cannot be given X-Browser's); the
+            // off, and a dead renderer cannot be given Taser's); the
             // indicator offers the reload. The tab stays, but must not keep
             // spinning, nor keep the screen.
             (_, Some(id)) => {
@@ -990,7 +990,7 @@ impl App {
     /// active tab, shows and focuses it. On failure the tab stays as it was.
     fn revive(&mut self, id: TabId) {
         if let Err(e) = self.create_view(id) {
-            eprintln!("x-browser: cannot create the webview of tab {id}: {e}");
+            eprintln!("taser: cannot create the webview of tab {id}: {e}");
             self.dirty = true;
             return;
         }

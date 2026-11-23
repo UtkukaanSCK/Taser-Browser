@@ -1,4 +1,4 @@
-//! Embeds assets/x-browser.ico in the exe as icon resource 1, with no
+//! Embeds assets/taser.ico in the exe as icon resource 1, with no
 //! build dependencies: the .ico is rewritten as a compiled resource file
 //! (.res) and handed straight to link.exe, which accepts .res inputs. That
 //! gives Explorer its file icon, and main.rs loads the same resource for the
@@ -8,7 +8,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-const ICON: &str = "assets/x-browser.ico";
+const ICON: &str = "assets/taser.ico";
 const RT_ICON: u16 = 3;
 const RT_GROUP_ICON: u16 = 14;
 const LANG_EN_US: u16 = 0x0409;
@@ -23,7 +23,7 @@ fn main() {
     }
     let ico = fs::read(ICON).unwrap_or_else(|e| panic!("{ICON}: {e}"));
     let res = to_res(&ico).unwrap_or_else(|e| panic!("{ICON}: {e}"));
-    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("x-browser.res");
+    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("taser.res");
     fs::write(&out, res).unwrap_or_else(|e| panic!("{}: {e}", out.display()));
     println!("cargo:rustc-link-arg-bins={}", out.display());
 }

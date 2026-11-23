@@ -14,11 +14,11 @@
 //!   inside the extension (`page_path`), and an icon is a PNG within
 //!   `native::MAX_ICON_BYTES` whose real path is inside the folder
 //!   (`icon_data_url`), sent to the page as a `data:` URL. An extension
-//!   X-Browser did not record (no folder known) gets no icon, options or
+//!   Taser did not record (no folder known) gets no icon, options or
 //!   popup.
-//! - An extension WebView2 has but X-Browser did not record installing
+//! - An extension WebView2 has but Taser did not record installing
 //!   ("unknown") comes in off: the start's reconcile turns it off. It is
-//!   listed too, marked "X-Browser dışında kurulmuş", and can be turned on
+//!   listed too, marked "Taser dışında kurulmuş", and can be turned on
 //!   and removed here. Turned on by the user, it enters `ALLOWED`: so an
 //!   extension (uBlock Origin Lite) whose record was lost with
 //!   extensions.json does not stay off for good. The cost: someone who can
@@ -386,7 +386,7 @@ struct Row {
     icon: Option<String>,
     options: bool,
     state: &'static str,
-    /// Not recorded: installed outside X-Browser (or its record was lost).
+    /// Not recorded: installed outside Taser (or its record was lost).
     unknown: bool,
 }
 
@@ -684,7 +684,7 @@ fn open_store(app: &mut App) {
 }
 
 /// Puts the page back after an update's question asked over it, if nothing
-/// took its place meanwhile and X-Browser is still in front. Its note about
+/// took its place meanwhile and Taser is still in front. Its note about
 /// the check ("found") is over: the question answered it.
 fn back_to_page(app: &mut App) {
     if app.overlay.mode != Mode::Hidden || app.fullscreen.on() || crate::popup::extension(app).is_some() || !app.in_front() {

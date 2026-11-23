@@ -5,7 +5,7 @@
 //!   drawn by `ui/js/security.js`). An address that was typed but has not
 //!   loaded yet gets no mark, and neither does an error page.
 //! - **Certificate errors**: the page does not load; the tab shows
-//!   X-Browser's error page (`error_page`), never WebView2's. When the
+//!   Taser's error page (`error_page`), never WebView2's. When the
 //!   failing request is the tab's own navigation (`is_main_navigation`), its
 //!   host (every port, `cert_host`) is remembered here, so the indicator
 //!   says "certificate error" for it until the app exits, also after the user
@@ -508,7 +508,7 @@ pub enum Event {
     /// `navs` (`native::attach_policy`).
     CertError { uri: String, navs: Vec<String> },
     /// The tab began to show a new document; `error`: an error document (no
-    /// connection, name not found, ...; X-Browser's `error_page` goes into
+    /// connection, name not found, ...; Taser's `error_page` goes into
     /// it), not the site's.
     Page { error: bool },
     /// A navigation ended in failure after its document was shown.
@@ -763,7 +763,7 @@ pub fn on_command(app: &mut App, cmd: LaunchCmd) {
         let done = if app.tabs.active() == Some(p.tab) { app.policy.launch.confirm(p.tab, &p.uri, now) } else { Err(Refused::Mismatch) };
         if let Err(e) = done {
             // Not closed in silence: the user is told that nothing opened.
-            eprintln!("x-browser: could not open the {} address: {e:?}", p.scheme);
+            eprintln!("taser: could not open the {} address: {e:?}", p.scheme);
             app.policy.launch.fail(p.tab);
             return crate::overlay::tell_launch(app, "xbo.launchFailed()");
         }

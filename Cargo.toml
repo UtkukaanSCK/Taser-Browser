@@ -1,5 +1,5 @@
 [package]
-name = "x-browser"
+name = "taser"
 version = "0.1.0"
 edition = "2024"
 # Let chains (src/) and the newest dependencies (icu_*, time) need 1.88;

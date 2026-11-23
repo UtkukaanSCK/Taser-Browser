@@ -329,7 +329,7 @@ const DELAYS: &[u64] = &[
     2500, // 240 check the crashed mark went with the navigation
     900,  // 241 error page: a page on example.org first
     2500, // 242 check it; an address that cannot load
-    2500, // 243 check X-Browser's error page, no lock, address kept
+    2500, // 243 check Taser's error page, no lock, address kept
     600,  // 244 check the tab title; click "Yeniden dene"
     2500, // 245 check it reloaded in the same entry; Alt+Left
     2500, // 246 check back on the page before; Alt+Right
@@ -367,7 +367,7 @@ const DELAYS: &[u64] = &[
     1200, // 278 check closed by the move; the page; Kaldır
     1000, // 279 check the question; Esc; Kaldır, yes
     2500, // 280 check (e) removed; typed address refused; the UI and overlay try an extension page
-    1000, // 281 check those refused; an extension X-Browser did not install
+    1000, // 281 check those refused; an extension Taser did not install
     2000, // 282 WebView2 lists it: the reconcile
     1500, // 283 check it is off; the page
     1500, // 284 check its row; switch on
@@ -1145,7 +1145,7 @@ pub fn step(app: &mut App, n: u32) {
                 );
                 check("drag-region-present", ["tabs", "tabbar", "strip"].contains(&field(&r, "drag_el")), &r);
                 check("ui-prefers-color-scheme-matches-system", field(&r, "dark") == dark.to_string(), format!("{r} system dark={dark}"));
-                let want_bg = if dark { "rgb(27, 28, 32)" } else { "rgb(227, 229, 234)" };
+                let want_bg = if dark { "rgb(14, 24, 48)" } else { "rgb(205, 220, 246)" };
                 check("ui-palette-matches-theme", field(&r, "bg") == want_bg, format!("{r} want {want_bg}"));
             });
             type_in_address(app, "example.com");
@@ -1855,7 +1855,7 @@ pub fn step(app: &mut App, n: u32) {
         60 => {
             press(app, vk::T, CTRL);
             app.flush();
-            check("window-title-blank-tab", app.window.title() == "X-Browser", app.window.title());
+            check("window-title-blank-tab", app.window.title() == "Taser", app.window.title());
             let sets = app.title_sets;
             app.mark_dirty();
             app.flush();
@@ -1889,7 +1889,7 @@ pub fn step(app: &mut App, n: u32) {
                 app.tabs.len() as i64 == recall("len") + 1 && popup != ap && active_url(app).contains("from=close"),
                 app.tabs.to_json(),
             );
-            let want = format!("{} - X-Browser", active_title(app));
+            let want = format!("{} - Taser", active_title(app));
             check("window-title-follows-active-tab", app.window.title() == want && active_title(app) == "Example Domain", app.window.title());
             let sets = app.title_sets;
             app.activate(ap);
@@ -1900,12 +1900,12 @@ pub fn step(app: &mut App, n: u32) {
             let back = app.window.title();
             app.mark_dirty();
             app.flush();
-            check("window-title-follows-tab-switch", on_blank == "X-Browser" && back == want, format!("{on_blank:?} then {back:?}"));
+            check("window-title-follows-tab-switch", on_blank == "Taser" && back == want, format!("{on_blank:?} then {back:?}"));
             check("window-title-set-only-on-change", app.title_sets == sets + 2, format!("{} sets for 2 changes", app.title_sets - sets));
             page_js(app, "document.title = 'Renamed page'");
         }
         63 => {
-            check("window-title-follows-page-title", app.window.title() == "Renamed page - X-Browser", app.window.title());
+            check("window-title-follows-page-title", app.window.title() == "Renamed page - Taser", app.window.title());
             remember("len", app.tabs.len() as i64);
             remember("closed", app.closed.len() as i64);
             page_js(app, "window.close()");
@@ -3002,13 +3002,13 @@ pub fn step(app: &mut App, n: u32) {
             let r = send_ipc(open, &utf16("https://example.com/?ipc=quitting"));
             crate::instance::set_quitting(false);
             check("ipc-refused-while-quitting", r == Some(0), format!("{r:?}"));
-            // A second start finds our IPC window as genuine X-Browser, and
+            // A second start finds our IPC window as genuine Taser, and
             // uses no window whose process fails the check.
             let (trusted, unverified) =
                 crate::store::data_dir().map(|d| crate::instance::probe_find(&d)).unwrap_or_default();
             check("ipc-own-window-verified", trusted == Some(std::process::id()), format!("{trusted:?}"));
             check("ipc-unverified-window-skipped", unverified.is_none(), format!("{unverified:?}"));
-            // The UIPI probe a normal start sends an elevated X-Browser's
+            // The UIPI probe a normal start sends an elevated Taser's
             // window gets through to one at our own level.
             let blocked = crate::store::data_dir().and_then(|d| crate::instance::probe_blocks_self(&d));
             check("ipc-probe-reaches-own-level", blocked == Some(false), format!("{blocked:?}"));
@@ -4121,7 +4121,7 @@ pub fn step(app: &mut App, n: u32) {
         217 => {
             // The question closes when its window loses the keyboard: a run
             // with another window in front fails here, and this says why.
-            log(&format!("INFO step 217: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 217: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             let now = std::time::Instant::now();
             let id = app.tabs.active().unwrap();
             let p = app.policy.launch.pending(now).cloned();
@@ -4172,7 +4172,7 @@ pub fn step(app: &mut App, n: u32) {
         219 => {
             // The question closes when its window loses the keyboard: a run
             // with another window in front fails here, and this says why.
-            log(&format!("INFO step 219: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 219: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             let waits = app.policy.launch.pending(std::time::Instant::now()).is_some();
             check("launch-question-opens-again", app.overlay.mode == Mode::Launch && waits, format!("{:?}, waits {waits}", app.overlay.mode));
             overlay_js(app, "document.getElementById('l-cancel').click()");
@@ -4194,7 +4194,7 @@ pub fn step(app: &mut App, n: u32) {
         222 => {
             // The question closes when its window loses the keyboard: a run
             // with another window in front fails here, and this says why.
-            log(&format!("INFO step 222: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 222: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             let now = std::time::Instant::now();
             let id = app.tabs.active().unwrap();
             let waits = app.policy.launch.pending(now).is_some();
@@ -4227,7 +4227,7 @@ pub fn step(app: &mut App, n: u32) {
         224 => {
             // The question closes when its window loses the keyboard: a run
             // with another window in front fails here, and this says why.
-            log(&format!("INFO step 224: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 224: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             let waits = app.policy.launch.pending(std::time::Instant::now()).is_some();
             check(
                 "launch-answer-from-the-strip-is-not-heard",
@@ -4399,7 +4399,7 @@ pub fn step(app: &mut App, n: u32) {
                 check("indicator-after-crash-and-failed-load", field(&r, "state").is_empty() && field(&r, "reload") == "false" && field(&r, "name").is_empty(), &r);
             });
         }
-        // ---- X-Browser's own error page, not WebView2's ----
+        // ---- Taser's own error page, not WebView2's ----
         241 => {
             app.handle(UserEvent::Ui(UiCommand::Navigate("https://example.org/?error-page-before".into())));
         }
@@ -4528,7 +4528,7 @@ pub fn step(app: &mut App, n: u32) {
             app.handle(UserEvent::Policy(id, Event::ExternalLaunch { uri: MAIL_URI.into(), origin: String::new(), user: true }));
         }
         256 => {
-            log(&format!("INFO step 256: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 256: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             check("launch-question-up-before-menu-click", app.overlay.mode == Mode::Launch, format!("mode {:?}", app.overlay.mode));
             // A mouse click on ⋮: the strip takes the keyboard first.
             let _ = app.ui.focus();
@@ -4697,7 +4697,7 @@ pub fn step(app: &mut App, n: u32) {
             });
             // A page of a disabled extension: refused in a tab. (Loaded
             // from Rust: a web page's own script navigating there is
-            // stopped by Chromium before X-Browser sees it.)
+            // stopped by Chromium before Taser sees it.)
             if let Some(v) = app.active_view() {
                 let _ = v.load_url(&format!("chrome-extension://{EXT_ID}/options.html"));
             }
@@ -4740,7 +4740,7 @@ pub fn step(app: &mut App, n: u32) {
             if let Some(v) = app.active_view() {
                 let _ = v.load_url(&format!("http://127.0.0.1:{}/ext?n=9", recall("ext-port")));
             }
-            // The strip's button: its list. X-Browser counts as in front
+            // The strip's button: its list. Taser counts as in front
             // to step 278 whoever uses the desktop (`App::in_front`): the
             // list and the popup close only for what these steps do.
             app.foreground = Some(true);
@@ -4760,7 +4760,7 @@ pub fn step(app: &mut App, n: u32) {
             overlay_click(app, "#ext-actions [data-id]");
         }
         273 => {
-            log(&format!("INFO step 273: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 273: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             check(
                 "ext-popup-opens",
                 crate::popup::extension(app) == Some(EXT_ID) && crate::popup::view(app).is_some() && app.overlay.mode == Mode::Hidden,
@@ -4829,7 +4829,7 @@ pub fn step(app: &mut App, n: u32) {
             }
         }
         276 => {
-            log(&format!("INFO step 276: X-Browser is the foreground window: {}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 276: Taser is the foreground window: {}", crate::native::is_foreground(&app.window)));
             eval(crate::popup::view(app), "ext-popup-frame-has-its-link", EXT_FRAME_JS, |r| {
                 check("ext-popup-frame-has-its-link", field(&r, "frame") == "true" && field(&r, "link") == "true" && num(&r, "w") > 0.0 && num(&r, "h") > 0.0, &r);
             });
@@ -4954,7 +4954,7 @@ pub fn step(app: &mut App, n: u32) {
             overlay_eval(app, "ext-page-refused-in-the-overlay", "`${location.href}`", |r| {
                 check("ext-page-refused-in-the-overlay", r.starts_with("http://xb.ui/"), &r);
             });
-            // An extension WebView2 has but X-Browser did not install (as
+            // An extension WebView2 has but Taser did not install (as
             // after extensions.json is lost): put straight into WebView2.
             let folder = dir().join("unknown-ext");
             let _ = std::fs::remove_dir_all(&folder);
@@ -4992,7 +4992,7 @@ pub fn step(app: &mut App, n: u32) {
                     "ext-unknown-listed-and-marked",
                     field(&r, "rows") == "1"
                         && field(&r, "id") == EXT_ID
-                        && field(&r, "text").contains("X-Browser dışında kurulmuş")
+                        && field(&r, "text").contains("Taser dışında kurulmuş")
                         && field(&r, "on") == "false"
                         && field(&r, "options") == "false",
                     &r,
@@ -5142,7 +5142,7 @@ pub fn step(app: &mut App, n: u32) {
         }
         294 => {
             log(&format!(
-                "INFO step 294: X-Browser is the foreground window: {}; extension added again: {:?}",
+                "INFO step 294: Taser is the foreground window: {}; extension added again: {:?}",
                 crate::native::is_foreground(&app.window),
                 ext_outcome(app, "ext-op")
             ));
@@ -5250,7 +5250,7 @@ pub fn step(app: &mut App, n: u32) {
             if let Some(e) = crate::webstore::LastError::new(&id, EXT_LAST_ERROR, crate::history::now_secs()) {
                 app.extensions.set_last_error(e);
             }
-            // X-Browser counts as in front from here to step 304 whoever
+            // Taser counts as in front from here to step 304 whoever
             // uses the desktop (`App::in_front`): the page stays open for
             // its button.
             app.foreground = Some(true);
@@ -5360,12 +5360,12 @@ pub fn step(app: &mut App, n: u32) {
                 format!("asked {new:?}, job {:?}", app.webstore.busy_with()),
             );
             // A version that wants more, while the menu is open: no
-            // question over it. X-Browser still counts as in front, to
+            // question over it. Taser still counts as in front, to
             // step 308 (`App::in_front`), so the menu does not close itself
             // either.
             app.foreground = Some(true);
             let sc = press(app, vk::F, ALT);
-            log(&format!("INFO step 304: X-Browser is really the foreground window: {}; Alt+F {sc:?}", crate::native::is_foreground(&app.window)));
+            log(&format!("INFO step 304: Taser is really the foreground window: {}; Alt+F {sc:?}", crate::native::is_foreground(&app.window)));
             serve_update_check(&update_id(), "1.3", None);
             crate::webstore::check_updates(app);
         }
@@ -5426,7 +5426,7 @@ pub fn step(app: &mut App, n: u32) {
                 overlay_closed(app) && app.webstore.busy_with().is_none() && rec == Some(("1.1".into(), true)) && !home.join("1.3").exists(),
                 format!("{:?}, job {:?}, record {rec:?}, 1.3 {}", app.overlay.mode, app.webstore.busy_with(), home.join("1.3").exists()),
             );
-            // The same version with X-Browser in the background: fetched,
+            // The same version with Taser in the background: fetched,
             // but no question, and the job ends.
             app.foreground = Some(false);
             let asked = crate::webstore::fake::asked();
@@ -6126,7 +6126,7 @@ fn serve_ext_page() -> std::io::Result<u16> {
 }
 
 /// What the served download contains.
-const DOWNLOAD_BODY: &str = "x-browser download test
+const DOWNLOAD_BODY: &str = "taser download test
 ";
 
 /// A local server on 127.0.0.1 that answers every request with a small file
@@ -6182,7 +6182,7 @@ fn tab_zoom(app: &App) -> u16 {
 const ERROR_URL: &str = "https://xb-error-page.invalid/yol?q=1";
 
 /// The error page as the tab's document has it. `only_ours`: the body holds
-/// nothing but X-Browser's page; `retry_vis`: the button is on top at its
+/// nothing but Taser's page; `retry_vis`: the button is on top at its
 /// centre; `mark` is set by the test in the document it last saw.
 const ERROR_PAGE_JS: &str = "(() => { const g = (id) => document.getElementById(id), h = document.querySelector('h1'), b = g('xb-error-retry'); \
   const r = b ? b.getBoundingClientRect() : null; \
@@ -6195,7 +6195,7 @@ const ERROR_PAGE_JS: &str = "(() => { const g = (id) => document.getElementById(
 
 /// What the policy steps ask to open. Never opened: `record_launch` stands
 /// in for the launcher, and the address is not a real one.
-const MAIL_URI: &str = "mailto:selftest@example.invalid?subject=x-browser-selftest";
+const MAIL_URI: &str = "mailto:selftest@example.invalid?subject=taser-selftest";
 
 static LAUNCHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -6756,7 +6756,7 @@ thread_local! {
 const SECOND_START_LIMIT: Duration = Duration::from_secs(10);
 
 /// Starts this same executable again against the self-test profile (never
-/// the user's), as a second X-Browser start would be. A watchdog thread
+/// the user's), as a second Taser start would be. A watchdog thread
 /// waits for it, so the event loop stays free to answer its WM_COPYDATA.
 fn spawn_second_start(url: &str) -> Result<(), String> {
     use std::process::{Command, Stdio};

@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
 <meta charset="utf-8">
-<title>X-Browser</title>
+<title>Taser</title>
 <link rel="stylesheet" href="/app.css">
 <script src="/js/core.js" defer></script>
 <script src="/js/strip.js" defer></script>
@@ -104,7 +104,7 @@
         <span id="zoom-level"></span>
       </button>
       <!-- On a Chrome Web Store detail page (webstore.js): add its extension,
-           or remove it if X-Browser has it. Rust asks before either. -->
+           or remove it if Taser has it. Rust asks before either. -->
       <button id="ext-store" type="button" hidden
               class="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-accent px-2 text-[11px] font-medium text-white hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent aria-busy:opacity-60">
         <svg aria-hidden="true" class="size-3 shrink-0" viewBox="0 0 16 16"><path d="M6 2.5h3V4a1 1 0 0 0 2 0V2.5h2.5V6H12a1 1 0 0 0 0 2h1.5v5.5H10V12a1 1 0 0 0-2 0v1.5H2.5V10H4a1 1 0 0 0 0-2H2.5V4.5H6z"/></svg>
@@ -112,7 +112,7 @@
       </button>
       <!-- Bookmark star (bookmarks.js): filled while the page is bookmarked. -->
       <button id="bm-star" type="button" disabled aria-label="Yer imi" aria-pressed="false" title="Bu sayfayı yer imlerine ekle (Ctrl+D)"
-              class="group -mr-1 ml-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-35 disabled:hover:bg-transparent aria-pressed:text-accent">
+              class="group -mr-1 ml-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-35 disabled:hover:bg-transparent aria-pressed:text-accent-text">
         <svg class="size-4 group-aria-pressed:fill-current" viewBox="0 0 16 16"><path d="M8 1.5l1.95 4.1 4.55.6-3.3 3.15.8 4.45L8 11.55 3.99 13.8l.8-4.45L1.5 6.2l4.55-.6z"/></svg>
       </button>
     </div>
@@ -140,7 +140,7 @@
      only this band over the top of the page, and the strip under it is inert.
      The site name comes from the host, set through textContent only. -->
 <div id="fs-notice" hidden role="status"
-     class="fixed inset-0 z-50 flex items-center justify-center overflow-hidden whitespace-nowrap bg-[#202124] px-4 text-[13px] text-white">
+     class="fixed inset-0 z-50 flex items-center justify-center overflow-hidden whitespace-nowrap bg-[#0e1830] px-4 text-[13px] text-white">
   <span id="fs-notice-site" dir="ltr" class="font-semibold"></span><span id="fs-notice-text"></span>
 </div>
 

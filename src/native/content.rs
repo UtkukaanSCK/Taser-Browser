@@ -163,7 +163,7 @@ mod imp {
 
     /// Content pages get no host bridge at all: no `chrome.webview.postMessage`
     /// and no host objects. Nor WebView2's own (Edge-branded) error page: a
-    /// failed load gets X-Browser's (`attach_error_page`). Call before the
+    /// failed load gets Taser's (`attach_error_page`). Call before the
     /// first navigation.
     pub fn harden_content(view: &WebView) -> windows::core::Result<()> {
         unsafe {
@@ -202,22 +202,22 @@ mod imp {
         attach_process_failed(view, Some(tab), proxy)?;
         crate::native::attach_policy(view, tab, proxy)?;
         if let Err(e) = crate::native::attach_error_page(view, tab) {
-            eprintln!("x-browser: tab {tab}: no error page: {e}");
+            eprintln!("taser: tab {tab}: no error page: {e}");
         }
         // Icons and the sound mark are extras: a tab without them still works.
         if let Err(e) = crate::native::attach_favicon(view, tab, proxy) {
-            eprintln!("x-browser: tab {tab}: no favicon events: {e}");
+            eprintln!("taser: tab {tab}: no favicon events: {e}");
         }
         if let Err(e) = crate::native::attach_audio(view, tab, proxy) {
-            eprintln!("x-browser: tab {tab}: no audio events: {e}");
+            eprintln!("taser: tab {tab}: no audio events: {e}");
         }
         // Zoom and page fullscreen too: without them the page just cannot
         // zoom, or fills only its own area in fullscreen.
         if let Err(e) = crate::native::attach_zoom(view, tab, proxy) {
-            eprintln!("x-browser: tab {tab}: no zoom events: {e}");
+            eprintln!("taser: tab {tab}: no zoom events: {e}");
         }
         if let Err(e) = crate::native::attach_fullscreen(view, tab, proxy) {
-            eprintln!("x-browser: tab {tab}: no fullscreen events: {e}");
+            eprintln!("taser: tab {tab}: no fullscreen events: {e}");
         }
         let last_press = watch_presses(view);
         unsafe {

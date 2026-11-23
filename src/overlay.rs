@@ -270,7 +270,7 @@ fn ensure_view(app: &mut App) -> bool {
     let view = match built {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("x-browser: cannot create the overlay: {e}");
+            eprintln!("taser: cannot create the overlay: {e}");
             return false;
         }
     };
@@ -506,7 +506,7 @@ fn reset(app: &mut App, hide: bool) {
 
 /// Closes the overlay for a reason of its own (a page started loading, the
 /// window moved or was resized, the UI failed). The history list held the
-/// keyboard, so it goes back where Esc would put it, as long as X-Browser is
+/// keyboard, so it goes back where Esc would put it, as long as Taser is
 /// still the foreground window.
 #[track_caller]
 pub fn dismiss(app: &mut App) {
@@ -667,7 +667,7 @@ pub fn on_command(app: &mut App, cmd: OverlayCmd) {
         OverlayCmd::Close => {
             // (The launch question answers its own blur: "launch-cancel",
             // after a moment to see whether the keyboard comes back.)
-            // While the self-test has X-Browser count as in front
+            // While the self-test has Taser count as in front
             // (`App::foreground`), a blur that only comes from the window
             // really being behind another program is no focus move.
             #[cfg(feature = "selftest")]

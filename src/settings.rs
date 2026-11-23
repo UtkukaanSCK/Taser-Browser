@@ -347,7 +347,7 @@ impl State {
         let mut store = Store::<Settings>::new(dir);
         let loaded = store.load();
         if loaded.source == store::Source::Backup {
-            eprintln!("x-browser: {} restored from its backup", Settings::NAME);
+            eprintln!("taser: {} restored from its backup", Settings::NAME);
         }
         set_engine(loaded.value.engine);
         set_privacy(&loaded.value);
@@ -394,7 +394,7 @@ fn apply_tracking(app: &mut App) -> bool {
     let ok = crate::native::set_tracking(v, level);
     app.settings.tracking_pending = false;
     if !ok {
-        eprintln!("x-browser: tracking prevention level not set");
+        eprintln!("taser: tracking prevention level not set");
     }
     ok
 }

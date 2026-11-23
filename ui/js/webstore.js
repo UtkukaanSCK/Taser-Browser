@@ -8,8 +8,8 @@
 
   // state: [text shown, sentence for the tooltip and for screen readers]
   const STATES = {
-    add: ["Ekle", "Bu uzantıyı X-Browser'a ekle"],
-    remove: ["Kaldır", "Bu uzantıyı X-Browser'dan kaldır"],
+    add: ["Ekle", "Bu uzantıyı Taser'a ekle"],
+    remove: ["Kaldır", "Bu uzantıyı Taser'dan kaldır"],
     busy: ["…", "Uzantı işlemi sürüyor"],
   };
 

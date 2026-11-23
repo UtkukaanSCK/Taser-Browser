@@ -42,17 +42,17 @@ pub trait Stored: Serialize + DeserializeOwned + Default {
 }
 
 /// The self-test's own folder (its log, pictures and profile):
-/// `$XB_SELFTEST_DIR`, or `%TEMP%\x-browser-selftest` when that is unset,
+/// `$XB_SELFTEST_DIR`, or `%TEMP%\taser-selftest` when that is unset,
 /// as an absolute path.
 #[cfg(feature = "selftest")]
 pub fn selftest_dir() -> PathBuf {
     let base = std::env::var_os("XB_SELFTEST_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("x-browser-selftest"));
+        .unwrap_or_else(|| std::env::temp_dir().join("taser-selftest"));
     std::path::absolute(&base).unwrap_or(base)
 }
 
-/// Where profile data lives: `%LOCALAPPDATA%\X-Browser`. Self-test builds use
+/// Where profile data lives: `%LOCALAPPDATA%\Taser`. Self-test builds use
 /// `selftest_dir()\profile` instead (an own WebView2 profile, own files and
 /// an own single-instance name), and never the real folder.
 pub fn data_dir() -> Option<PathBuf> {
@@ -63,8 +63,19 @@ pub fn data_dir() -> Option<PathBuf> {
     #[cfg(not(feature = "selftest"))]
     {
         // Keep profile data out of the exe folder (which may be read-only).
-        std::env::var_os("LOCALAPPDATA").map(|d| Path::new(&d).join("X-Browser"))
+        std::env::var_os("LOCALAPPDATA").map(|d| profile_in(Path::new(&d)))
     }
+}
+
+/// The browser was called X-Browser until 2026-11-23. A profile made then
+/// stays where it is and keeps being used: extensions.json and WebView2's
+/// own profile hold absolute paths into it, so moving it would break the
+/// installed extensions. Only a machine without one gets `Taser`.
+#[cfg_attr(feature = "selftest", allow(dead_code))]
+fn profile_in(base: &Path) -> PathBuf {
+    let new = base.join("Taser");
+    let old = base.join("X-Browser");
+    if !new.exists() && old.is_dir() { old } else { new }
 }
 
 /// Where a loaded value came from.
@@ -137,7 +148,7 @@ fn read_file<T: Stored>(path: &Path) -> Read<T> {
 
 /// Moves an unreadable file out of the way, keeping it for inspection.
 fn set_aside(path: &Path, why: &str) {
-    eprintln!("x-browser: {} is unreadable ({why}); moved to .corrupt", path.display());
+    eprintln!("taser: {} is unreadable ({why}); moved to .corrupt", path.display());
     let _ = std::fs::rename(path, sibling(path, ".corrupt"));
 }
 
@@ -175,7 +186,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8], backup: bool) -> std::io::Result<
     if backup && let Ok(old) = std::fs::read(path) {
         let tmp = sibling(path, ".bak.tmp");
         if let Err(e) = write_synced(&tmp, &old).and_then(|()| rename_retry(&tmp, &sibling(path, ".bak"))) {
-            eprintln!("x-browser: cannot back up {}: {e}; saving anyway", path.display());
+            eprintln!("taser: cannot back up {}: {e}; saving anyway", path.display());
             let _ = std::fs::remove_file(&tmp);
         }
     }
@@ -293,12 +304,12 @@ impl<T: Stored> Store<T> {
         let bytes = match serde_json::to_vec(&Versioned { v: VERSION, data: value }) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("x-browser: cannot encode {}: {e}", T::NAME);
+                eprintln!("taser: cannot encode {}: {e}", T::NAME);
                 return None;
             }
         };
         if bytes.len() as u64 > T::MAX_BYTES {
-            eprintln!("x-browser: {} would be {} bytes; not written", T::NAME, bytes.len());
+            eprintln!("taser: {} would be {} bytes; not written", T::NAME, bytes.len());
             return None;
         }
         // Against the last queued bytes, not the last written: reverting to
@@ -339,7 +350,7 @@ impl<T: Stored> Store<T> {
 
 fn write_or_log(path: &Path, bytes: &[u8], state: &Shared) {
     if let Err(e) = write_tracked(path, bytes, state) {
-        eprintln!("x-browser: cannot write {}: {e}", path.display());
+        eprintln!("taser: cannot write {}: {e}", path.display());
     }
 }
 
@@ -404,6 +415,17 @@ pub mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn profile_keeps_an_old_x_browser_folder() {
+        let base = temp_dir("profile-name");
+        assert_eq!(profile_in(&base), base.join("Taser"));
+        std::fs::create_dir(base.join("X-Browser")).unwrap();
+        assert_eq!(profile_in(&base), base.join("X-Browser"));
+        std::fs::create_dir(base.join("Taser")).unwrap();
+        assert_eq!(profile_in(&base), base.join("Taser"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[derive(Serialize, Deserialize, Default, Debug, PartialEq)]

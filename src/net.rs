@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// Sent on every request. Names the client and nothing about the user.
-pub const USER_AGENT: &str = "X-Browser";
+pub const USER_AGENT: &str = "Taser";
 /// Redirect hops followed after the first request.
 pub const MAX_REDIRECTS: usize = 5;
 /// Longest URL accepted, from the caller or from a `Location` header.

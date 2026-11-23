@@ -1,4 +1,4 @@
-//! One running X-Browser per profile. The first instance owns a named mutex
+//! One running Taser per profile. The first instance owns a named mutex
 //! and listens on a message-only window; a second start hands its address
 //! over by WM_COPYDATA and exits, and the first one opens it in a new tab
 //! (no address: just comes to the front).
@@ -186,6 +186,8 @@ mod imp {
 
     fn names(dir: &std::path::Path) -> (HSTRING, HSTRING) {
         let hash = profile_hash(dir);
+        // Still the names from before the rename to Taser, on purpose: an old
+        // X-Browser and a new Taser on the same profile must see each other.
         (HSTRING::from(format!("Local\\X-Browser-{hash}")), HSTRING::from(format!("XBrowserIpc-{hash}")))
     }
 
@@ -242,7 +244,7 @@ mod imp {
             if let Some(v) = verify(hwnd, pid) {
                 return Some((hwnd, pid, v));
             }
-            eprintln!("x-browser: skipped the IPC windows of process {pid}: not this X-Browser");
+            eprintln!("taser: skipped the IPC windows of process {pid}: not this Taser");
             refused.push(pid);
             if refused.len() >= MAX_REFUSED {
                 return None;
@@ -253,11 +255,11 @@ mod imp {
 
     /// What a window's process turned out to be.
     enum Examined {
-        /// X-Browser itself: the same exe as this one, run by the same user,
+        /// Taser itself: the same exe as this one, run by the same user,
         /// at an integrity level no lower than ours. Opened, so its id
         /// cannot be reused while the handle is held.
         Verified(Owned),
-        /// Our exe, but its token is closed to us: an elevated X-Browser,
+        /// Our exe, but its token is closed to us: an elevated Taser,
         /// seen from a normal start, or a lower process that shut its token
         /// (a Low one may do that to a copy of our exe it started). Never
         /// handed anything; evidence only with proof, see `counts_as_seen`.
@@ -305,7 +307,7 @@ mod imp {
         }
     }
 
-    /// Process `pid`, opened, if it is X-Browser itself (see `Examined`).
+    /// Process `pid`, opened, if it is Taser itself (see `Examined`).
     #[cfg(any(test, feature = "selftest"))]
     fn verified(pid: u32) -> Option<Owned> {
         match examine(pid) {
@@ -314,7 +316,7 @@ mod imp {
         }
     }
 
-    /// Whether process `pid` is X-Browser itself (see `verified`).
+    /// Whether process `pid` is Taser itself (see `verified`).
     #[cfg(test)]
     fn trusted_pid(pid: u32) -> bool {
         verified(pid).is_some()
@@ -427,16 +429,16 @@ mod imp {
     /// SYSTEM_MANDATORY_LABEL_ACE_TYPE (in a feature this crate does not use).
     const SYSTEM_MANDATORY_LABEL_ACE_TYPE: u8 = 0x11;
 
-    /// Whether a mutex labelled at `label` cannot be a genuine X-Browser's,
+    /// Whether a mutex labelled at `label` cannot be a genuine Taser's,
     /// for an instance running at `ours`. The bar is our level, but never
     /// above Medium: a lower process can only make objects at its own level,
-    /// so a Medium label means a normal X-Browser (inside the trust boundary),
+    /// so a Medium label means a normal Taser (inside the trust boundary),
     /// and an elevated start must not run beside it on the same profile.
     fn label_is_squat(label: u32, ours: u32) -> bool {
         label < ours.min(IMPLICIT_LEVEL)
     }
 
-    /// Why an existing mutex of our name was not made by an X-Browser of this
+    /// Why an existing mutex of our name was not made by a Taser of this
     /// user (its owner is someone else, or its label is lower than one could
     /// be, see `label_is_squat`), or None if it was, or if that cannot be read.
     fn squatted(handle: HANDLE) -> Option<String> {
@@ -472,28 +474,28 @@ mod imp {
     /// The profile's mutex, as a second start found it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum MutexState {
-        /// Opened, and made by an X-Browser of this user (or unreadable).
+        /// Opened, and made by a Taser of this user (or unreadable).
         Genuine,
         /// Opened, but someone else made it (see `squatted`).
         Squatted,
-        /// It exists, but may not be opened: a higher-integrity X-Browser's,
+        /// It exists, but may not be opened: a higher-integrity Taser's,
         /// or a squatter's whose DACL shuts us out.
         Denied,
     }
 
-    /// What a second start does when no X-Browser took its address in time.
+    /// What a second start does when no Taser took its address in time.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum AtDeadline {
-        /// Tell the user X-Browser is running but cannot be reached.
+        /// Tell the user Taser is running but cannot be reached.
         Dialog,
         /// Run anyway, without the lock.
         Unguarded,
     }
 
-    /// `seen`: an X-Browser window of ours (see `Examined`) turned up at any
+    /// `seen`: a Taser window of ours (see `Examined`) turned up at any
     /// point. A squatter cannot fake one, so whenever there is one, it holds
     /// the profile and a second copy must not run beside it, even when the
-    /// mutex itself is squatted (that X-Browser then runs unguarded too).
+    /// mutex itself is squatted (that Taser then runs unguarded too).
     fn at_deadline(mutex: MutexState, seen: bool) -> AtDeadline {
         match (mutex, seen) {
             (MutexState::Genuine, _) | (_, true) => AtDeadline::Dialog,
@@ -501,11 +503,11 @@ mod imp {
         }
     }
 
-    /// Whether a window of process `kind` shows an X-Browser of ours holds
+    /// Whether a window of process `kind` shows a Taser of ours holds
     /// the profile. Nothing unreadable is evidence by itself: a lower process
     /// can shut its token and its mutex to us. So an unreadable copy of our
     /// exe counts only if the mutex is shut to us too (as an elevated
-    /// X-Browser's always is) and `probe_blocked` shows its window is above
+    /// Taser's always is) and `probe_blocked` shows its window is above
     /// us: Windows (UIPI) refuses our message, which a lower process cannot
     /// arrange, as message filters only ever let more through. The probe
     /// runs only when it decides.
@@ -523,7 +525,7 @@ mod imp {
     /// Whether Windows refuses our messages to `hwnd` for its higher
     /// integrity (UIPI): the send fails with access denied. A timeout, or
     /// any other failure, is not that. The `PROBE` kind is refused by an
-    /// X-Browser, silently and with no effect.
+    /// Taser, silently and with no effect.
     fn uipi_blocks(hwnd: HWND) -> bool {
         let data = COPYDATASTRUCT { dwData: PROBE, cbData: 0, lpData: std::ptr::null_mut() };
         let mut result = 0usize;
@@ -608,7 +610,7 @@ mod imp {
         let (mutex, class) = names(dir);
         let payload = payload(arg);
         let deadline = Instant::now() + HAND_OVER_TIME;
-        // Whether an X-Browser window of ours turned up, even one we may not
+        // Whether a Taser window of ours turned up, even one we may not
         // hand to (an elevated one): then the lock is in real use.
         let seen = std::cell::Cell::new(false);
         // Processes whose window was probed already (once each).
@@ -616,7 +618,7 @@ mod imp {
         loop {
             // Not ours: held only for this round, as keeping it open would
             // keep the name alive after the first instance exits. None: it
-            // exists but may not be opened (a higher X-Browser's, or a
+            // exists but may not be opened (a higher Taser's, or a
             // squatter's); the windows decide which, at the deadline.
             let existing = match create_mutex(&mutex) {
                 Ok((handle, false)) => return Start::First(Guard(handle)),
@@ -643,7 +645,7 @@ mod imp {
                     _ => None,
                 }
             };
-            // Only a verified X-Browser gets foreground rights or the address.
+            // Only a verified Taser gets foreground rights or the address.
             // Its process stays open until the message is sent, so the id
             // cannot be reused meanwhile.
             if let Some((hwnd, pid, _process)) = find_by(&class, window_pid, check)
@@ -659,19 +661,19 @@ mod imp {
             }
             if Instant::now() >= deadline {
                 // No genuine window answered. If the mutex is not one an
-                // X-Browser of ours made, and no X-Browser window of ours is
+                // Taser of ours made, and no Taser window of ours is
                 // around, someone holds the name to keep us out: run
                 // unguarded rather than not at all.
                 if at_deadline(state, seen.get()) == AtDeadline::Unguarded {
                     eprintln!(
-                        "x-browser: the profile's mutex is not ours ({why}) and no X-Browser window was seen; \
+                        "taser: the profile's mutex is not ours ({why}) and no Taser window was seen; \
                          starting unguarded"
                     );
                     return Start::First(Guard(HANDLE::default()));
                 }
                 if !crate::timing::quit_when_ready() {
                     crate::native::fatal(
-                        "X-Browser zaten açık, ancak bu başlatma ona bağlanamadı \
+                        "Taser zaten açık, ancak bu başlatma ona bağlanamadı \
                          (farklı yetki düzeyi ya da yanıt vermiyor).",
                     );
                 }
@@ -757,7 +759,7 @@ mod imp {
                 p.borrow().as_ref().is_some_and(|p| p.send_event(UserEvent::OpenFromOtherInstance(url)).is_ok())
             }),
             Err(why) => {
-                eprintln!("x-browser: ignored a message from another start ({why:?})");
+                eprintln!("taser: ignored a message from another start ({why:?})");
                 false
             }
         }
@@ -851,7 +853,7 @@ mod imp {
         }
 
         fn test_class(tag: &str) -> HSTRING {
-            HSTRING::from(format!("XBrowserIpcTest-{tag}-{}", unsafe { GetCurrentProcessId() }))
+            HSTRING::from(format!("TaserIpcTest-{tag}-{}", unsafe { GetCurrentProcessId() }))
         }
 
         #[test]
@@ -914,7 +916,7 @@ mod imp {
         fn the_mutex_is_for_this_user_only() {
             let sd = OwnerOnly::new().expect("descriptor");
             assert!(!sd.0.0.is_null());
-            let name = HSTRING::from(format!("Local\\X-Browser-test-{}", unsafe { GetCurrentProcessId() }));
+            let name = HSTRING::from(format!("Local\\Taser-test-{}", unsafe { GetCurrentProcessId() }));
             let (first, existed) = create_mutex(&name).unwrap();
             assert!(!existed);
             let (again, existed) = create_mutex(&name).unwrap();
@@ -1013,14 +1015,14 @@ mod imp {
         fn a_lower_integrity_process_cannot_open_our_mutex() {
             use windows::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
             let pid = unsafe { GetCurrentProcessId() };
-            let ours = HSTRING::from(format!("Local\\X-Browser-test-label-{pid}"));
+            let ours = HSTRING::from(format!("Local\\Taser-test-label-{pid}"));
             let (handle, existed) = create_mutex(&ours).unwrap();
             let _ours_handle = Owned(handle);
             assert!(!existed);
             // The control: the same DACL without the label (an implicit
             // Medium, no-write-up one) lets a Low process synchronize.
             let me = identity(unsafe { GetCurrentProcess() }).unwrap();
-            let plain = HSTRING::from(format!("Local\\X-Browser-test-nolabel-{pid}"));
+            let plain = HSTRING::from(format!("Local\\Taser-test-nolabel-{pid}"));
             let _plain_handle = mutex_with(&format!("D:P(A;;GA;;;{})", me.user), &plain);
 
             let open = |name: &HSTRING| {
@@ -1038,7 +1040,7 @@ mod imp {
             const MEDIUM: u32 = 0x2000;
             const HIGH: u32 = 0x3000;
             assert!(label_is_squat(LOW, MEDIUM));
-            assert!(!label_is_squat(MEDIUM, HIGH), "a normal X-Browser, met by an elevated start");
+            assert!(!label_is_squat(MEDIUM, HIGH), "a normal Taser, met by an elevated start");
             assert!(label_is_squat(LOW, HIGH));
             assert!(!label_is_squat(MEDIUM, MEDIUM));
             assert!(!label_is_squat(HIGH, HIGH));
@@ -1048,17 +1050,17 @@ mod imp {
         fn an_unreadable_copy_counts_only_when_windows_proves_it_is_above_us() {
             use MutexState::{Denied, Genuine, Squatted};
             let never = || -> bool { panic!("no probe needed") };
-            // A verified X-Browser always counts; nothing else needs a probe.
+            // A verified Taser always counts; nothing else needs a probe.
             assert!(counts_as_seen(Kind::Verified, Genuine, never));
             assert!(counts_as_seen(Kind::Verified, Squatted, never));
             assert!(counts_as_seen(Kind::Verified, Denied, never));
             assert!(!counts_as_seen(Kind::Other, Denied, never));
-            // An elevated X-Browser, met by a normal start: its lock is shut
+            // An elevated Taser, met by a normal start: its lock is shut
             // to us and Windows refuses our message to its window.
             assert!(counts_as_seen(Kind::OursUnreadable, Denied, || true));
             // A Low copy that shut its token: our message gets through.
             assert!(!counts_as_seen(Kind::OursUnreadable, Denied, || false));
-            // An elevated X-Browser's lock is never one we can open.
+            // An elevated Taser's lock is never one we can open.
             assert!(!counts_as_seen(Kind::OursUnreadable, Squatted, never));
             assert!(!counts_as_seen(Kind::OursUnreadable, Genuine, never));
         }
@@ -1074,12 +1076,12 @@ mod imp {
         fn at_the_deadline_only_an_unused_foreign_lock_is_ignored() {
             use AtDeadline::{Dialog, Unguarded};
             use MutexState::{Denied, Genuine, Squatted};
-            // An elevated X-Browser's lock, seen from a normal start.
+            // An elevated Taser's lock, seen from a normal start.
             assert_eq!(at_deadline(Denied, true), Dialog);
-            // A lock shut to us, and no X-Browser of ours anywhere.
+            // A lock shut to us, and no Taser of ours anywhere.
             assert_eq!(at_deadline(Denied, false), Unguarded);
             assert_eq!(at_deadline(Squatted, false), Unguarded);
-            // Someone squats the name, but an X-Browser of ours (unguarded
+            // Someone squats the name, but a Taser of ours (unguarded
             // itself) already runs on the profile: not a second one.
             assert_eq!(at_deadline(Squatted, true), Dialog);
             assert_eq!(at_deadline(Genuine, true), Dialog);
@@ -1088,10 +1090,10 @@ mod imp {
 
         #[test]
         fn a_mutex_we_may_not_open_is_access_denied() {
-            // What a normal start meets in an elevated X-Browser's lock, or in
+            // What a normal start meets in an elevated Taser's lock, or in
             // a squatter's that shuts us out: it exists, and opening it is
             // denied (not any other error, which would skip the search).
-            let name = HSTRING::from(format!("Local\\X-Browser-test-denied-{}", unsafe { GetCurrentProcessId() }));
+            let name = HSTRING::from(format!("Local\\Taser-test-denied-{}", unsafe { GetCurrentProcessId() }));
             let _held = mutex_with("D:P(A;;GA;;;SY)", &name);
             let opened = create_mutex(&name).map(|(h, existed)| (Owned(h), existed));
             assert_eq!(opened.err().map(|e| e.code()), Some(ERROR_ACCESS_DENIED.to_hresult()));
@@ -1099,7 +1101,7 @@ mod imp {
 
         #[test]
         fn a_mutex_made_at_a_lower_level_counts_as_squatted() {
-            let name = HSTRING::from(format!("Local\\X-Browser-test-squat-{}", unsafe { GetCurrentProcessId() }));
+            let name = HSTRING::from(format!("Local\\Taser-test-squat-{}", unsafe { GetCurrentProcessId() }));
             let reason = as_low(|| {
                 // Made while Low: Windows labels it Low.
                 let squat = Owned(unsafe { CreateMutexW(None, false, &name) }.expect("Low creates a mutex"));
@@ -1197,9 +1199,9 @@ mod tests {
 
     #[test]
     fn profile_hash_ignores_case_and_differs_per_folder() {
-        let a = profile_hash(std::path::Path::new(r"C:\Users\x\AppData\Local\X-Browser"));
+        let a = profile_hash(std::path::Path::new(r"C:\Users\x\AppData\Local\Taser"));
         assert_eq!(a.len(), 16);
-        assert_eq!(a, profile_hash(std::path::Path::new(r"c:\users\X\appdata\local\x-browser")));
+        assert_eq!(a, profile_hash(std::path::Path::new(r"c:\users\X\appdata\local\taser")));
         assert_ne!(a, profile_hash(std::path::Path::new(r"C:\tmp\selftest\profile")));
     }
 }

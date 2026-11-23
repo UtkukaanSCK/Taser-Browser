@@ -1,4 +1,4 @@
-//! Browser extensions (v0.3 task 2): X-Browser's record of what it
+//! Browser extensions (v0.3 task 2): Taser's record of what it
 //! installed, the start-up reconcile, and add / list / enable / remove for
 //! Rust callers. The WebView2 calls are `native::extensions`; the Uzantılar
 //! page and the popups are `ext_ui` and `popup`.
@@ -13,7 +13,7 @@
 //!   back as untrusted: each entry is read and checked on its own, so a bad
 //!   one is dropped and the rest kept (`ExtFile::sanitize`); the store keeps
 //!   a `.bak` of the last good file for a file that does not parse at all.
-//! - Unpacked extensions X-Browser owns sit in `<data>\extensions\<id>\<version>`.
+//! - Unpacked extensions Taser owns sit in `<data>\extensions\<id>\<version>`.
 //!   Half-written folders there (`.<name>.unpack-<pid>-<n>` from
 //!   `crx::unpack`, `<version>.tmp`, `.<id>.removed-<pid>`) are deleted at
 //!   start (`sweep`). Nothing is deleted under `<data>\extensions` if it is
@@ -24,7 +24,7 @@
 //! - Start-up reconcile, once, after the UI is up and a content webview
 //!   exists (`on_ui_ready`, `on_view_created`): only recorded ids are ever
 //!   loaded. A recorded one WebView2 no longer knows is added again, only
-//!   from a folder X-Browser owns, else dropped; if its folder now holds
+//!   from a folder Taser owns, else dropped; if its folder now holds
 //!   another id, that one is taken out again and the entry dropped. One
 //!   WebView2 has but the record does not (Edge's own install dialog, say)
 //!   is listed with an unknown source and turned off.
@@ -43,7 +43,7 @@ use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 pub const FILE: &str = "extensions.json";
-/// The folder under the data folder that holds X-Browser's own unpacked
+/// The folder under the data folder that holds Taser's own unpacked
 /// extensions.
 pub const DIR: &str = "extensions";
 /// Larger files are not read and not written.
@@ -231,7 +231,7 @@ fn is_reparse_point(_: &std::fs::Metadata) -> bool {
 /// a plain folder. Returns how many were deleted.
 pub fn sweep(root: &Path) -> usize {
     if !is_plain_folder(root) {
-        eprintln!("x-browser: {} is a link or cannot be read; not cleaned up", root.display());
+        eprintln!("taser: {} is a link or cannot be read; not cleaned up", root.display());
         return 0;
     }
     fn sweep_level(dir: &Path, deeper: bool) -> usize {
@@ -248,7 +248,7 @@ pub fn sweep(root: &Path) -> usize {
                 let gone = if kind.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
                 match gone {
                     Ok(()) => n += 1,
-                    Err(err) => eprintln!("x-browser: cannot delete {}: {err}", path.display()),
+                    Err(err) => eprintln!("taser: cannot delete {}: {err}", path.display()),
                 }
             } else if deeper && kind.is_dir() {
                 n += sweep_level(&path, false);
@@ -261,7 +261,7 @@ pub fn sweep(root: &Path) -> usize {
 
 /// The folder `remove` deletes for an extension recorded at `dir`: its
 /// `root\<id>` folder when `dir` is a version folder in it, or `dir` itself
-/// when it is `root\<id>`. Folders anywhere else are not X-Browser's and are
+/// when it is `root\<id>`. Folders anywhere else are not Taser's and are
 /// left alone.
 pub fn owned_folder(root: &Path, id: &str, dir: &Path) -> Option<PathBuf> {
     if !valid_dir(&dir.to_string_lossy()) || !crate::crx::is_extension_id(id) {
@@ -271,7 +271,7 @@ pub fn owned_folder(root: &Path, id: &str, dir: &Path) -> Option<PathBuf> {
     if dir == mine || dir.parent() == Some(mine.as_path()) { Some(mine) } else { None }
 }
 
-/// What X-Browser reads from a manifest.json.
+/// What Taser reads from a manifest.json.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub version: String,
@@ -351,7 +351,7 @@ pub struct Plan {
     /// Recorded, unknown to WebView2, `can_readd`: add it again.
     pub readd: Vec<String>,
     /// Recorded, unknown to WebView2, not `can_readd` (folder gone, or not
-    /// X-Browser's): forget it.
+    /// Taser's): forget it.
     pub drop: Vec<String>,
     /// Known to WebView2 only (not built in): listed as unknown source and
     /// turned off.
@@ -401,7 +401,7 @@ pub struct Listed {
     pub name: String,
     pub version: String,
     pub enabled: bool,
-    /// None: WebView2 has it, but X-Browser did not record installing it.
+    /// None: WebView2 has it, but Taser did not record installing it.
     pub source: Option<Source>,
     /// WebView2 has it (false only before the reconcile has run).
     pub installed: bool,
@@ -478,7 +478,7 @@ impl Extensions {
         let root = dir.join(DIR);
         let swept = sweep(&root);
         if swept > 0 {
-            eprintln!("x-browser: deleted {swept} unfinished extension folder(s)");
+            eprintln!("taser: deleted {swept} unfinished extension folder(s)");
         }
         let mut x = Self { store: Some(store), file, root: Some(root), ..Self::default() };
         x.finish_removals();
@@ -487,7 +487,7 @@ impl Extensions {
 
     /// Entries removed from WebView2 whose folder could not be deleted then:
     /// tries again, and forgets each whose folder is gone now (or was never
-    /// X-Browser's to delete).
+    /// Taser's to delete).
     fn finish_removals(&mut self) {
         if !self.file.items.iter().any(|e| e.removed) {
             return;
@@ -502,7 +502,7 @@ impl Extensions {
             match delete_folder(root, &path) {
                 Ok(()) => false,
                 Err(err) => {
-                    eprintln!("x-browser: extension {}: {err}", e.id);
+                    eprintln!("taser: extension {}: {err}", e.id);
                     true
                 }
             }
@@ -511,7 +511,7 @@ impl Extensions {
     }
 
     /// Whether the reconcile may load `e` again: only from a folder
-    /// X-Browser owns (`owned_folder`) that still has a manifest.
+    /// Taser owns (`owned_folder`) that still has a manifest.
     fn can_readd(&self, e: &Entry) -> bool {
         let dir = Path::new(&e.dir);
         self.root.as_deref().and_then(|r| owned_folder(r, &e.id, dir)).is_some() && dir.join("manifest.json").is_file()
@@ -569,7 +569,7 @@ impl Extensions {
     }
 
     /// Drops `id` after a removal. `confirmed`: WebView2 removed it, so its
-    /// folder, if X-Browser owns it, is deleted too; else (it was not
+    /// folder, if Taser owns it, is deleted too; else (it was not
     /// installed) the folder is left alone. A folder that cannot be deleted
     /// keeps the entry, marked `removed`, for the next start.
     fn record_removed(&mut self, id: &str, confirmed: bool) -> Result<String, String> {
@@ -660,7 +660,7 @@ impl Extensions {
         self.reconcile == Reconcile::Done && self.readding == 0
     }
 
-    /// Where X-Browser keeps its own unpacked extensions.
+    /// Where Taser keeps its own unpacked extensions.
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
@@ -671,7 +671,7 @@ impl Extensions {
     }
 
     /// Every extension, built-ins left out: the recorded ones in order, then
-    /// any WebView2 has that X-Browser did not record.
+    /// any WebView2 has that Taser did not record.
     pub fn list(&self) -> Vec<Listed> {
         let mut out: Vec<Listed> = self
             .file
@@ -717,7 +717,7 @@ impl Extensions {
 
     fn finish(&mut self, op: Op, result: Result<String, String>) {
         if let Err(e) = &result {
-            eprintln!("x-browser: extension operation failed: {e}");
+            eprintln!("taser: extension operation failed: {e}");
         }
         if op == 0 {
             return; // internal (the reconcile)
@@ -757,8 +757,8 @@ fn undo_add(app: &App, id: &str) {
     let Some(view) = content_view(app) else { return };
     let owned = id.to_owned();
     native::remove_extension(view, id, move |r| match r {
-        Ok(_) => eprintln!("x-browser: extension {owned} taken out again"),
-        Err(e) => eprintln!("x-browser: extension {owned} could not be taken out again: {e}"),
+        Ok(_) => eprintln!("taser: extension {owned} taken out again"),
+        Err(e) => eprintln!("taser: extension {owned} could not be taken out again: {e}"),
     });
 }
 
@@ -833,7 +833,7 @@ fn set_enabled_as(app: &mut App, op: Op, id: &str, on: bool) {
 }
 
 /// Uninstalls extension `id` from WebView2, drops it from the record and,
-/// once WebView2 confirms, deletes its folder if X-Browser owns it
+/// once WebView2 confirms, deletes its folder if Taser owns it
 /// (`owned_folder`; see `Extensions::record_removed`).
 /// This is the user's removal: a removed uBOL is never installed again by
 /// the first run (`firstrun::on_removed`).
@@ -843,7 +843,7 @@ pub fn remove(app: &mut App, id: &str) -> Op {
     op
 }
 
-/// `remove` for X-Browser's own reasons (op 0: an install taken back out):
+/// `remove` for Taser's own reasons (op 0: an install taken back out):
 /// the record and folder are handled the same, but it is not the user's
 /// choice, so it does not count as removing uBOL by hand.
 pub fn remove_quietly(app: &mut App, id: &str) {
@@ -912,7 +912,7 @@ pub fn on_event(app: &mut App, ev: Event) {
     }
     match ev {
         Event::Listed(Err(e)) => {
-            eprintln!("x-browser: cannot list extensions: {e}");
+            eprintln!("taser: cannot list extensions: {e}");
             app.extensions.reconcile = Reconcile::Done;
             crate::firstrun::on_reconcile_done(app);
         }
@@ -926,7 +926,7 @@ pub fn on_event(app: &mut App, ev: Event) {
                 }
             }
             if !p.drop.is_empty() {
-                eprintln!("x-browser: {} extension(s) without a folder of X-Browser's were forgotten", p.drop.len());
+                eprintln!("taser: {} extension(s) without a folder of Taser's were forgotten", p.drop.len());
                 x.file.items.retain(|e| !p.drop.contains(&e.id));
             }
             x.save();
@@ -941,7 +941,7 @@ pub fn on_event(app: &mut App, ev: Event) {
             }
             // The Uzantılar page lists them; the user may turn them on there.
             for id in unknown_on {
-                eprintln!("x-browser: extension {id} was not installed by X-Browser; turned off");
+                eprintln!("taser: extension {id} was not installed by Taser; turned off");
                 set_enabled_as(app, 0, &id, false);
             }
             crate::firstrun::on_reconcile_done(app);
@@ -949,7 +949,7 @@ pub fn on_event(app: &mut App, ev: Event) {
         Event::Added { op, result: Err(e), .. } => app.extensions.finish(op, Err(e)),
         Event::Added { op, dir, source, enabled, manifest, expect, result: Ok(info) } => {
             if manifest.key_id.as_ref().is_some_and(|k| *k != info.id) {
-                eprintln!("x-browser: extension id {} differs from its manifest key's", info.id);
+                eprintln!("taser: extension id {} differs from its manifest key's", info.id);
             }
             let now = crate::history::now_secs();
             match app.extensions.record_added(&info, dir, source, manifest, expect.as_ref(), now) {
@@ -987,7 +987,7 @@ pub fn on_event(app: &mut App, ev: Event) {
         }
         Event::Removed { op, result: Err(e), .. } => app.extensions.finish(op, Err(e)),
         Event::Removed { op, id, result: Ok(confirmed) } => {
-            // Only the user's own removals (op 0 is X-Browser's).
+            // Only the user's own removals (op 0 is Taser's).
             if op != 0 {
                 crate::firstrun::on_removed(app, &id);
             }
@@ -1136,7 +1136,7 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("manifest.json"), "{}").unwrap();
         assert!(x.can_readd(&entry(ID, &mine.to_string_lossy())));
-        assert!(!x.can_readd(&entry(ID, &outside.to_string_lossy())), "not X-Browser's folder");
+        assert!(!x.can_readd(&entry(ID, &outside.to_string_lossy())), "not Taser's folder");
         assert!(!x.can_readd(&entry(ID2, &mine.to_string_lossy())), "another id's folder");
         assert!(!x.can_readd(&entry(ID, &root.join(ID).join("2.0").to_string_lossy())), "no manifest");
         assert!(!x.can_readd(&entry(ID, r"\\server\share\ext")), "UNC");
@@ -1174,7 +1174,7 @@ mod tests {
         store.save_now(&ExtFile { items, ..ExtFile::default() }).unwrap();
         let x = Extensions::open(Some(&dir));
         assert!(!root.join(ID).exists(), "owned: deleted");
-        assert!(other.exists(), "not X-Browser's: left alone");
+        assert!(other.exists(), "not Taser's: left alone");
         let ids: Vec<&str> = x.records().iter().map(|e| e.id.as_str()).collect();
         assert_eq!(ids, ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]);
         assert!(x.list().iter().all(|l| l.id != ID));

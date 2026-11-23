@@ -111,7 +111,7 @@ mod imp {
             )?;
 
             // The action is left alone: the page fails, and the tab gets
-            // X-Browser's error page (`attach_error_page`).
+            // Taser's error page (`attach_error_page`).
             // Raised for every request of the tab (images, scripts, frames);
             // `policy` keeps the ones for the page itself.
             let p = proxy.clone();
@@ -130,7 +130,7 @@ mod imp {
             )?;
 
             // A new document is about to be shown: the site's, or an error
-            // document in its place (X-Browser's error page goes into it).
+            // document in its place (Taser's error page goes into it).
             let p = proxy.clone();
             let shown = committed.clone();
             wv.add_ContentLoading(

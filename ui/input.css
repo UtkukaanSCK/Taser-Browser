@@ -16,36 +16,41 @@
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  /* The one accent color. */
-  --color-accent: oklch(0.62 0.16 252);
+  /* Taser is blue: one vivid accent, and every surface tinted from the
+     same hue (258) so the frame reads blue without competing with pages. */
+  --color-accent: oklch(0.57 0.19 258);
+  /* The accent used as text or a glyph. Same as the accent in light mode;
+     lighter in dark mode, where the fill shade is too dim to read as text. */
+  --color-accent-text: oklch(0.57 0.19 258);
   /* Neutral surfaces (light). Dark values are swapped in below. Three
      steps of depth: the frame behind the tabs (also the window's own
      background, app.rs background()), the toolbar and the active tab on it,
      and the address field set into the toolbar. Surface is for panels and
      the focused field. Hover is see-through, so one value works on all. */
-  --color-frame: #e3e5ea;
-  --color-toolbar: #f9fafb;
-  --color-field: #eceef2;
-  --color-field-hover: #e4e6eb;
+  --color-frame: #cddcf6;
+  --color-toolbar: #f3f7fe;
+  --color-field: #e3ebf9;
+  --color-field-hover: #d9e3f6;
   --color-surface: #ffffff;
-  --color-hover: rgb(24 26 32 / 0.075);
-  --color-line: #d5d8de;
-  --color-ink: #1f2023;
-  --color-muted: #5f636b;
+  --color-hover: rgb(29 64 160 / 0.085);
+  --color-line: #c3d1ea;
+  --color-ink: #121c33;
+  --color-muted: #4b5b7c;
   --color-danger: #c42b1c;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-frame: #1b1c20;
-    --color-toolbar: #2a2b30;
-    --color-field: #1e1f23;
-    --color-field-hover: #18191c;
-    --color-surface: #2f3035;
-    --color-hover: rgb(255 255 255 / 0.09);
-    --color-line: #3b3c42;
-    --color-ink: #ececef;
-    --color-muted: #a0a2a9;
+    --color-frame: #0e1830;
+    --color-toolbar: #18264a;
+    --color-field: #101b38;
+    --color-field-hover: #0c1630;
+    --color-surface: #1d2d55;
+    --color-hover: rgb(160 190 255 / 0.11);
+    --color-line: #2b3d6b;
+    --color-ink: #e9effc;
+    --color-muted: #9fb1d6;
+    --color-accent-text: oklch(0.76 0.12 258);
   }
 }
 

@@ -1,5 +1,5 @@
 "use strict";
-// X-Browser UI strip. Holds no state of its own: Rust pushes the full state
+// Taser UI strip. Holds no state of its own: Rust pushes the full state
 // with xb.render(), and every user action is sent back as a short IPC command.
 // Page titles and URLs are untrusted, so they only ever go through
 // textContent / value / title, never innerHTML.

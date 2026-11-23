@@ -205,7 +205,7 @@ pub fn open(app: &mut App, id: &str, path: &str, right: f64) {
     let view = match builder.build_as_child(&app.window) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("x-browser: cannot create the extension popup: {e}");
+            eprintln!("taser: cannot create the extension popup: {e}");
             app.focus_after_switch();
             return;
         }
@@ -219,7 +219,7 @@ pub fn open(app: &mut App, id: &str, path: &str, right: f64) {
         && native::attach_popup_events(&view, generation, app.proxy()).is_ok()
         && view.load_url(&url).is_ok();
     if !ready {
-        eprintln!("x-browser: cannot set up the extension popup");
+        eprintln!("taser: cannot set up the extension popup");
         app.focus_after_switch();
         return;
     }
@@ -251,7 +251,7 @@ fn start_measuring(proxy: native::Proxy, generation: u32) -> Arc<AtomicBool> {
         }
     });
     if let Err(e) = spawned {
-        eprintln!("x-browser: cannot measure the extension popup: {e}");
+        eprintln!("taser: cannot measure the extension popup: {e}");
     }
     alive
 }
@@ -336,7 +336,7 @@ pub fn on_closed(app: &mut App, generation: u32, refocus: bool) {
             }
             native::FocusAt::Elsewhere => {}
         }
-        // While the self-test has X-Browser count as in front
+        // While the self-test has Taser count as in front
         // (`App::foreground`), a focus loss that only comes from the window
         // really being behind another program is no click outside.
         #[cfg(feature = "selftest")]

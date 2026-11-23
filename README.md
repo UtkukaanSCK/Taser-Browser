@@ -2,7 +2,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/banner-dark.svg">
-  <img alt="X-Browser: a light, minimal desktop browser in Rust on WebView2" src="docs/media/banner-light.svg" width="100%">
+  <img alt="Taser: a light, minimal desktop browser in Rust on WebView2" src="docs/media/banner-light.svg" width="100%">
 </picture>
 
 **Light, minimal desktop browser in Rust on the system WebView (WebView2 on
@@ -11,7 +11,7 @@ Windows), built with `wry` + `tao` only.**
 [![Rust 2024](https://img.shields.io/badge/Rust-2024_edition-b7410e?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![WebView2](https://img.shields.io/badge/WebView2-system_runtime-2f62e9?logo=microsoftedge&logoColor=white)](https://developer.microsoft.com/microsoft-edge/webview2/)
 [![Windows](https://img.shields.io/badge/platform-Windows-0078d4?logo=windows&logoColor=white)](#requirements)
-[![Binary](https://img.shields.io/badge/binary-1.66_MB-7c5cff)](#startup-timing)
+[![Binary](https://img.shields.io/badge/binary-1.66_MB-1e40af)](#startup-timing)
 [![ui-ready](https://img.shields.io/badge/ui--ready-%E2%89%88420_ms-15803d)](#startup-timing)
 [![License: MIT](https://img.shields.io/badge/license-MIT-52525b)](LICENSE)
 
@@ -111,7 +111,7 @@ curl -L -o tools/tailwindcss.exe https://github.com/tailwindlabs/tailwindcss/rel
 
 ```sh
 cargo run                 # debug
-cargo build --release     # target/release/x-browser.exe
+cargo build --release     # target/release/taser.exe
 cargo run --release -- example.com   # optional start URL
 ```
 
@@ -173,8 +173,8 @@ XB_SELFTEST_DIR=selftest-out cargo run --release --features selftest
 
 The self-test keeps its saved session and window place in
 `<XB_SELFTEST_DIR>\profile` (emptied at the start of each run), never in the
-real `%LOCALAPPDATA%\X-Browser`, and its single-instance names follow that
-folder, so it runs alongside a normal X-Browser.
+real `%LOCALAPPDATA%\Taser`, and its single-instance names follow that
+folder, so it runs alongside a normal Taser.
 
 A run passes only with `failures=0`. `n` is the number of PASS lines; if it
 differs from `EXPECTED_CHECKS` in `src/selftest.rs` (a check was skipped, e.g.
@@ -196,7 +196,7 @@ With `XB_TIMING_QUIT=1` also set, the app closes itself once the UI is ready:
 
 ```sh
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  XB_TIMING=timing.txt XB_TIMING_QUIT=1 ./target/release/x-browser.exe
+  XB_TIMING=timing.txt XB_TIMING_QUIT=1 ./target/release/taser.exe
   sleep 8
 done
 ```
@@ -283,23 +283,23 @@ from a newer version is read but never overwritten. What is read back is
 treated as untrusted: only `http`/`https` URLs up to 8 KiB, titles cut to 512
 characters, zoom 25–500 %, and at most 500 tabs (the rest are dropped).
 
-Only one X-Browser runs per profile. Starting it again, with or without an
+Only one Taser runs per profile. Starting it again, with or without an
 address, hands the address (web URLs and search text only) to the running
 window, which opens it in a new tab and comes to the front; the second process
 then exits. It hands over only to a window whose process is the same
-`x-browser.exe`, run by the same user at no lower integrity level; the
+`taser.exe`, run by the same user at no lower integrity level; the
 instance lock is open to the current user only, and not at all to that user's
-lower-integrity processes. If the lock exists but was not made by X-Browser
+lower-integrity processes. If the lock exists but was not made by Taser
 (another owner, or an integrity label below Medium) or cannot be opened at
-all, and no X-Browser window turns up, X-Browser starts anyway rather than not
+all, and no Taser window turns up, Taser starts anyway rather than not
 at all. A normal (Medium) lock is always taken as genuine, so an elevated
 start never runs beside a normal one; and a lock that cannot be opened while
-an X-Browser window exists (an elevated one, met by a normal start) ends in
+a Taser window exists (an elevated one, met by a normal start) ends in
 the "already running" message, never in a second copy. A window whose process
-X-Browser cannot inspect counts only when Windows refuses to deliver messages
+Taser cannot inspect counts only when Windows refuses to deliver messages
 to it, which proves it runs at a higher integrity level.
 
-X-Browser is not meant to run elevated (as administrator): the `.tmp`/`.bak`
+Taser is not meant to run elevated (as administrator): the `.tmp`/`.bak`
 writes above rely on `%LOCALAPPDATA%` being writable by the current user only.
 
 ## History, suggestions and clearing data
@@ -333,8 +333,9 @@ the recently closed tabs (Ctrl+Shift+T), and both ask for confirmation first.
 
 ## Data files
 
-All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
-(`EBWebView\`). A self-test build uses `<XB_SELFTEST_DIR>\profile` instead.
+All in `%LOCALAPPDATA%\Taser`, next to the WebView2 profile
+(`EBWebView\`). A profile made before the rename (in
+`%LOCALAPPDATA%\X-Browser`) stays where it is and keeps being used. A self-test build uses `<XB_SELFTEST_DIR>\profile` instead.
 
 | File | Contents | Written |
 | --- | --- | --- |
@@ -343,14 +344,14 @@ All in `%LOCALAPPDATA%\X-Browser`, next to the WebView2 profile
 | `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
 | `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
 | `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session, one blank tab or the home page), `home` (an http/https address of at most 2,048 characters; empty: the new tab page), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced), `https_only`, `strip_params`, `gpc` (each on/off, default on; see "Privacy"); file at most 64 KiB | on each change |
-| `extensions.json` | extensions X-Browser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
-| `extensions\<id>\<version>\` | unpacked extensions X-Browser owns | on install, update and removal |
+| `extensions.json` | extensions Taser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
+| `extensions\<id>\<version>\` | unpacked extensions Taser owns | on install, update and removal |
 
 The JSON files carry `"v": 1` and are written as tmp → flush → rename, with a
 `.bak` of the previous good file and a `.corrupt` copy of a file that could
 not be read. Everything read back is treated as untrusted (http/https only,
 size and count limits; a settings value this version does not know reads as
-its default). Deleting the folder resets X-Browser to first-start state.
+its default). Deleting the folder resets Taser to first-start state.
 
 A download folder must be an absolute, existing folder; the Windows Startup
 folders (yours and all users', and anything below them) are refused, so a
@@ -368,7 +369,7 @@ download folder, tracker blocking, the three privacy switches) are saved on
 each change and take effect at once.
 
 **New tab page and home button.** A blank tab (Ctrl+T, the strip's +) shows
-X-Browser's new tab page: a search box (it searches with the chosen engine, or
+Taser's new tab page: a search box (it searches with the chosen engine, or
 goes to what looks like an address), the eight most visited sites (one tile
 per site) and the first eight bookmarks. The tab itself stays `about:blank`,
 with the address bar empty and focused; the page is written into it only when
@@ -392,9 +393,9 @@ strict and off.
 Three switches under "Gizlilik" in the settings, all on by default:
 
 - **HTTPS-only** (`https_only`): an `http://` address is tried as `https://`
-  first. If that fails, the tab shows X-Browser's error page saying "Bu site
+  first. If that fails, the tab shows Taser's error page saying "Bu site
   güvenli bağlantı sunmuyor", with "Yine de http ile aç" (load the http
-  address; the host is then let through on http until X-Browser closes) and
+  address; the host is then let through on http until Taser closes) and
   "Yeniden dene" (try https again). Local and private hosts (`localhost`,
   loopback, private and link-local addresses, single-label names, `.local`,
   `.lan`, `.internal`, `.home.arpa`, `.test` and the like) and addresses with
@@ -456,7 +457,7 @@ asking site and the whole address). "Aç" counts only after a short pause
 Every other `ms-` scheme is refused without a question.
 
 A page that cannot load (unknown host, no connection, refused connection,
-time-out, bad certificate) shows X-Browser's own error page in Turkish, never
+time-out, bad certificate) shows Taser's own error page in Turkish, never
 WebView2's Edge-branded one: a title for the kind of error, a short
 explanation, the failed address as plain text and a "Yeniden dene" button.
 The address bar keeps the failed address, the error page never shows the
@@ -488,10 +489,10 @@ offers to save passwords, whatever the autofill setting says.
 
 **Ad blocking on first start.** uBlock Origin Lite
 (`ddkjiahejlhfcafbddmgiahcphecmpfh`) installs by itself, without a question,
-on the first start that has a data folder: X-Browser downloads it from the
+on the first start that has a data folder: Taser downloads it from the
 Chrome Web Store a few seconds after the window is up. If that fails (no
 network, say), it tries again on the next start. It is installed once: after
-the user removes it, X-Browser never installs it again on its own (it can
+the user removes it, Taser never installs it again on its own (it can
 still be installed by hand from the store).
 
 **Installing from the Chrome Web Store.** On an extension's store page the
@@ -513,8 +514,8 @@ error if it does not answer within 10 s. The two extensions built into
 WebView2 (the PDF viewer among them) are not listed. The page's "Chrome Web
 Mağazası" link opens the store in a new tab.
 
-An extension that got into the profile without going through X-Browser (Edge's
-own dialog, say) is turned off at the next start and listed as "X-Browser
+An extension that got into the profile without going through Taser (Edge's
+own dialog, say) is turned off at the next start and listed as "Taser
 dışında kurulmuş", without an icon, options or popup. It can be turned on or
 removed there; turned on, it is still not recorded, so the next start turns it
 off again.
@@ -552,7 +553,7 @@ comes back once the question is answered or closed ("İptal" keeps the
 installed version); if the install fails after "Güncelle", the page says why
 under the extension's row. With another overlay
 page open (a menu, a question), an extension's popup open, in fullscreen or
-with X-Browser in the background it waits for the next check. Otherwise it goes
+with Taser in the background it waits for the next check. Otherwise it goes
 in without a question. A version whose download
 or install failed is not fetched again until the next start.
 
@@ -579,7 +580,7 @@ Clearing browsing data leaves extensions and their settings alone.
   redirects, each `Location` checked by hand; no `http`, IP addresses,
   single-label names or user names in URLs; TLS 1.2 or later.
 - No cookies, no stored credentials and no automatic sign-in are sent. The
-  User-Agent is `X-Browser` and nothing else. The system proxy settings are
+  User-Agent is `Taser` and nothing else. The system proxy settings are
   used.
 
 The store page itself is an ordinary page in a content tab, like any other
@@ -587,11 +588,11 @@ site.
 
 **Licence and credit.** uBlock Origin Lite is by Raymond Hill and
 contributors, under GPLv3 ([source](https://github.com/uBlockOrigin/uBOL-home)).
-X-Browser (MIT) does not ship it, copy it or change it: it downloads the
+Taser (MIT) does not ship it, copy it or change it: it downloads the
 publisher's own package from the Chrome Web Store at run time. See
 `docs/v0.3-licensing.md` (not legal advice).
 
-Extensions live in `%LOCALAPPDATA%\X-Browser\extensions\<id>\<version>`
+Extensions live in `%LOCALAPPDATA%\Taser\extensions\<id>\<version>`
 (uBlock Origin Lite takes about 47 MB once WebView2 has indexed its rules),
 recorded in `extensions.json` (see "Data files"). Nothing is deleted under
 `extensions` if that folder is itself a junction or link.
@@ -619,7 +620,7 @@ Known limits, open until checked by hand (`docs/v0.3-manual-checklist.md`):
 
 ## Icon
 
-`assets/x-browser.ico` (16, 24, 32, 48 and 256 px) is drawn by
+`assets/taser.ico` (16, 24, 32, 48 and 256 px) is drawn by
 `assets/make_icon.py` (pure Python, deterministic; run it after changing the
 design). `build.rs` embeds it in the exe as icon resource 1 without any build
 dependency, and the window and taskbar icons load that same resource.
@@ -653,7 +654,7 @@ light and dark) are drawn the same way by `docs/media/make_media.py`.
 | `src/native/fullscreen.rs` | a page's element fullscreen (video, `requestFullscreen`) events |
 | `src/native/download.rs` | downloads through WebView2's own flyout; SmartScreen left on |
 | `src/native/policy.rs` | content-tab policy hooks: certificate errors, external launches stopped, navigation outcome |
-| `src/native/error_page.rs` | writes X-Browser's error page into a tab whose load failed |
+| `src/native/error_page.rs` | writes Taser's error page into a tab whose load failed |
 | `src/native/privacy.rs` | Global Privacy Control in a tab: the `Sec-GPC` request hook and the `navigator` script |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, tracking prevention, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
@@ -694,4 +695,4 @@ light and dark) are drawn the same way by `docs/media/make_media.py`.
 | `assets/` | app icon and the script that draws it |
 | `build.rs` | embeds the icon in the exe |
 
-Profile data lives in `%LOCALAPPDATA%\X-Browser`.
+Profile data lives in `%LOCALAPPDATA%\Taser`.

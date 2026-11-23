@@ -182,7 +182,7 @@ mod imp {
         use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
         use windows::core::HSTRING;
         unsafe {
-            MessageBoxW(None, &HSTRING::from(message), &HSTRING::from("X-Browser"), MB_OK | MB_ICONERROR);
+            MessageBoxW(None, &HSTRING::from(message), &HSTRING::from("Taser"), MB_OK | MB_ICONERROR);
         }
     }
 
@@ -243,7 +243,7 @@ mod imp {
             )
         };
         if let Err(e) = started {
-            eprintln!("x-browser: cannot clear browsing data: {e}");
+            eprintln!("taser: cannot clear browsing data: {e}");
             if let Some(done) = done.take() {
                 done(false);
             }

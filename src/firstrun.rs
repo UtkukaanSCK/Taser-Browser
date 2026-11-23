@@ -14,7 +14,7 @@
 //!   webview (one more try once a content tab is made). Any other failure
 //!   stays `pending` for the next start.
 //! - Removing uBOL by hand (a `Removed` that WebView2 answered for
-//!   `extensions::remove`; not X-Browser's own `remove_quietly`) makes it
+//!   `extensions::remove`; not Taser's own `remove_quietly`) makes it
 //!   `user_removed`, which is never installed again. Removed while this
 //!   start's install was running, it still lands once and is taken back out.
 //! - The install itself is task 4's (`webstore::install_from_store`): the
@@ -148,7 +148,7 @@ fn finish(x: &mut Extensions, result: &Result<String, FailureKind>) {
             s.run = Run::AfterNoView;
         }
         // Stays pending: the next start tries again.
-        Err(e) => eprintln!("x-browser: uBlock Origin Lite not installed, tried again at the next start: {e:?}"),
+        Err(e) => eprintln!("taser: uBlock Origin Lite not installed, tried again at the next start: {e:?}"),
     }
     match (result.is_ok(), x.first_run_ubol()) {
         (true, State::Pending) => x.set_first_run_ubol(State::Done),
@@ -248,7 +248,7 @@ pub mod fake {
         let _ = app.proxy().send_event(crate::app::UserEvent::Extension(Event::StoreInstalled { id: id.into(), result }));
     }
 
-    /// As if X-Browser had started again: this start's tries are forgotten,
+    /// As if Taser had started again: this start's tries are forgotten,
     /// the saved state is not.
     pub fn next_start(app: &mut App) {
         app.extensions.first_run = Session::default();

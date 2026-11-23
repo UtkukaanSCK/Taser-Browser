@@ -59,11 +59,11 @@ fn main() {
     // the first instance, stop before any window, profile or test code.
     #[cfg(feature = "selftest")]
     if std::env::var_os("XB_SELFTEST_CHILD").is_some() {
-        eprintln!("x-browser: self-test child found no instance to hand over to");
+        eprintln!("taser: self-test child found no instance to hand over to");
         std::process::exit(3);
     }
     if let Err(e) = run(dir.as_deref(), arg.as_deref()) {
-        eprintln!("x-browser: {e}");
+        eprintln!("taser: {e}");
         if !timing::quit_when_ready() {
             native::fatal(&startup_error_message(&e));
         }
@@ -75,17 +75,17 @@ fn main() {
 fn startup_error_message(e: &wry::Error) -> String {
     match native::profile_busy(e) {
         Some(native::ProfileBusy::ShuttingDown) => {
-            "Önceki X-Browser oturumu henüz tam kapanmadı; profil klasörü hâlâ kullanımda.\n\
+            "Önceki Taser oturumu henüz tam kapanmadı; profil klasörü hâlâ kullanımda.\n\
              Bu genellikle uygulama zorla kapatıldıktan sonra olur ve yarım dakika içinde geçer.\n\
              Biraz sonra yeniden deneyin."
                 .to_string()
         }
         Some(native::ProfileBusy::OtherOptions) => {
-            "Başka bir X-Browser sürümü çalışıyor ve aynı profil klasörünü farklı ayarlarla kullanıyor.\n\
+            "Başka bir Taser sürümü çalışıyor ve aynı profil klasörünü farklı ayarlarla kullanıyor.\n\
              Onu kapatıp yeniden deneyin."
                 .to_string()
         }
-        None => format!("X-Browser başlatılamadı.\n\nMicrosoft Edge WebView2 Runtime kurulu olmalıdır.\n\n{e}"),
+        None => format!("Taser başlatılamadı.\n\nMicrosoft Edge WebView2 Runtime kurulu olmalıdır.\n\n{e}"),
     }
 }
 
@@ -114,14 +114,14 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
     if let Some(dir) = dir
         && let Err(e) = instance::listen(dir, event_loop.create_proxy())
     {
-        eprintln!("x-browser: later starts cannot reach this one: {e}");
+        eprintln!("taser: later starts cannot reach this one: {e}");
     }
     #[cfg(feature = "selftest")]
     selftest::prepare_profile(dir);
     let (mut persist, saved_tabs, saved_window) = session::Persist::open(dir);
 
     let mut builder = WindowBuilder::new()
-        .with_title("X-Browser")
+        .with_title("Taser")
         .with_min_inner_size(LogicalSize::new(570.0, 240.0))
         .with_decorations(false)
         .with_theme(None);
@@ -230,7 +230,7 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
             // Last save, while every tab is still there.
             session::save_at_exit(&mut app);
             if !app.history.flush_now(std::time::Duration::from_secs(2)) {
-                eprintln!("x-browser: history not fully written at exit");
+                eprintln!("taser: history not fully written at exit");
             }
             *flow = ControlFlow::Exit;
         } else if let Some(due) = [app.persist.due, app.history.due].into_iter().flatten().min() {
@@ -252,9 +252,9 @@ mod tests {
     #[test]
     fn profile_errors_get_their_own_message() {
         let busy = startup_error_message(&webview2_error(0x8007_00AA));
-        assert!(busy.starts_with("Önceki X-Browser oturumu henüz tam kapanmadı"), "{busy}");
+        assert!(busy.starts_with("Önceki Taser oturumu henüz tam kapanmadı"), "{busy}");
         let other = startup_error_message(&webview2_error(0x8007_139F));
-        assert!(other.starts_with("Başka bir X-Browser sürümü çalışıyor"), "{other}");
+        assert!(other.starts_with("Başka bir Taser sürümü çalışıyor"), "{other}");
         assert!(!other.contains("henüz tam kapanmadı") && !other.contains("Runtime"), "{other}");
         let missing = startup_error_message(&webview2_error(0x8007_0002));
         assert!(missing.contains("WebView2 Runtime kurulu olmalıdır"), "{missing}");

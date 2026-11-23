@@ -190,7 +190,7 @@ impl Bookmarks {
         match spawned {
             Ok(_) => self.loading = Some(rx),
             Err(e) => {
-                eprintln!("x-browser: no bookmarks thread ({e}); reading inline");
+                eprintln!("taser: no bookmarks thread ({e}); reading inline");
                 self.store = dir.as_deref().map(Store::new);
                 self.ensure_loaded();
             }
@@ -220,7 +220,7 @@ impl Bookmarks {
             }
             // The thread died reading: without the file nothing may
             // overwrite it, so this run keeps bookmarks in memory only.
-            None => eprintln!("x-browser: the bookmarks file could not be read; changes are not saved"),
+            None => eprintln!("taser: the bookmarks file could not be read; changes are not saved"),
         }
     }
 

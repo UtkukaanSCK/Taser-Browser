@@ -1,4 +1,4 @@
-//! Puts X-Browser's own error page (`crate::error_page`) into a tab whose
+//! Puts Taser's own error page (`crate::error_page`) into a tab whose
 //! load failed. WebView2's built-in page is turned off (`harden_content`),
 //! so the failed load leaves an empty error document; once its navigation
 //! has completed, the page is written into it. When the address that

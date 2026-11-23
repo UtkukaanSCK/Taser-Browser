@@ -51,7 +51,7 @@ mod imp {
             )))
         });
         if let Err(e) = started {
-            eprintln!("x-browser: cannot list site permissions: {e}");
+            eprintln!("taser: cannot list site permissions: {e}");
             if let Some(done) = cell.take() {
                 done(None);
             }
@@ -93,7 +93,7 @@ mod imp {
             )
         });
         if let Err(e) = started {
-            eprintln!("x-browser: cannot set a site permission: {e}");
+            eprintln!("taser: cannot set a site permission: {e}");
             if let Some(done) = cell.take() {
                 done(false);
             }
@@ -118,7 +118,7 @@ mod imp {
             )
         };
         if let Err(e) = started {
-            eprintln!("x-browser: cannot clear site data: {e}");
+            eprintln!("taser: cannot clear site data: {e}");
             if let Some(done) = cell.take() {
                 done(false);
             }

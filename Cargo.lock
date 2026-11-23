@@ -1945,6 +1945,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
+name = "taser"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+ "serde",
+ "serde_json",
+ "tao",
+ "webview2-com",
+ "windows",
+ "wry",
+]
+
+[[package]]
 name = "tendril"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2555,19 +2568,6 @@ dependencies = [
  "windows-core",
  "windows-version",
  "x11-dl",
-]
-
-[[package]]
-name = "x-browser"
-version = "0.1.0"
-dependencies = [
- "miniz_oxide",
- "serde",
- "serde_json",
- "tao",
- "webview2-com",
- "windows",
- "wry",
 ]
 
 [[package]]

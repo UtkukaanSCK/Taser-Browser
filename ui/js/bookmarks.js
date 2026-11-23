@@ -66,7 +66,7 @@
   /** A star in front of a suggestion row for a bookmarked address. */
   function mark(row, it) {
     if (!it || it.b !== true) return;
-    const s = el("span", "shrink-0 text-accent", "★");
+    const s = el("span", "shrink-0 text-accent-text", "★");
     s.setAttribute("role", "img");
     s.setAttribute("aria-label", "Yer imi");
     row.prepend(s);

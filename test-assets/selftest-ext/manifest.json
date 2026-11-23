@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "XB Selftest",
   "version": "1.0",
-  "description": "X-Browser self-test extension: blocks /xb-ad.js, marks every page it runs in, and has a popup, a page for a frame in it with a mail link, and an options page.",
+  "description": "Taser self-test extension: blocks /xb-ad.js, marks every page it runs in, and has a popup, a page for a frame in it with a mail link, and an options page.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnlUYY2vxKcEG6n+uydff3nYO5GgWWq1cVBOf65Y9wOkIoj+ETVSdFC6vEj7Xx54qLSIHKSAjWk1QZ520fcBbyGzwC2bPMvLcgU7egdNN/6SgJPSYlymQf++/MH3V23BA3303ZvMzwWIvxw8z/26gQTP3OrR7YQv8Mh2Kn8Ag7JvaX72TTLiLL7S1ok2RBF8iX//s7Z5dBLdK5E8lhh0amwEX3e9ArgeHhNk2uhGPSAytkAo+DO16Pw/rvSpLwDuab1SZ6/fEo5ltAeLMMvGWfBvQ07T91djnXgEFwR6eZb+404kjo/LUAjHkhmc4Kk9cff76AiQzo61DmFr2ndjAIwIDAQAB",
   "permissions": ["declarativeNetRequest", "tabs"],
   "action": { "default_popup": "popup.html" },

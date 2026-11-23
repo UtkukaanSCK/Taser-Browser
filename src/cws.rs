@@ -11,7 +11,7 @@ use crate::net::MAX_URL;
 /// The store's front page (the extensions page's "Chrome Web Mağazası").
 pub const STORE_URL: &str = "https://chromewebstore.google.com/";
 const DETAIL_PREFIX: &str = "https://chromewebstore.google.com/detail/";
-/// Everything under this path is X-Browser's and never reaches the store.
+/// Everything under this path is Taser's and never reaches the store.
 const SENTINEL_ROOT: &str = "https://chromewebstore.google.com/_xb";
 const SENTINEL_PREFIX: &str = "https://chromewebstore.google.com/_xb/";
 const UPDATE_SERVICE: &str = "https://clients2.google.com/service/update2/crx";
@@ -104,7 +104,7 @@ impl Action {
     }
 }
 
-/// The sentinel address the store page's hook navigates to. X-Browser
+/// The sentinel address the store page's hook navigates to. Taser
 /// itself only reads them (`parse_sentinel`); the tests and the self-test
 /// write them.
 #[cfg(any(test, feature = "selftest"))]
@@ -133,7 +133,7 @@ pub enum SentinelDecision {
     Pass,
     /// Under `/_xb` but not a request to honour: cancel it and do nothing else.
     Cancel,
-    /// Cancel it, then ask the user in X-Browser's own dialog. Both actions ask:
+    /// Cancel it, then ask the user in Taser's own dialog. Both actions ask:
     /// the store page can `pushState` to any detail page, so the URL alone
     /// proves nothing about what the user saw.
     Ask(Action, String),

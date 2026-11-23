@@ -56,10 +56,10 @@ pub enum Placement {
     At(usize),
 }
 
-/// Window caption for the active tab: `<title> - X-Browser`, or just the app
+/// Window caption for the active tab: `<title> - Taser`, or just the app
 /// name for a blank tab or one without a title yet.
 pub fn window_title(tab: Option<&Tab>) -> String {
-    const APP: &str = "X-Browser";
+    const APP: &str = "Taser";
     match tab {
         Some(t) if t.url != crate::url::BLANK && !t.title.trim().is_empty() => format!("{} - {APP}", t.title.trim()),
         _ => APP.to_string(),
@@ -368,15 +368,15 @@ mod tests {
     fn window_title_follows_active_tab() {
         let mut t = Tabs::new();
         let a = t.add(crate::url::BLANK, Placement::End);
-        assert_eq!(window_title(None), "X-Browser");
-        assert_eq!(window_title(t.get(a)), "X-Browser", "blank tab");
+        assert_eq!(window_title(None), "Taser");
+        assert_eq!(window_title(t.get(a)), "Taser", "blank tab");
         t.get_mut(a).unwrap().title = "about:blank".into();
-        assert_eq!(window_title(t.get(a)), "X-Browser", "blank tab with WebView2's URL title");
+        assert_eq!(window_title(t.get(a)), "Taser", "blank tab with WebView2's URL title");
         t.get_mut(a).unwrap().url = "https://example.com/".into();
         t.get_mut(a).unwrap().title = "  ".into();
-        assert_eq!(window_title(t.get(a)), "X-Browser", "no title yet");
+        assert_eq!(window_title(t.get(a)), "Taser", "no title yet");
         t.get_mut(a).unwrap().title = " Example Domain ".into();
-        assert_eq!(window_title(t.get(a)), "Example Domain - X-Browser");
+        assert_eq!(window_title(t.get(a)), "Example Domain - Taser");
     }
 
     #[test]

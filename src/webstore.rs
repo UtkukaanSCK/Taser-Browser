@@ -7,7 +7,7 @@
 //!    (`cws::crx_url`), checked as a Web Store package for the id asked for
 //!    (`crx::verify_crx3`), its name, version and permissions read from the
 //!    manifest before anything is written.
-//! 2. Asking (only when `confirm`): X-Browser's own question in the overlay
+//! 2. Asking (only when `confirm`): Taser's own question in the overlay
 //!    (`overlay::Mode::Store`), never the page's. As for the launch question
 //!    (`policy`): "Ekle" counts only `ANSWER_DELAY` after the question came on
 //!    screen and after the last press that came too early, it is answered from
@@ -434,7 +434,7 @@ pub fn on_store_button(app: &mut App, tab: TabId, action: Action, id: &str) {
     }
 }
 
-/// Asks before removing `id`, if X-Browser has it.
+/// Asks before removing `id`, if Taser has it.
 fn ask_remove(app: &mut App, tab: TabId, id: &str) {
     let Some(l) = app.extensions.list().into_iter().find(|l| l.id == id) else { return };
     if crate::extensions::is_builtin(id) {
@@ -454,7 +454,7 @@ fn on_button(app: &mut App) {
     on_store_button(app, tab, action, &id);
 }
 
-/// X-Browser has extension `id` (recorded or in the profile).
+/// Taser has extension `id` (recorded or in the profile).
 fn has(app: &App, id: &str) -> bool {
     app.extensions.list().iter().any(|l| l.id == id)
 }
@@ -691,7 +691,7 @@ fn fetched(app: &mut App, result: Result<Fetched, Failure>) {
         // page (whose button may have asked for the check), which comes
         // back afterwards. Never over something else on screen (a menu, a
         // question, an extension's popup, a page in fullscreen) or while
-        // X-Browser is in the background: then it is left for the next
+        // Taser is in the background: then it is left for the next
         // check (Cancelled is not remembered as failed).
         Ok(Fetched { bytes, info, widened: true }) if update => {
             let over_page = app.overlay.mode == Mode::Extensions;
@@ -810,7 +810,7 @@ fn job_progress(app: &mut App) {
                 }
             }
             Err(e) => {
-                eprintln!("x-browser: extension {} could not be removed: {e}", job.id);
+                eprintln!("taser: extension {} could not be removed: {e}", job.id);
                 show_error(app, &format!("Uzantı kaldırılamadı ({e})."), job.spot);
             }
         },
@@ -841,7 +841,7 @@ fn discard(app: &App, dir: PathBuf) {
     }
     let _ = std::thread::Builder::new().name("xb-store-discard".into()).spawn(move || {
         if let Err(e) = std::fs::remove_dir_all(&dir) {
-            eprintln!("x-browser: cannot delete {}: {e}", dir.display());
+            eprintln!("taser: cannot delete {}: {e}", dir.display());
         }
     });
 }
@@ -860,10 +860,10 @@ fn retire(app: &App, id: &str, old: PathBuf, new: &Path) {
     let _ = std::thread::Builder::new().name("xb-store-retire".into()).spawn(move || {
         // Checked again here: the folders may have changed since.
         if !crate::extensions::is_plain_folder(&home) || !crate::extensions::is_plain_folder(&old) {
-            return eprintln!("x-browser: old version {} not deleted: a link or unreadable", old.display());
+            return eprintln!("taser: old version {} not deleted: a link or unreadable", old.display());
         }
         if let Err(e) = crate::extensions::delete_folder(&root, &old) {
-            eprintln!("x-browser: old version {} not deleted: {e}", old.display());
+            eprintln!("taser: old version {} not deleted: {e}", old.display());
         }
     });
 }
@@ -908,7 +908,7 @@ fn finish(app: &mut App, job: Job, result: Result<String, Failure>) {
         }
         Err(Failure::Cancelled) => {}
         Err(f) => {
-            eprintln!("x-browser: extension {} not installed: {f:?}", job.id);
+            eprintln!("taser: extension {} not installed: {f:?}", job.id);
             // Asked over the Extensions page: not said in the question, whose
             // "Kapat" would leave the page gone, but under the extension's
             // row on the page, which comes back (below). The question goes.
@@ -951,9 +951,9 @@ fn report(app: &App, id: &str, result: Result<String, Failure>) {
 /// here once, whoever started it.
 pub fn on_installed(app: &mut App, id: &str, result: &Result<String, Failure>) {
     match result {
-        Ok(version) => eprintln!("x-browser: extension {id} {version} installed from the Chrome Web Store"),
+        Ok(version) => eprintln!("taser: extension {id} {version} installed from the Chrome Web Store"),
         Err(Failure::Cancelled) => {}
-        Err(f) => eprintln!("x-browser: extension {id} install ended: {f:?}"),
+        Err(f) => eprintln!("taser: extension {id} install ended: {f:?}"),
     }
     // First-run uBOL waits on every install's result, not only its own.
     crate::firstrun::on_install_result(app, id, result.clone());
@@ -986,7 +986,7 @@ pub fn check_updates(app: &mut App) {
     });
     match spawned {
         Ok(_) => app.webstore.checking = true,
-        Err(e) => eprintln!("x-browser: update check not started: {e}"),
+        Err(e) => eprintln!("taser: update check not started: {e}"),
     }
 }
 
@@ -1010,12 +1010,12 @@ pub fn start_update_timer(proxy: crate::native::Proxy) {
         }
     });
     if let Err(e) = spawned {
-        eprintln!("x-browser: update timer not started: {e}");
+        eprintln!("taser: update timer not started: {e}");
     }
 }
 
 /// The timer's tick: asks for a check, which runs once nothing is in its
-/// way (`run_pending_check`). Nothing while X-Browser is closing.
+/// way (`run_pending_check`). Nothing while Taser is closing.
 pub fn on_update_timer(app: &mut App) {
     if app.quit {
         return;
@@ -1086,7 +1086,7 @@ fn check(installed: &[(String, String)], prodversion: &str) -> Result<Vec<cws::U
                 out.extend(updates);
             }
             Err(f) => {
-                eprintln!("x-browser: update check of {} extension(s) failed: {f:?}", batch.len());
+                eprintln!("taser: update check of {} extension(s) failed: {f:?}", batch.len());
                 failure = Some(f);
             }
         }
@@ -1160,7 +1160,7 @@ fn checked(app: &mut App, result: Result<Vec<cws::Update>, Failure>) {
                 }
             }
         }
-        Err(f) => eprintln!("x-browser: update check failed: {f:?}"),
+        Err(f) => eprintln!("taser: update check failed: {f:?}"),
     }
     job_ended(app);
     crate::ext_ui::on_update_checked(app, found);

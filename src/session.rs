@@ -245,7 +245,7 @@ impl Persist {
         let (tabs, placement) = (session.load(), window.load());
         for (name, source) in [(Session::NAME, tabs.source), (WindowState::NAME, placement.source)] {
             if source == store::Source::Backup {
-                eprintln!("x-browser: {name} restored from its backup");
+                eprintln!("taser: {name} restored from its backup");
             }
         }
         let (tabs, placement) = (tabs.value, placement.value);
@@ -301,7 +301,7 @@ pub fn save_at_exit(app: &mut App) {
     track_window(app);
     save(app);
     if !store::flush(EXIT_FLUSH) {
-        eprintln!("x-browser: saving the session took too long; the previous save stays");
+        eprintln!("taser: saving the session took too long; the previous save stays");
     }
 }
 

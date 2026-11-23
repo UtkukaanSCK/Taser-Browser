@@ -117,7 +117,7 @@ mod imp {
                 true
             }
             Err(e) => {
-                eprintln!("x-browser: cannot start find: {e}");
+                eprintln!("taser: cannot start find: {e}");
                 false
             }
         }

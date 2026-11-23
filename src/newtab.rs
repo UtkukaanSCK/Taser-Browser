@@ -1,4 +1,4 @@
-//! X-Browser's new tab page: a search box, the most visited sites and the
+//! Taser's new tab page: a search box, the most visited sites and the
 //! first bookmarks, shown in every blank tab (Ctrl+T, the strip's "+", the
 //! home button with no home address set).
 //!
@@ -60,10 +60,10 @@ impl Tile {
 /// The page has the toolbar's color, so the active tab, the toolbar and the
 /// page above the fold read as one surface; the search box is a field set
 /// into it, like the address field.
-const CSS: &str = ":root { color-scheme: light dark; --page: #f9fafb; --field: #eceef2; --surface: #ffffff; \
-  --ink: #1f2023; --muted: #5f636b; --line: #d5d8de; --hover: rgb(24 26 32 / 0.06); --accent: oklch(0.62 0.16 252); } \
-  @media (prefers-color-scheme: dark) { :root { --page: #2a2b30; --field: #1e1f23; --surface: #2f3035; \
-  --ink: #ececef; --muted: #a0a2a9; --line: #3b3c42; --hover: rgb(255 255 255 / 0.07); } } \
+const CSS: &str = ":root { color-scheme: light dark; --page: #f3f7fe; --field: #e3ebf9; --surface: #ffffff; \
+  --ink: #121c33; --muted: #4b5b7c; --line: #c3d1ea; --hover: rgb(29 64 160 / 0.07); --accent: oklch(0.57 0.19 258); } \
+  @media (prefers-color-scheme: dark) { :root { --page: #18264a; --field: #101b38; --surface: #1d2d55; \
+  --ink: #e9effc; --muted: #9fb1d6; --line: #2b3d6b; --hover: rgb(160 190 255 / 0.10); } } \
   html, body { margin: 0; min-height: 100%; } \
   body { background: var(--page); color: var(--ink); \
   font: 14px/1.5 \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } \
@@ -153,9 +153,9 @@ pub fn script(search: &str, sites: &[Tile], marks: &[Tile]) -> String {
            const ul = make('ul', {{}}); \
            for (const [url, label, site] of tiles) {{ \
              const a = make('a', {{ href: url, title: label === site ? url : label + '\\n' + url, className: 'tile' }}); \
-             let hue = 0; for (const c of site) hue = (hue * 31 + c.codePointAt(0)) % 360; \
+             let hue = 0; for (const c of site) hue = (hue * 31 + c.codePointAt(0)) % 80; \
              const icon = make('span', {{ className: 'icon', textContent: (site[0] || '?').toUpperCase() }}); \
-             icon.style.background = 'oklch(0.6 0.13 ' + hue + ')'; icon.setAttribute('aria-hidden', 'true'); \
+             icon.style.background = 'oklch(0.58 0.14 ' + (205 + hue) + ')'; icon.setAttribute('aria-hidden', 'true'); \
              a.append(icon, make('span', {{ className: 'label', textContent: label }})); \
              const li = make('li', {{}}); li.append(a); ul.append(li); }} \
            sec.replaceChildren(...(tiles.length ? [make('h2', {{ textContent: heading }}), ul] : [])); }}; \

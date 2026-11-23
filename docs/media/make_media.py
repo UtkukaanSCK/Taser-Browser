@@ -5,29 +5,33 @@
 Each picture is written twice, `<name>-light.svg` and `<name>-dark.svg`, and the
 README picks one with <picture> and prefers-color-scheme. Animations are plain
 CSS inside the SVG (GitHub shows them in an <img>), honour
-prefers-reduced-motion, and use no fonts, scripts or links from outside.
+prefers-reduced-motion, and use no fonts, scripts or links from outside (the
+app icon is embedded as a data: PNG).
 Deterministic: the same input gives the same bytes.
 """
 
+import base64
 import os
+import struct
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
 
 # Same accent and neutrals as ui/input.css; ICON is assets/make_icon.py's BLUE.
 ICON = "#2F62E9"
 THEMES = {
     "light": {
-        "bg0": "#ffffff", "bg1": "#f4f6fb", "ink": "#18181b", "muted": "#52525b",
-        "faint": "#a1a1aa", "line": "#d4d4d8", "strip": "#f4f4f5", "surface": "#ffffff",
-        "hover": "#e4e4e7", "accent": "#2f6fe0", "accent2": "#7aa7ff", "glow": "#2f6fe0",
-        "glow_op": "0.10", "dot": "#d9dce5", "chip": "#eef2fb", "chip_ink": "#1e3a8a",
+        "bg0": "#f7faff", "bg1": "#dfe9fb", "ink": "#121c33", "muted": "#4b5b7c",
+        "faint": "#8a9abb", "line": "#c3d1ea", "strip": "#cddcf6", "surface": "#f3f7fe",
+        "hover": "#d9e3f6", "accent": "#2f6fe0", "accent2": "#7aa7ff", "glow": "#2f6fe0",
+        "glow_op": "0.10", "dot": "#c9d7f0", "chip": "#eef2fb", "chip_ink": "#1e3a8a",
         "ok": "#15803d", "shadow": "0.10",
     },
     "dark": {
-        "bg0": "#0d0f14", "bg1": "#141823", "ink": "#f4f4f5", "muted": "#a1a1aa",
-        "faint": "#71717a", "line": "#3f3f46", "strip": "#1c1c1e", "surface": "#2c2c2e",
-        "hover": "#38383b", "accent": "#5b8cff", "accent2": "#9db8ff", "glow": "#3b6cff",
-        "glow_op": "0.22", "dot": "#232838", "chip": "#1b2340", "chip_ink": "#c7d6ff",
+        "bg0": "#0a1226", "bg1": "#122046", "ink": "#e9effc", "muted": "#9fb1d6",
+        "faint": "#6a7ca4", "line": "#2b3d6b", "strip": "#0e1830", "surface": "#18264a",
+        "hover": "#22335e", "accent": "#5b8cff", "accent2": "#9db8ff", "glow": "#3b6cff",
+        "glow_op": "0.22", "dot": "#1a2a52", "chip": "#1b2340", "chip_ink": "#c7d6ff",
         "ok": "#4ade80", "shadow": "0.45",
     },
 }
@@ -39,16 +43,15 @@ REDUCED = "@media (prefers-reduced-motion: reduce){*{animation:none!important}}"
 
 
 def icon(x, y, s):
-    """The app icon: blue rounded square with a round-capped white X."""
-    r = s * 0.22
-    a, b = x + s * 0.30, x + s * 0.70
-    c, d = y + s * 0.30, y + s * 0.70
-    w = s * 0.15
-    return (
-        f'<rect x="{x}" y="{y}" width="{s}" height="{s}" rx="{r:.1f}" fill="{ICON}"/>'
-        f'<path d="M{a:.1f} {c:.1f}L{b:.1f} {d:.1f}M{b:.1f} {c:.1f}L{a:.1f} {d:.1f}" '
-        f'stroke="#fff" stroke-width="{w:.1f}" stroke-linecap="round"/>'
-    )
+    """The app icon: the 256 px PNG inside assets/taser.ico (drawn by
+    assets/make_icon.py), embedded, so the banner always shows the real icon."""
+    ico = open(os.path.join(ROOT, "assets", "taser.ico"), "rb").read()
+    for i in range(struct.unpack_from("<H", ico, 4)[0]):
+        w, _, _, _, _, _, size, off = struct.unpack_from("<BBBBHHII", ico, 6 + 16 * i)
+        if w == 0:
+            data = base64.b64encode(ico[off : off + size]).decode()
+            return f'<image x="{x}" y="{y}" width="{s}" height="{s}" href="data:image/png;base64,{data}"/>'
+    raise SystemExit("assets/taser.ico has no 256 px image")
 
 
 def banner(t):
@@ -73,7 +76,7 @@ def banner(t):
         f'<path d="M{x + 110} {my + 23}l8 8m0-8l-8 8" stroke="{t["faint"]}" stroke-width="1.6" stroke-linecap="round"/></g>'
     )
     url_x, url_y = mx + 84, my + 76
-    url = "example.com/hello-x-browser"
+    url = "example.com/hello-taser"
     url_w = len(url) * 8.4
 
     skel = []
@@ -116,7 +119,7 @@ text{{font-family:{SANS}}}
 {REDUCED}
 @media (prefers-reduced-motion: reduce){{.caret{{display:none}}}}
 """
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="X-Browser: a light, minimal desktop browser in Rust on WebView2">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="Taser: a light, minimal desktop browser in Rust on WebView2">
 <style>{css}</style>
 <defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{t["bg0"]}"/><stop offset="1" stop-color="{t["bg1"]}"/></linearGradient>
@@ -132,7 +135,7 @@ text{{font-family:{SANS}}}
 <rect width="{W}" height="{H}" rx="24" fill="url(#dots)" opacity=".8"/>
 <g class="glow"><circle cx="880" cy="200" r="320" fill="url(#glow)"/></g>
 <g class="rise">{icon(64, 70, 84)}</g>
-<g class="rise" style="animation-delay:.12s"><text x="62" y="222" font-size="72" font-weight="700" letter-spacing="-2" fill="url(#title)">X-Browser</text></g>
+<g class="rise" style="animation-delay:.12s"><text x="62" y="222" font-size="72" font-weight="700" letter-spacing="-2" fill="url(#title)">Taser</text></g>
 <g class="rise" style="animation-delay:.24s"><text x="64" y="262" font-size="22" fill="{t["muted"]}">A light, minimal desktop browser in Rust</text>
 <text x="64" y="292" font-size="22" fill="{t["muted"]}">on the system WebView, built with wry + tao only.</text></g>
 {"".join(chip_svg)}
@@ -143,8 +146,8 @@ text{{font-family:{SANS}}}
 <rect x="{mx}" y="{my}" width="{mw}" height="98" fill="{t["strip"]}"/>
 <line x1="{mx}" x2="{mx + mw}" y1="{my + 98}" y2="{my + 98}" stroke="{t["line"]}"/>
 {tab(mx + 12, "t1", 60, ICON)}
-{tab(mx + 146, "t2", 70, "#f59e0b")}
-{tab(mx + 280, "t3", 50, "#10b981")}
+{tab(mx + 146, "t2", 70, "#0ea5e9")}
+{tab(mx + 280, "t3", 50, "#6366f1")}
 <path d="M{mx + 424} {my + 27}h12M{mx + 430} {my + 21}v12" stroke="{t["muted"]}" stroke-width="1.8" stroke-linecap="round"/>
 <path d="M{mx + 22} {url_y - 4}l-6 0m0 0l4-4m-4 4l4 4" stroke="{t["muted"]}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 <path d="M{mx + 40} {url_y - 4}l6 0m0 0l-4-4m4 4l-4 4" stroke="{t["faint"]}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
@@ -200,13 +203,13 @@ text{{font-family:{SANS}}}
 <style>{css}</style>
 <defs>
 <linearGradient id="ga" x1="0" x2="1"><stop offset="0" stop-color="{t["accent"]}"/><stop offset="1" stop-color="{t["accent2"]}"/></linearGradient>
-<linearGradient id="gb" x1="0" x2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#b9a6ff"/></linearGradient>
+<linearGradient id="gb" x1="0" x2="1"><stop offset="0" stop-color="#1e40af"/><stop offset="1" stop-color="#60a5fa"/></linearGradient>
 </defs>
 <rect width="{W}" height="{H}" rx="20" fill="{t["bg1"]}" stroke="{t["line"]}"/>
 <text x="{x0}" y="56" font-size="20" font-weight="700" fill="{t["ink"]}">Start-up to a usable window</text>
 <text x="{x0}" y="80" font-size="14" fill="{t["muted"]}">ui-ready, ms since the OS created the process (median of 10)</text>
 <text x="{s0}" y="56" font-size="20" font-weight="700" fill="{t["ink"]}">Release binary</text>
-<text x="{s0}" y="80" font-size="14" fill="{t["muted"]}">size of target/release/x-browser.exe</text>
+<text x="{s0}" y="80" font-size="14" fill="{t["muted"]}">size of target/release/taser.exe</text>
 {"".join(out)}
 <text x="{x0}" y="{H - 18}" font-size="13" fill="{t["faint"]}">Release builds, scratch profile, one blank tab. v0.1 and v0.2 measured 2026-11-17, v0.3 2026-11-19. Method and every row: README "Startup timing".</text>
 </svg>

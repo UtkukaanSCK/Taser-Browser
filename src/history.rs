@@ -431,7 +431,7 @@ fn load(path: &Path, now: u64) -> Loaded {
         Ok(read) => read,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::default(),
         Err(e) => {
-            eprintln!("x-browser: cannot read {}: {e}", path.display());
+            eprintln!("taser: cannot read {}: {e}", path.display());
             return Loaded::default();
         }
     };
@@ -441,10 +441,10 @@ fn load(path: &Path, now: u64) -> Loaded {
         let out = encode(&parsed.visits);
         size = out.len() as u64;
         if parsed.skipped > 0 {
-            eprintln!("x-browser: {}: skipped {} unreadable line(s)", path.display(), parsed.skipped);
+            eprintln!("taser: {}: skipped {} unreadable line(s)", path.display(), parsed.skipped);
         }
         if let Err(e) = store::write_atomic(path, &out, false) {
-            eprintln!("x-browser: cannot rewrite {}: {e}", path.display());
+            eprintln!("taser: cannot rewrite {}: {e}", path.display());
         }
     }
     Loaded { visits: parsed.visits, bytes: size, skipped: parsed.skipped }
@@ -473,7 +473,7 @@ fn run_io(path: &Path, io: Io, failed: &AtomicBool) {
     };
     if let Err(e) = result {
         failed.store(true, Ordering::Relaxed);
-        eprintln!("x-browser: cannot write {}: {e}", path.display());
+        eprintln!("taser: cannot write {}: {e}", path.display());
     }
 }
 
@@ -582,7 +582,7 @@ impl History {
                 self.loading = Some(loaded_rx);
             }
             Err(e) => {
-                eprintln!("x-browser: no history thread ({e}); working inline");
+                eprintln!("taser: no history thread ({e}); working inline");
                 let loaded = load(&path, now_secs());
                 self.merge(loaded);
             }

@@ -103,7 +103,7 @@
     text.append(el("span", "truncate font-semibold leading-snug", x.name));
     const facts = [];
     if (x.version) facts.push("Sürüm " + x.version);
-    if (x.unknown) facts.push("X-Browser dışında kurulmuş");
+    if (x.unknown) facts.push("Taser dışında kurulmuş");
     const sub = el("span", "text-[12px] text-muted", facts.join(" · "));
     text.append(sub);
     top.append(text);
