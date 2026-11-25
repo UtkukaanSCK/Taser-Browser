@@ -17,6 +17,21 @@ pub enum ProfileBusy {
     OtherOptions,
 }
 
+/// Which of `clear_browsing_data`'s kinds `clear_browsing_data_of` clears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClearKinds {
+    /// Cookies and every kind of DOM storage.
+    pub site_data: bool,
+    /// The disk cache.
+    pub cache: bool,
+    /// WebView2's own browsing history (Taser keeps its own, `history`).
+    pub history: bool,
+}
+
+impl ClearKinds {
+    pub const ALL: Self = Self { site_data: true, cache: true, history: true };
+}
+
 mod audio;
 mod content;
 mod download;
@@ -217,14 +232,29 @@ mod imp {
     /// later, and the extensions' own storage (uBOL's settings and rules)
     /// must survive a clear. Never ALL_PROFILE or ClearBrowsingDataAll.
     pub fn clear_browsing_data(view: &WebView, done: impl FnOnce(bool) + 'static) {
+        clear_browsing_data_of(view, ClearKinds::ALL, done);
+    }
+
+    /// `clear_browsing_data` for some of its kinds only (the same named
+    /// kinds, never more). Nothing chosen: `done(true)` at once.
+    pub fn clear_browsing_data_of(view: &WebView, what: ClearKinds, done: impl FnOnce(bool) + 'static) {
         use std::{cell::Cell, rc::Rc};
         use windows::core::Interface;
-        let kinds = COREWEBVIEW2_BROWSING_DATA_KINDS(
-            COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_DOM_STORAGE.0
-                | COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES.0
-                | COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE.0
-                | COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY.0,
-        );
+        let mut bits = 0;
+        if what.site_data {
+            bits |= COREWEBVIEW2_BROWSING_DATA_KINDS_ALL_DOM_STORAGE.0 | COREWEBVIEW2_BROWSING_DATA_KINDS_COOKIES.0;
+        }
+        if what.cache {
+            bits |= COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE.0;
+        }
+        if what.history {
+            bits |= COREWEBVIEW2_BROWSING_DATA_KINDS_BROWSING_HISTORY.0;
+        }
+        if bits == 0 {
+            done(true);
+            return;
+        }
+        let kinds = COREWEBVIEW2_BROWSING_DATA_KINDS(bits);
         let done = Rc::new(Cell::new(Some(done)));
         let later = done.clone();
         let started = unsafe {
@@ -246,6 +276,44 @@ mod imp {
             eprintln!("taser: cannot clear browsing data: {e}");
             if let Some(done) = done.take() {
                 done(false);
+            }
+        }
+    }
+
+    /// Runs this thread's messages (WebView2 answers through them) until
+    /// `done()` or `timeout`; true if `done()`. For the few places that must
+    /// wait for WebView2 before going on (clearing data at exit and start);
+    /// tao holds back its own events meanwhile, as when wry makes a webview.
+    pub fn pump_until(timeout: std::time::Duration, done: &dyn Fn() -> bool) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostQuitMessage, QS_ALLINPUT,
+            TranslateMessage, WM_QUIT,
+        };
+        let end = std::time::Instant::now() + timeout;
+        loop {
+            if done() {
+                return true;
+            }
+            let left = end.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            unsafe {
+                let mut msg = MSG::default();
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    if msg.message == WM_QUIT {
+                        // Not ours to take: put it back for the event loop.
+                        PostQuitMessage(msg.wParam.0 as i32);
+                        return done();
+                    }
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                    if done() {
+                        return true;
+                    }
+                }
+                let wait = u32::try_from(left.as_millis()).unwrap_or(u32::MAX).clamp(1, 50);
+                MsgWaitForMultipleObjects(None, false, wait, QS_ALLINPUT);
             }
         }
     }
@@ -304,6 +372,12 @@ mod imp {
     }
     pub fn clear_browsing_data(_: &WebView, done: impl FnOnce(bool) + 'static) {
         done(false);
+    }
+    pub fn clear_browsing_data_of(_: &WebView, _: ClearKinds, done: impl FnOnce(bool) + 'static) {
+        done(false);
+    }
+    pub fn pump_until(_: std::time::Duration, done: &dyn Fn() -> bool) -> bool {
+        done()
     }
     #[cfg(feature = "selftest")]
     pub fn capture_png(_: &WebView, _: &std::path::Path) -> Result<(), ()> {

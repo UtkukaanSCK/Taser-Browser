@@ -268,7 +268,9 @@ position and maximized state come back on the next start. F11 fullscreen does
 not: the window reopens as it was before F11. Tab history (Back/Forward) is
 not kept either. Only the active tab loads at start; the others show their
 saved titles and load when first selected. Closing the last tab quits and
-keeps that tab for the next start.
+keeps that tab for the next start. While "Kapanışta tarama verilerini
+temizle" clears history, the tabs are not kept at all (see "Clearing at
+quit").
 
 Saved when the app closes and about 1.5 s after any change (in the
 background), so after a crash the last saved state comes back. A window whose
@@ -331,6 +333,30 @@ storage, service workers…), its disk cache and its own browsing history.
 Saved passwords, autofill and the download list are kept. Both also forget
 the recently closed tabs (Ctrl+Shift+T), and both ask for confirmation first.
 
+**Clearing at quit.** "Kapanışta tarama verilerini temizle" in the settings
+(off by default) clears, each time Taser quits, the kinds ticked under it
+(all three when the switch is turned on): "Geçmiş ve açık sekmeler" (history,
+the recently closed tabs, the open tabs saved for the next start and
+WebView2's own browsing history), "Çerezler ve site verileri" (cookies and all
+site data, as above; sites sign you out) and "Önbellek" (the disk cache).
+Extensions with their own storage and on/off state, bookmarks, settings, saved
+passwords, autofill and the download list are kept. The clear runs after the
+window is hidden and waits at most about 5 s for each part (the history file,
+then WebView2); what does not finish in time is logged to stderr and cleared
+at the next start.
+
+While the switch is on, `exit-clear.json` says what a quit would still owe.
+A start that finds it owing something (Taser crashed, was ended from Task
+Manager or the power went) clears those kinds before any tab loads, again
+waiting at most about 5 s for each part; what still does not finish is tried
+again at quit. A clean quit leaves it owing nothing.
+
+With "Geçmiş ve açık sekmeler" ticked, the open tabs are not saved: "Açılışta:
+Son oturumu aç" then opens one blank tab (or the address Taser was started
+with), as there is no last session to open; the window's place is still kept.
+"Boş sekme aç" and "Ana sayfayı aç" are unchanged, and so is every start with
+history left unticked.
+
 ## Data files
 
 All in `%LOCALAPPDATA%\Taser`, next to the WebView2 profile
@@ -343,7 +369,8 @@ All in `%LOCALAPPDATA%\Taser`, next to the WebView2 profile
 | `window.json` | normal rect (physical px), maximized | same |
 | `history.jsonl` | one `{"u","t","ts"}` line per visit; past 50,000 visits compacted to 40,000; at most the last 16 MiB read | appended at most every 2 s and at exit |
 | `bookmarks.json` | `{"v":1,"items":[{"url","title","added"}]}`, at most 10,000 items, file at most 4 MiB | on each change |
-| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session, one blank tab or the home page), `home` (an http/https address of at most 2,048 characters; empty: the new tab page), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced), `https_only`, `strip_params`, `gpc` (each on/off, default on; see "Privacy"); file at most 64 KiB | on each change |
+| `settings.json` | `engine` (duckduckgo, google, bing), `startup` (last session, one blank tab or the home page), `home` (an http/https address of at most 2,048 characters; empty: the new tab page), `autofill` (on/off), `download_dir` (empty: the system Downloads folder), `tracking` (off, basic, balanced, strict; default balanced), `https_only`, `strip_params`, `gpc` (each on/off, default on; see "Privacy"), `exit_clear` (on/off, default off) with `exit_clear_history`, `exit_clear_cookies`, `exit_clear_cache` (each on/off, default on; see "Clearing at quit"); file at most 64 KiB | on each change |
+| `exit-clear.json` | what a quit still owes, as `history`, `cookies`, `cache` (each on/off; missing or unreadable: everything "Kapanışta tarama verilerini temizle" has ticked); file at most 1 KiB | when the switch or its kinds change, at start and at quit |
 | `extensions.json` | extensions Taser installed (id, name, version, folder, source, on/off), at most 500, `first_run_ubol` (`pending`, `done` or `user_removed`), `last_update_check` (seconds) and `last_error` (the last install error nobody saw: id, message of at most 300 characters, time); file at most 1 MiB | on each install, removal or change |
 | `extensions\<id>\<version>\` | unpacked extensions Taser owns | on install, update and removal |
 
@@ -365,8 +392,8 @@ The strip's ⋮ button, Alt+F or Alt+E opens the main menu: new tab, find, zoom
 WebView2's own flyout (progress, pause/cancel, "open file", "open folder");
 SmartScreen stays on. The strip's downloads button appears once the session has
 had a download. Settings (search engine, startup, home page, autofill,
-download folder, tracker blocking, the three privacy switches) are saved on
-each change and take effect at once.
+download folder, tracker blocking, the three privacy switches, clearing at
+quit) are saved on each change and take effect at once.
 
 **New tab page and home button.** A blank tab (Ctrl+T, the strip's +) shows
 Taser's new tab page: a search box (it searches with the chosen engine, or
@@ -407,6 +434,10 @@ Three switches under "Gizlilik" in the settings, all on by default:
   the `#fragment` stay.
 - **Global Privacy Control** (`gpc`): every request a tab makes carries
   `Sec-GPC: 1`, and pages see `navigator.globalPrivacyControl === true`.
+
+Under "Tarama verileri", "Kapanışta tarama verilerini temizle" (off by
+default) clears history, cookies and site data, and the cache at each quit,
+or after a crash at the next start; see "Clearing at quit".
 
 Known limits, left as they are:
 
@@ -659,6 +690,7 @@ light and dark) are drawn the same way by `docs/media/make_media.py`.
 | `src/native/privacy.rs` | Global Privacy Control in a tab: the `Sec-GPC` request hook and the `navigator` script |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, tracking prevention, Find, Print |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
+| `src/exit_clear.rs` | clearing browsing data at quit, and at the next start after a crash (`exit-clear.json`) |
 | `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, site information, launch and store questions, Uzantılar); placement and closing |
 | `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |

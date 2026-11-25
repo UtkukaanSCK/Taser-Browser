@@ -15,6 +15,9 @@
 //! - `https_only`, `strip_params`, `gpc`: HTTPS-only, dropping tracking
 //!   parameters from addresses, and Global Privacy Control (`privacy`; all
 //!   on by default).
+//! - `exit_clear`: clear browsing data when Taser quits (default off), and
+//!   which kinds: `exit_clear_history`, `exit_clear_cookies`,
+//!   `exit_clear_cache` (all on by default; see `exit_clear`).
 //!
 //! The page is drawn by the overlay (`ui/js/settings.js`), never in a content
 //! tab, and talks over the same origin-checked IPC as the rest of the UI.
@@ -160,6 +163,14 @@ pub struct Settings {
     pub strip_params: bool,
     #[serde(deserialize_with = "lenient_on")]
     pub gpc: bool,
+    #[serde(deserialize_with = "lenient_off")]
+    pub exit_clear: bool,
+    #[serde(deserialize_with = "lenient_on")]
+    pub exit_clear_history: bool,
+    #[serde(deserialize_with = "lenient_on")]
+    pub exit_clear_cookies: bool,
+    #[serde(deserialize_with = "lenient_on")]
+    pub exit_clear_cache: bool,
 }
 
 fn lenient_default<'de, D, T>(d: D) -> Result<T, D::Error>
@@ -176,6 +187,11 @@ fn lenient_on<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> 
     Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(true))
 }
 
+/// Anything but a boolean reads as off (for a switch that defaults off).
+pub(crate) fn lenient_off<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(d)?.as_bool().unwrap_or(false))
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -188,6 +204,10 @@ impl Default for Settings {
             https_only: true,
             strip_params: true,
             gpc: true,
+            exit_clear: false,
+            exit_clear_history: true,
+            exit_clear_cookies: true,
+            exit_clear_cache: true,
         }
     }
 }
@@ -338,6 +358,8 @@ pub struct State {
     folder_pending: bool,
     /// The same for the tracking prevention level.
     tracking_pending: bool,
+    /// What a quit that is not clean leaves to clear (`exit_clear`).
+    pub exit_marker: crate::exit_clear::Marker,
 }
 
 impl State {
@@ -351,7 +373,14 @@ impl State {
         }
         set_engine(loaded.value.engine);
         set_privacy(&loaded.value);
-        Self { value: loaded.value, store: Some(store), system_dir: None, folder_pending: false, tracking_pending: false }
+        Self {
+            value: loaded.value,
+            store: Some(store),
+            system_dir: None,
+            folder_pending: false,
+            tracking_pending: false,
+            exit_marker: crate::exit_clear::Marker::open(Some(dir)),
+        }
     }
 
     fn save(&mut self) {
@@ -457,6 +486,10 @@ struct View<'a> {
     https_only: bool,
     strip_params: bool,
     gpc: bool,
+    exit_clear: bool,
+    exit_history: bool,
+    exit_cookies: bool,
+    exit_cache: bool,
     /// WebView2's own folder, shown when `folder` is empty.
     default_folder: &'a str,
     /// A short code for the page to word (never text from here).
@@ -475,6 +508,10 @@ fn render(app: &mut App, keep: bool, status: &str) {
         https_only: s.value.https_only,
         strip_params: s.value.strip_params,
         gpc: s.value.gpc,
+        exit_clear: s.value.exit_clear,
+        exit_history: s.value.exit_clear_history,
+        exit_cookies: s.value.exit_clear_cookies,
+        exit_cache: s.value.exit_clear_cache,
         default_folder: s.system_dir.as_deref().unwrap_or(""),
         status,
     };
@@ -507,11 +544,28 @@ pub enum SettingsCmd {
     HttpsOnly(bool),
     StripParams(bool),
     Gpc(bool),
+    /// "Kapanışta tarama verilerini temizle" and its three kinds.
+    ExitClear(bool),
+    ExitHistory(bool),
+    ExitCookies(bool),
+    ExitCache(bool),
 }
 
 impl SettingsCmd {
     pub const NAMES: &[&str] = &[
-        "st-engine", "st-startup", "st-autofill", "st-folder", "st-tracking", "st-home", "st-https", "st-strip", "st-gpc",
+        "st-engine",
+        "st-startup",
+        "st-autofill",
+        "st-folder",
+        "st-tracking",
+        "st-home",
+        "st-https",
+        "st-strip",
+        "st-gpc",
+        "st-exitclear",
+        "st-exithistory",
+        "st-exitcookies",
+        "st-exitcache",
     ];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
@@ -526,6 +580,10 @@ impl SettingsCmd {
             ("st-https", a) => Self::HttpsOnly(switch(a)?),
             ("st-strip", a) => Self::StripParams(switch(a)?),
             ("st-gpc", a) => Self::Gpc(switch(a)?),
+            ("st-exitclear", a) => Self::ExitClear(switch(a)?),
+            ("st-exithistory", a) => Self::ExitHistory(switch(a)?),
+            ("st-exitcookies", a) => Self::ExitCookies(switch(a)?),
+            ("st-exitcache", a) => Self::ExitCache(switch(a)?),
             _ => return None,
         })
     }
@@ -546,6 +604,10 @@ pub fn on_command(app: &mut App, cmd: SettingsCmd) {
         return;
     }
     let mut status = "";
+    let exit_changed = matches!(
+        cmd,
+        SettingsCmd::ExitClear(_) | SettingsCmd::ExitHistory(_) | SettingsCmd::ExitCookies(_) | SettingsCmd::ExitCache(_)
+    );
     match cmd {
         SettingsCmd::Engine(e) => {
             app.settings.value.engine = e;
@@ -602,6 +664,13 @@ pub fn on_command(app: &mut App, cmd: SettingsCmd) {
             app.settings.value.gpc = on;
             apply_privacy(app);
         }
+        SettingsCmd::ExitClear(on) => app.settings.value.exit_clear = on,
+        SettingsCmd::ExitHistory(on) => app.settings.value.exit_clear_history = on,
+        SettingsCmd::ExitCookies(on) => app.settings.value.exit_clear_cookies = on,
+        SettingsCmd::ExitCache(on) => app.settings.value.exit_clear_cache = on,
+    }
+    if exit_changed {
+        crate::exit_clear::on_settings_changed(app);
     }
     app.settings.save();
     render(app, true, status);
@@ -710,6 +779,9 @@ mod tests {
         assert_eq!((s.https_only, s.strip_params, s.gpc), (true, true, true));
         assert_eq!(s.download_dir, "");
         assert_eq!(s.tracking, Tracking::Balanced);
+        // Clearing at quit is off, with every kind chosen for when it is on.
+        assert!(!s.exit_clear);
+        assert_eq!((s.exit_clear_history, s.exit_clear_cookies, s.exit_clear_cache), (true, true, true));
         assert_eq!(read("{}"), s);
         assert_eq!(read(r#"{"v":1}"#), s);
     }
@@ -717,10 +789,12 @@ mod tests {
     #[test]
     fn reads_what_was_saved() {
         let s = read(
-            r#"{"v":1,"engine":"bing","startup":"blank","autofill":false,"download_dir":"C:\\Users\\x\\Downloads","tracking":"strict","https_only":false,"strip_params":false,"gpc":false}"#,
+            r#"{"v":1,"engine":"bing","startup":"blank","autofill":false,"download_dir":"C:\\Users\\x\\Downloads","tracking":"strict","https_only":false,"strip_params":false,"gpc":false,"exit_clear":true,"exit_clear_history":false,"exit_clear_cookies":true,"exit_clear_cache":false}"#,
         );
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::Bing, Startup::Blank, false));
         assert_eq!((s.https_only, s.strip_params, s.gpc), (false, false, false));
+        assert!(s.exit_clear);
+        assert_eq!((s.exit_clear_history, s.exit_clear_cookies, s.exit_clear_cache), (false, true, false));
         assert_eq!(s.tracking, Tracking::Strict);
         assert_eq!(s.download_dir, "C:\\Users\\x\\Downloads");
         let again: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
@@ -730,12 +804,17 @@ mod tests {
     #[test]
     fn hostile_values_cost_only_their_field() {
         let s = read(
-            r#"{"engine":"evil","startup":7,"autofill":"yes","download_dir":"..\\x","tracking":"none","https_only":0,"strip_params":null,"gpc":"off"}"#,
+            r#"{"engine":"evil","startup":7,"autofill":"yes","download_dir":"..\\x","tracking":"none","https_only":0,"strip_params":null,"gpc":"off","exit_clear":"yes","exit_clear_history":0,"exit_clear_cookies":"off","exit_clear_cache":null}"#,
         );
         assert_eq!(s, Settings::default(), "unknown or mistyped values read as the defaults");
         let s = read(r#"{"engine":"google","startup":[],"autofill":false,"download_dir":{"a":1}}"#);
         assert_eq!((s.engine, s.startup, s.autofill), (Engine::Google, Startup::Last, false));
         assert_eq!(s.download_dir, "");
+        // A file from before the setting reads as off.
+        let s = read(r#"{"v":1,"engine":"bing","gpc":false}"#);
+        assert!(!s.exit_clear);
+        let s = read(r#"{"exit_clear":1}"#);
+        assert!(!s.exit_clear, "only a boolean turns clearing on");
     }
 
     #[test]
@@ -788,6 +867,10 @@ mod tests {
         assert_eq!(p("st-https", Some("0")), Some(SettingsCmd::HttpsOnly(false)));
         assert_eq!(p("st-strip", Some("1")), Some(SettingsCmd::StripParams(true)));
         assert_eq!(p("st-gpc", Some("0")), Some(SettingsCmd::Gpc(false)));
+        assert_eq!(p("st-exitclear", Some("1")), Some(SettingsCmd::ExitClear(true)));
+        assert_eq!(p("st-exithistory", Some("0")), Some(SettingsCmd::ExitHistory(false)));
+        assert_eq!(p("st-exitcookies", Some("1")), Some(SettingsCmd::ExitCookies(true)));
+        assert_eq!(p("st-exitcache", Some("0")), Some(SettingsCmd::ExitCache(false)));
         for (n, a) in [
             ("st-engine", None),
             ("st-engine", Some("")),
@@ -802,6 +885,11 @@ mod tests {
             ("st-https", Some("true")),
             ("st-strip", Some("")),
             ("st-gpc", Some("on")),
+            ("st-exitclear", None),
+            ("st-exitclear", Some("true")),
+            ("st-exithistory", Some("")),
+            ("st-exitcookies", Some("2")),
+            ("st-exitcache", Some("01")),
             ("st-theme", Some("dark")),
         ] {
             assert_eq!(p(n, a), None, "{n} {a:?}");

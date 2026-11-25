@@ -154,6 +154,14 @@
         <button id="s-yes" type="button" class="h-7 rounded-md border border-danger px-3 text-danger hover:bg-hover">Sil</button>
         <button id="s-no" type="button" class="h-7 rounded-md border border-line px-3 hover:bg-hover">Vazgeç</button>
       </div>
+      <label class="flex items-center gap-2"><input id="s-exit" type="checkbox" aria-describedby="s-exit-hint" class="accent-accent">Kapanışta tarama verilerini temizle</label>
+      <fieldset id="s-exit-kinds" class="flex flex-col gap-2 pl-6" hidden>
+        <legend class="sr-only">Kapanışta temizlenecekler</legend>
+        <label class="flex items-center gap-2"><input id="s-exit-history" type="checkbox" class="accent-accent">Geçmiş ve açık sekmeler</label>
+        <label class="flex items-center gap-2"><input id="s-exit-cookies" type="checkbox" class="accent-accent">Çerezler ve site verileri (oturumlarınız kapanır)</label>
+        <label class="flex items-center gap-2"><input id="s-exit-cache" type="checkbox" class="accent-accent">Önbellek</label>
+      </fieldset>
+      <p id="s-exit-hint" class="leading-snug text-muted">Uzantılar ve verileri, yer imleri, ayarlar ve indirme listesi kalır. Geçmiş seçiliyse açılışta son oturum açılmaz. Tarayıcı düzgün kapanmazsa bir sonraki açılışta temizlenir.</p>
     </div>
   </div>
   <footer class="border-t border-line px-4 py-2">

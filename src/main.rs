@@ -8,6 +8,7 @@ mod crx;
 mod cws;
 mod downloads;
 mod error_page;
+mod exit_clear;
 mod ext_ui;
 mod extensions;
 mod firstrun;
@@ -165,10 +166,14 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
     session::track_window(&mut app);
     timing::mark("ui-webview-created");
 
+    // What clearing at quit left undone (a crash, say), before any page
+    // loads; with history cleared the last session's tabs go with it.
+    let forget_tabs = exit_clear::at_start(&mut app);
+
     // The last session's tabs (only the active one loads now), then the
     // address given on the command line in a new tab; else one blank tab
     // (or the home page, as the settings ask).
-    let restored = session::restore(&mut app, &saved_tabs);
+    let restored = if forget_tabs { None } else { session::restore(&mut app, &saved_tabs) };
     match arg.and_then(instance::url_from_arg) {
         Some(start) => {
             app.open_tab(&start, Placement::End, true)?;
@@ -229,6 +234,7 @@ fn run(dir: Option<&Path>, arg: Option<&str>) -> wry::Result<()> {
         if app.quit {
             // Last save, while every tab is still there.
             session::save_at_exit(&mut app);
+            exit_clear::at_exit(&mut app);
             if !app.history.flush_now(std::time::Duration::from_secs(2)) {
                 eprintln!("taser: history not fully written at exit");
             }

@@ -44,7 +44,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 698;
+const EXPECTED_CHECKS: u32 = 719;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -58,7 +58,7 @@ pub fn prepare_profile(profile: Option<&std::path::Path>) {
         return;
     }
     let Some(profile) = profile else { return };
-    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json", "settings.json", "extensions.json"] {
+    for name in ["session.json", "window.json", "history.jsonl", "bookmarks.json", "settings.json", "extensions.json", "exit-clear.json"] {
         for suffix in ["", ".bak", ".tmp", ".bak.tmp", ".corrupt", ".bak.corrupt"] {
             let _ = std::fs::remove_file(profile.join(format!("{name}{suffix}")));
         }
@@ -429,7 +429,16 @@ const DELAYS: &[u64] = &[
     2000, // 340 check it is gone; delete the site's data
     1500, // 341 check it was deleted; close the panel; reload the page
     900,  // 342 check the page's data is gone
-    900,  // 343 close the new tab page's tab; last tab close quits
+    1500, // 343 clear at quit: store data on the loopback page; open the settings
+    900,  // 344 check the switch is off; turn it on
+    900,  // 345 check it and the marker; leave the cache out
+    900,  // 346 check the marker follows; the cache back in
+    900,  // 347 check it; clear as a quit does; reload the page
+    1500, // 348 check the page's data is gone; store it again
+    900,  // 349 check it is stored; start as after a crash
+    1500, // 350 check the start cleared it; reload the page
+    1500, // 351 check the page's data is gone
+    900,  // 352 close the new tab page's tab; last tab close quits
 ];
 
 /// What a new tab page shows: `main` (it is there), `ph` (the search box's
@@ -442,6 +451,27 @@ const NEWTAB_JS: &str = "(() => { const q = document.getElementById('xb-q'); \
     + ';ex=' + hrefs.some((h) => /^https:\\/\\/example\\.(com|org)\\//.test(h)); })()";
 
 /// The settings page's status line and home box.
+/// The settings page's clear-at-quit controls: `on` (the switch), `kinds`
+/// (their group shown) and `h`/`k`/`c` (history, cookies, cache ticked).
+const EXIT_CLEAR_JS: &str = "(() => { const g = (id) => document.getElementById(id); \
+    return `on=${g('s-exit').checked};kinds=${!g('s-exit-kinds').hidden};h=${g('s-exit-history').checked};\
+    k=${g('s-exit-cookies').checked};c=${g('s-exit-cache').checked}`; })()";
+
+/// Site data for the clear-at-quit steps to remove.
+const EXIT_DATA_SET_JS: &str = "localStorage.setItem('xbexit', '1'); document.cookie = 'xbexit=1; max-age=3600; path=/';";
+const EXIT_DATA_JS: &str = "`ls=${localStorage.getItem('xbexit')};ck=${document.cookie.includes('xbexit=1')}`";
+
+/// What `exit-clear.json` says is owed after a crash, as `h,k,c` (history,
+/// cookies, cache), once the writes are on disk.
+fn exit_marker(app: &App) -> String {
+    crate::store::flush(Duration::from_secs(2));
+    let Some(path) = app.settings.exit_marker.path() else { return "no marker".into() };
+    let Ok(text) = std::fs::read_to_string(path) else { return "unreadable".into() };
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    let b = |k: &str| if v[k] == true { "1" } else { "0" };
+    format!("{},{},{}", b("history"), b("cookies"), b("cache"))
+}
+
 const HOME_STATUS_JS: &str =
     "'s=' + document.getElementById('s-status').textContent + ';v=' + document.getElementById('s-home').value";
 
@@ -5878,7 +5908,101 @@ pub fn step(app: &mut App, n: u32) {
                 check("site-data-gone-after-reload", field(&r, "ls") == "null" && field(&r, "ck") == "false", &r);
             });
         }
+        // ---- Clearing browsing data at quit (src/exit_clear.rs) ----
         343 => {
+            check("history-has-pages-to-clear", app.history.pages() > 0, app.history.pages());
+            page_js(app, EXIT_DATA_SET_JS);
+            crate::settings::open(app);
+        }
+        344 => {
+            check("exit-clear-is-off-by-default", !app.settings.value.exit_clear && exit_marker(app) == "0,0,0", exit_marker(app));
+            overlay_eval(app, "exit-clear-switch-drawn-off", EXIT_CLEAR_JS, |r| {
+                check("exit-clear-switch-drawn-off", field(&r, "on") == "false" && field(&r, "kinds") == "false", &r);
+            });
+            overlay_js(app, "document.getElementById('s-exit').click()");
+        }
+        345 => {
+            let s = &app.settings.value;
+            check(
+                "exit-clear-switch-turns-on-with-every-kind",
+                s.exit_clear && s.exit_clear_history && s.exit_clear_cookies && s.exit_clear_cache,
+                format!("{s:?}"),
+            );
+            check("exit-clear-marker-armed", exit_marker(app) == "1,1,1", exit_marker(app));
+            overlay_eval(app, "exit-clear-kinds-drawn", EXIT_CLEAR_JS, |r| {
+                check(
+                    "exit-clear-kinds-drawn",
+                    r == "on=true;kinds=true;h=true;k=true;c=true",
+                    &r,
+                );
+            });
+            overlay_js(app, "document.getElementById('s-exit-cache').click()");
+        }
+        346 => {
+            check("exit-clear-cache-left-out", !app.settings.value.exit_clear_cache, format!("{:?}", app.settings.value));
+            check("exit-clear-marker-follows-the-kinds", exit_marker(app) == "1,1,0", exit_marker(app));
+            page_eval(app, "exit-clear-data-stored", EXIT_DATA_JS, |r| {
+                check("exit-clear-data-stored", field(&r, "ls") == "1" && field(&r, "ck") == "true", &r);
+            });
+            overlay_js(app, "document.getElementById('s-exit-cache').click()");
+        }
+        347 => {
+            check("exit-clear-cache-back-in", app.settings.value.exit_clear_cache, format!("{:?}", app.settings.value));
+            crate::overlay::close(app);
+            // What a quit does once the window is hidden (`exit_clear::at_exit`).
+            let want = crate::exit_clear::wanted(&app.settings.value);
+            let failed = crate::exit_clear::clear_for_quit(app, want);
+            check("exit-clear-finishes-in-time", !failed.any(), format!("{failed:?}"));
+            check(
+                "exit-clear-empties-history",
+                app.history.pages() == 0 && app.closed.len() == 0,
+                format!("{} pages, {} closed", app.history.pages(), app.closed.len()),
+            );
+            check("exit-clear-marker-disarmed", exit_marker(app) == "0,0,0", exit_marker(app));
+            check("exit-clear-forgets-the-tabs", crate::exit_clear::forgets_tabs(&app.settings.value), "history not chosen");
+            let url = active_url(app);
+            app.handle(UserEvent::Ui(UiCommand::Navigate(url)));
+        }
+        348 => {
+            page_eval(app, "exit-clear-site-data-gone", EXIT_DATA_JS, |r| {
+                check("exit-clear-site-data-gone", field(&r, "ls") == "null" && field(&r, "ck") == "false", &r);
+            });
+            page_js(app, EXIT_DATA_SET_JS);
+            // The next save arms the marker again, as a run with the switch on does.
+            crate::exit_clear::on_settings_changed(app);
+        }
+        349 => {
+            page_eval(app, "exit-clear-data-stored-again", EXIT_DATA_JS, |r| {
+                check("exit-clear-data-stored-again", field(&r, "ls") == "1" && field(&r, "ck") == "true", &r);
+            });
+            check("exit-clear-marker-armed-again", exit_marker(app) == "1,1,1", exit_marker(app));
+        }
+        350 => {
+            // A start after a crash: the marker read from disk decides what is
+            // owed, even with the switch turned off since.
+            let Some(dir) = app.settings.exit_marker.path().and_then(|p| p.parent()).map(PathBuf::from) else {
+                check("exit-clear-marker-has-a-folder", false, "no marker path");
+                return;
+            };
+            app.settings.exit_marker = crate::exit_clear::Marker::open(Some(dir.as_path()));
+            app.settings.value.exit_clear = false;
+            let forget = crate::exit_clear::at_start(app);
+            check("exit-clear-start-forgets-the-tabs", forget, "the last session would come back");
+            check("exit-clear-start-empties-history", app.history.pages() == 0, app.history.pages());
+            check("exit-clear-start-rearms-as-the-switch-says", exit_marker(app) == "0,0,0", exit_marker(app));
+            app.settings.value.exit_clear = true;
+            crate::exit_clear::on_settings_changed(app);
+            let url = active_url(app);
+            app.handle(UserEvent::Ui(UiCommand::Navigate(url)));
+        }
+        351 => {
+            page_eval(app, "exit-clear-start-clears-site-data", EXIT_DATA_JS, |r| {
+                check("exit-clear-start-clears-site-data", field(&r, "ls") == "null" && field(&r, "ck") == "false", &r);
+            });
+            // The switch stays on: the quit below clears through a hidden
+            // webview, as there is no tab left by then.
+        }
+        352 => {
             crate::overlay::close(app);
             // The new tab page's tab (the privacy steps ran in it), then the last one.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));

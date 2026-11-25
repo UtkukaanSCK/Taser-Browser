@@ -274,7 +274,9 @@ pub fn save(app: &mut App) {
     if !app.tabs.is_empty()
         && let Some(s) = &mut app.persist.session
     {
-        s.save(&Session::capture(&app.tabs));
+        // Clearing history at quit forgets the open tabs too (`exit_clear`).
+        let forget = crate::exit_clear::forgets_tabs(&app.settings.value);
+        s.save(&if forget { Session::default() } else { Session::capture(&app.tabs) });
     }
     if placement.is_set()
         && let Some(w) = &mut app.persist.window

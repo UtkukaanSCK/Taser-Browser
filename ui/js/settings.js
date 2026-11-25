@@ -15,6 +15,12 @@
   const switches = [["s-https", "st-https", "https_only"], ["s-strip", "st-strip", "strip_params"], ["s-gpc", "st-gpc", "gpc"]].map(
     ([id, cmd, key]) => ({ el: $(id), cmd, key }),
   );
+  // Clearing at quit: off unless told on; its kinds show only while it is on.
+  const exitClear = $("s-exit");
+  const exitKinds = $("s-exit-kinds");
+  const kinds = [["s-exit-history", "st-exithistory", "exit_history"], ["s-exit-cookies", "st-exitcookies", "exit_cookies"], ["s-exit-cache", "st-exitcache", "exit_cache"]].map(
+    ([id, cmd, key]) => ({ el: $(id), cmd, key }),
+  );
   const folder = $("s-folder");
   const hint = $("s-folder-hint");
   const home = $("s-home");
@@ -49,6 +55,9 @@
     for (const r of trackings) r.checked = r.value === d.tracking;
     autofill.checked = d.autofill !== false;
     for (const s of switches) s.el.checked = d[s.key] !== false;
+    exitClear.checked = d.exit_clear === true;
+    exitKinds.hidden = !exitClear.checked;
+    for (const k of kinds) k.el.checked = d[k.key] !== false;
     const code = str(d.status);
     // What is being typed in the folder box stays, unless the change was its own.
     if (!keep || (code.startsWith("folder") && code !== "folder-bad") || document.activeElement !== folder) folder.value = str(d.folder);
@@ -74,6 +83,8 @@
   for (const r of trackings) r.addEventListener("change", () => r.checked && send("st-tracking:" + r.value));
   autofill.addEventListener("change", () => send("st-autofill:" + (autofill.checked ? "1" : "0")));
   for (const s of switches) s.el.addEventListener("change", () => send(s.cmd + ":" + (s.el.checked ? "1" : "0")));
+  exitClear.addEventListener("change", () => send("st-exitclear:" + (exitClear.checked ? "1" : "0")));
+  for (const k of kinds) k.el.addEventListener("change", () => send(k.cmd + ":" + (k.el.checked ? "1" : "0")));
   const applyFolder = () => send("st-folder:" + folder.value.trim());
   $("s-folder-apply").addEventListener("click", applyFolder);
   $("s-folder-reset").addEventListener("click", () => send("st-folder:"));
