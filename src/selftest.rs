@@ -1145,7 +1145,7 @@ pub fn step(app: &mut App, n: u32) {
                 );
                 check("drag-region-present", ["tabs", "tabbar", "strip"].contains(&field(&r, "drag_el")), &r);
                 check("ui-prefers-color-scheme-matches-system", field(&r, "dark") == dark.to_string(), format!("{r} system dark={dark}"));
-                let want_bg = if dark { "rgb(14, 24, 48)" } else { "rgb(205, 220, 246)" };
+                let want_bg = if dark { "rgb(20, 22, 25)" } else { "rgb(223, 226, 230)" };
                 check("ui-palette-matches-theme", field(&r, "bg") == want_bg, format!("{r} want {want_bg}"));
             });
             type_in_address(app, "example.com");
