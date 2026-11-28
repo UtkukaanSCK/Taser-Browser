@@ -106,10 +106,10 @@ const MAX_SHOWN_URL: usize = 1000;
 
 /// The page's look: the colors and type of `ui/input.css`, light and dark,
 /// on the toolbar's color like the new tab page.
-const CSS: &str = ":root { color-scheme: light dark; --page: #f3f7fe; --field: #e3ebf9; --ink: #121c33; \
-  --muted: #4b5b7c; --line: #c3d1ea; --hover: rgb(29 64 160 / 0.07); --accent: oklch(0.57 0.19 258); } \
-  @media (prefers-color-scheme: dark) { :root { --page: #18264a; --field: #101b38; --ink: #e9effc; \
-  --muted: #9fb1d6; --line: #2b3d6b; --hover: rgb(160 190 255 / 0.10); } } \
+const CSS: &str = ":root { color-scheme: light dark; --page: #f6f7f8; --field: #e9ebee; --ink: #1b1f24; \
+  --muted: #575f69; --edge: #868d97; --hover: rgb(24 32 44 / 0.07); --accent: #3d4a5c; --on-accent: #ffffff; } \
+  @media (prefers-color-scheme: dark) { :root { --page: #212428; --field: #191b1f; --ink: #e8eaed; \
+  --muted: #a4abb4; --edge: #7c838d; --hover: rgb(255 255 255 / 0.08); --accent: #a7b6c8; --on-accent: #16191d; } } \
   html, body { height: 100%; margin: 0; } \
   body { background: var(--page); color: var(--ink); display: flex; justify-content: center; \
   font: 14px/1.5 \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } \
@@ -118,12 +118,12 @@ const CSS: &str = ":root { color-scheme: light dark; --page: #f3f7fe; --field: #
   p { margin: 0 0 18px; color: var(--muted); } \
   #xb-error-url { color: var(--ink); overflow-wrap: anywhere; padding: 8px 12px; background: var(--field); \
   border-radius: 8px; user-select: text; } \
-  button { font: inherit; font-weight: 500; color: #fff; background: var(--accent); border: 0; border-radius: 8px; \
+  button { font: inherit; font-weight: 500; color: var(--on-accent); background: var(--accent); border: 0; border-radius: 8px; \
   height: 32px; padding: 0 16px; cursor: pointer; } \
   button:hover { filter: brightness(1.08); } \
   button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } \
   .xb-buttons { display: flex; flex-wrap: wrap; gap: 8px; } \
-  button.xb-alt { color: var(--ink); background: transparent; border: 1px solid var(--line); } \
+  button.xb-alt { color: var(--ink); background: transparent; border: 1px solid var(--edge); } \
   button.xb-alt:hover { filter: none; background: var(--hover); }";
 
 /// The script that turns the empty error document into this page, or

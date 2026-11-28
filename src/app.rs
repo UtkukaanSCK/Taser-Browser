@@ -180,8 +180,8 @@ pub struct App {
 /// Palette background, so nothing flashes white in dark mode before first paint.
 pub fn background(theme: Theme) -> (u8, u8, u8, u8) {
     match theme {
-        Theme::Dark => (0x0e, 0x18, 0x30, 0xff),
-        _ => (0xcd, 0xdc, 0xf6, 0xff),
+        Theme::Dark => (0x14, 0x16, 0x19, 0xff),
+        _ => (0xdf, 0xe2, 0xe6, 0xff),
     }
 }
 

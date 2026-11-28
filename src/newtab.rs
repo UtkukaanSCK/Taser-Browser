@@ -60,10 +60,10 @@ impl Tile {
 /// The page has the toolbar's color, so the active tab, the toolbar and the
 /// page above the fold read as one surface; the search box is a field set
 /// into it, like the address field.
-const CSS: &str = ":root { color-scheme: light dark; --page: #f3f7fe; --field: #e3ebf9; --surface: #ffffff; \
-  --ink: #121c33; --muted: #4b5b7c; --line: #c3d1ea; --hover: rgb(29 64 160 / 0.07); --accent: oklch(0.57 0.19 258); } \
-  @media (prefers-color-scheme: dark) { :root { --page: #18264a; --field: #101b38; --surface: #1d2d55; \
-  --ink: #e9effc; --muted: #9fb1d6; --line: #2b3d6b; --hover: rgb(160 190 255 / 0.10); } } \
+const CSS: &str = ":root { color-scheme: light dark; --page: #f6f7f8; --field: #e9ebee; --surface: #ffffff; \
+  --ink: #1b1f24; --muted: #575f69; --line: #d6d9de; --hover: rgb(24 32 44 / 0.07); --accent: #3d4a5c; } \
+  @media (prefers-color-scheme: dark) { :root { --page: #212428; --field: #191b1f; --surface: #2a2d32; \
+  --ink: #e8eaed; --muted: #a4abb4; --line: #3a3e45; --hover: rgb(255 255 255 / 0.08); --accent: #a7b6c8; } } \
   html, body { margin: 0; min-height: 100%; } \
   body { background: var(--page); color: var(--ink); \
   font: 14px/1.5 \"Segoe UI Variable Text\", \"Segoe UI\", system-ui, sans-serif; } \

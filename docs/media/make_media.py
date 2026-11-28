@@ -21,17 +21,17 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 ICON = "#2F62E9"
 THEMES = {
     "light": {
-        "bg0": "#f7faff", "bg1": "#dfe9fb", "ink": "#121c33", "muted": "#4b5b7c",
-        "faint": "#8a9abb", "line": "#c3d1ea", "strip": "#cddcf6", "surface": "#f3f7fe",
-        "hover": "#d9e3f6", "accent": "#2f6fe0", "accent2": "#7aa7ff", "glow": "#2f6fe0",
-        "glow_op": "0.10", "dot": "#c9d7f0", "chip": "#eef2fb", "chip_ink": "#1e3a8a",
+        "bg0": "#fbfbfc", "bg1": "#e6e8eb", "ink": "#1b1f24", "muted": "#575f69",
+        "faint": "#959ba4", "line": "#d6d9de", "strip": "#dfe2e6", "surface": "#f6f7f8",
+        "hover": "#e1e4e8", "accent": "#3d4a5c", "accent2": "#8794a6", "glow": "#3d4a5c",
+        "glow_op": "0.10", "dot": "#d3d7dc", "chip": "#eef0f2", "chip_ink": "#2c3644",
         "ok": "#15803d", "shadow": "0.10",
     },
     "dark": {
-        "bg0": "#0a1226", "bg1": "#122046", "ink": "#e9effc", "muted": "#9fb1d6",
-        "faint": "#6a7ca4", "line": "#2b3d6b", "strip": "#0e1830", "surface": "#18264a",
-        "hover": "#22335e", "accent": "#5b8cff", "accent2": "#9db8ff", "glow": "#3b6cff",
-        "glow_op": "0.22", "dot": "#1a2a52", "chip": "#1b2340", "chip_ink": "#c7d6ff",
+        "bg0": "#0f1113", "bg1": "#1a1d21", "ink": "#e8eaed", "muted": "#a4abb4",
+        "faint": "#6f7680", "line": "#3a3e45", "strip": "#141619", "surface": "#212428",
+        "hover": "#2c3035", "accent": "#a7b6c8", "accent2": "#cdd6e1", "glow": "#a7b6c8",
+        "glow_op": "0.18", "dot": "#262a2f", "chip": "#1f2326", "chip_ink": "#d5dde7",
         "ok": "#4ade80", "shadow": "0.45",
     },
 }

@@ -16,41 +16,60 @@
 
 @theme {
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  /* Taser is blue: one vivid accent, and every surface tinted from the
-     same hue (258) so the frame reads blue without competing with pages. */
-  --color-accent: oklch(0.57 0.19 258);
+  /* Graphite: plain grey surfaces with a faint cool bias, and a slate-grey
+     accent, so the frame stays quiet next to any page. Every pair below
+     that carries text meets WCAG AA (4.5:1); edges, the accent as a focus
+     ring and the danger mark meet 3:1, in both themes. */
+  --color-accent: #3d4a5c;
   /* The accent used as text or a glyph. Same as the accent in light mode;
      lighter in dark mode, where the fill shade is too dim to read as text. */
-  --color-accent-text: oklch(0.57 0.19 258);
+  --color-accent-text: #3d4a5c;
+  /* Text and glyphs drawn on an accent or danger fill. */
+  --color-on-accent: #ffffff;
   /* Neutral surfaces (light). Dark values are swapped in below. Three
      steps of depth: the frame behind the tabs (also the window's own
      background, app.rs background()), the toolbar and the active tab on it,
      and the address field set into the toolbar. Surface is for panels and
      the focused field. Hover is see-through, so one value works on all. */
-  --color-frame: #cddcf6;
-  --color-toolbar: #f3f7fe;
-  --color-field: #e3ebf9;
-  --color-field-hover: #d9e3f6;
+  --color-frame: #dfe2e6;
+  --color-toolbar: #f6f7f8;
+  --color-field: #e9ebee;
+  --color-field-hover: #e1e4e8;
   --color-surface: #ffffff;
-  --color-hover: rgb(29 64 160 / 0.085);
-  --color-line: #c3d1ea;
-  --color-ink: #121c33;
-  --color-muted: #4b5b7c;
+  --color-hover: rgb(24 32 44 / 0.07);
+  /* Line divides; edge outlines a control (the rule at the end of this
+     file), strong enough to find the control by. */
+  --color-line: #d6d9de;
+  --color-edge: #868d97;
+  --color-ink: #1b1f24;
+  --color-muted: #575f69;
   --color-danger: #c42b1c;
+  --color-on-danger: #ffffff;
+  /* The fullscreen notice: a dark band over the page in either theme. */
+  --color-notice: #1b1f24;
+  --color-on-notice: #ffffff;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-frame: #0e1830;
-    --color-toolbar: #18264a;
-    --color-field: #101b38;
-    --color-field-hover: #0c1630;
-    --color-surface: #1d2d55;
-    --color-hover: rgb(160 190 255 / 0.11);
-    --color-line: #2b3d6b;
-    --color-ink: #e9effc;
-    --color-muted: #9fb1d6;
-    --color-accent-text: oklch(0.76 0.12 258);
+    --color-frame: #141619;
+    --color-toolbar: #212428;
+    --color-field: #191b1f;
+    --color-field-hover: #15171a;
+    --color-surface: #2a2d32;
+    --color-hover: rgb(255 255 255 / 0.08);
+    --color-line: #3a3e45;
+    --color-edge: #7c838d;
+    --color-ink: #e8eaed;
+    --color-muted: #a4abb4;
+    /* On dark surfaces the accent and danger fills are light, so what is
+       drawn on them turns dark. */
+    --color-accent: #a7b6c8;
+    --color-accent-text: #b9c5d3;
+    --color-on-accent: #16191d;
+    --color-danger: #ff7b72;
+    --color-on-danger: #1f0d0b;
+    --color-notice: #141619;
   }
 }
 
@@ -97,7 +116,7 @@
     @apply ml-auto font-sans text-[12px] text-muted;
   }
   .zbtn {
-    @apply flex h-7 min-w-7 items-center justify-center rounded-md border border-line px-1.5 outline-none hover:bg-hover focus:border-accent;
+    @apply flex h-7 min-w-7 items-center justify-center rounded-md border border-edge px-1.5 outline-none hover:bg-hover focus:border-accent;
   }
   /* Tab list scroll arrows, shown only while the tabs overflow. */
   .arrow {
@@ -232,5 +251,21 @@
     .tab[aria-selected="true"] .fav {
       display: none !important;
     }
+  }
+}
+
+/* A control's outline is the edge colour, not the softer divider line: one
+   rule here, so every bordered button, field and focusable box (in the
+   pages and in what JS builds) gets it. :where() keeps it at the weight of
+   .border-line, so focus:border-accent and the like still win. */
+@layer utilities {
+  :where(button, input, [tabindex="0"], [role="radiogroup"]).border-line {
+    border-color: var(--color-edge);
+  }
+  /* The accent is grey, so a field whose focus shows as an accent border
+     differs from the edge in lightness only. An inner 1px shadow doubles
+     that border, so the focused field stays easy to spot. */
+  :where(.focus\:border-accent:focus, .focus-visible\:border-accent:focus-visible, .zbtn:focus) {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
   }
 }

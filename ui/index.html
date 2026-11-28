@@ -50,7 +50,7 @@
         <svg class="group-data-[max]:hidden" viewBox="0 0 16 16"><path d="M3.5 3.5h9v9h-9z"/></svg>
         <svg class="hidden group-data-[max]:block" viewBox="0 0 16 16"><path d="M3.5 5.5h7v7h-7zM5.5 5.5v-2h7v7h-2"/></svg>
       </button>
-      <button id="close" class="win hover:bg-danger hover:text-white" title="Kapat" aria-label="Kapat">
+      <button id="close" class="win hover:bg-danger hover:text-on-danger" title="Kapat" aria-label="Kapat">
         <svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8"/></svg>
       </button>
     </div>
@@ -106,7 +106,7 @@
       <!-- On a Chrome Web Store detail page (webstore.js): add its extension,
            or remove it if Taser has it. Rust asks before either. -->
       <button id="ext-store" type="button" hidden
-              class="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-accent px-2 text-[11px] font-medium text-white hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent aria-busy:opacity-60">
+              class="ml-1 flex h-6 shrink-0 items-center gap-1 rounded-md bg-accent px-2 text-[11px] font-medium text-on-accent hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent aria-busy:opacity-60">
         <svg aria-hidden="true" class="size-3 shrink-0" viewBox="0 0 16 16"><path d="M6 2.5h3V4a1 1 0 0 0 2 0V2.5h2.5V6H12a1 1 0 0 0 0 2h1.5v5.5H10V12a1 1 0 0 0-2 0v1.5H2.5V10H4a1 1 0 0 0 0-2H2.5V4.5H6z"/></svg>
         <span id="ext-store-text"></span>
       </button>
@@ -140,7 +140,7 @@
      only this band over the top of the page, and the strip under it is inert.
      The site name comes from the host, set through textContent only. -->
 <div id="fs-notice" hidden role="status"
-     class="fixed inset-0 z-50 flex items-center justify-center overflow-hidden whitespace-nowrap bg-[#0e1830] px-4 text-[13px] text-white">
+     class="fixed inset-0 z-50 flex items-center justify-center overflow-hidden whitespace-nowrap bg-notice px-4 text-[13px] text-on-notice">
   <span id="fs-notice-site" dir="ltr" class="font-semibold"></span><span id="fs-notice-text"></span>
 </div>
 
