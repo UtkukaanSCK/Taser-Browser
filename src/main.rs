@@ -3,6 +3,7 @@
 
 mod app;
 mod bookmarks;
+mod bookmarks_html;
 mod commands;
 mod crx;
 mod cws;

@@ -63,6 +63,15 @@
   <ul id="bm-rows" aria-label="Yer imleri" class="min-h-0 flex-1 overflow-y-auto py-1"></ul>
   <p id="bm-empty" class="flex-1 px-3 py-6 text-center text-muted" hidden>Yer imi yok</p>
   <p id="bm-more" class="border-t border-line px-3 py-1.5 text-muted" hidden></p>
+  <!-- Import / export (Netscape bookmark HTML, bookmarks_html.rs). The file
+       dialogs are Rust's; the note is a code and counts from Rust. -->
+  <footer class="flex items-center gap-2 border-t border-line px-3 py-2">
+    <p id="bm-note" role="status" class="min-w-0 flex-1 truncate text-muted"></p>
+    <button id="bm-import" type="button" class="h-7 shrink-0 rounded-md border border-line px-3 hover:bg-hover"
+      title="Chrome, Edge ya da Firefox'tan dışa aktarılmış bir HTML dosyasındaki yer imlerini ekle">İçe aktar…</button>
+    <button id="bm-export" type="button" class="h-7 shrink-0 rounded-md border border-line px-3 hover:bg-hover"
+      title="Yer imlerini başka tarayıcıların içe aktarabileceği bir HTML dosyasına kaydet">Dışa aktar…</button>
+  </footer>
 </section>
 
 <!-- Main menu (menu.js, src/menu.rs). Sized in menu.rs (264 x 324): 32px rows,
