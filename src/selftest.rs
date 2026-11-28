@@ -791,7 +791,13 @@ fn bm_transfer_guards(app: &mut App) {
         crate::bookmarks_html::Transfer::Read(forged),
     ))));
     check("bm-transfer-ignores-stray-results", !app.bookmarks.contains("https://xb-import-forged.example/"), "added");
-    // With the list closed the buttons' commands start nothing.
+    // With the list closed the buttons' commands start nothing. The page
+    // takes the focus first, as a click on it would: hiding the focused
+    // overlay leaves its blur pending until the next page shows in it, and
+    // that blur would close the settings page the next step opens.
+    if let Some(v) = app.active_view() {
+        let _ = v.focus();
+    }
     crate::overlay::close(app);
     app.bookmarks.test_pick = Some(dir().join("bm-import.html"));
     app.handle(UserEvent::Ui(UiCommand::Bookmark(crate::bookmarks::BookmarkCmd::Import)));
