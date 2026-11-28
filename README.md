@@ -331,6 +331,25 @@ storage, service workers…), its disk cache and its own browsing history.
 Saved passwords, autofill and the download list are kept. Both also forget
 the recently closed tabs (Ctrl+Shift+T), and both ask for confirmation first.
 
+## Bookmark import and export
+
+The bookmark list (Ctrl+Shift+O) has "İçe aktar…" and "Dışa aktar…" at its
+foot. Both use the system's Open and Save dialogs, shown by Rust on a thread
+of its own, so no path or file content ever reaches the UI page: only a short
+result code and counts come back, shown under the list ("3 yer imi eklendi,
+1 atlandı.").
+
+- **Export** writes every bookmark as one flat list in the Netscape bookmark
+  HTML format that Chrome, Edge and Firefox import. Titles and addresses are
+  HTML-escaped; the file is written atomically (tmp → rename).
+- **Import** reads such a file (Chrome, Edge and Firefox exports included) as
+  untrusted input (`src/bookmarks_html.rs`): at most 8 MiB, 50,000 links and
+  32 folder levels are read, folders are flattened, only `http`/`https`
+  addresses are kept (user name and password removed), titles are trimmed
+  and cut to the same length as the editor's. Addresses already bookmarked,
+  repeats within the file and links past the 10,000-bookmark limit are
+  skipped and counted. Bytes that are not UTF-8 are read as `�`.
+
 ## Data files
 
 All in `%LOCALAPPDATA%\Taser`, next to the WebView2 profile
@@ -658,9 +677,11 @@ light and dark) are drawn the same way by `docs/media/make_media.py`.
 | `src/native/error_page.rs` | writes Taser's error page into a tab whose load failed |
 | `src/native/privacy.rs` | Global Privacy Control in a tab: the `Sec-GPC` request hook and the `navigator` script |
 | `src/native/tools.rs` | settings- and menu-driven WebView2 calls: autofill, download folder, tracking prevention, Find, Print |
+| `src/native/dialog.rs` | the system's Open and Save file dialogs (bookmark import and export), on a thread of their own |
 | `src/history.rs` | history file: append, bounded read, compaction, ranking, delete, clear data |
 | `src/overlay.rs` | third child webview for popups (suggestions, history, bookmarks, menu, settings, site information, launch and store questions, Uzantılar); placement and closing |
-| `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list, bookmarks as a suggestion source |
+| `src/bookmarks.rs` | bookmarks file (re-checked on load, read off the UI thread), star state, Ctrl+D editor, Ctrl+Shift+O list with import and export, bookmarks as a suggestion source |
+| `src/bookmarks_html.rs` | the Netscape bookmark HTML file: a capped parser for imports, the writer for exports |
 | `src/menu.rs` | main menu (⋮, Alt+F, Alt+E): items call what their shortcuts call |
 | `src/downloads.rs` | counts downloads (strip button) and opens/closes the flyout (Ctrl+J) |
 | `src/settings.rs` | `settings.json`: engine, startup, home page, autofill, download folder (with its checks), tracking prevention, privacy switches |
@@ -686,7 +707,7 @@ light and dark) are drawn the same way by `docs/media/make_media.py`.
 | `ui/` | UI strip (HTML, vanilla JS, Tailwind source + build) |
 | `ui/overlay.html`, `ui/js/overlay.js` | overlay page: suggestion rows, history list, launch question |
 | `ui/js/suggest.js` | address-bar side of suggestions (keys, selection, restore) |
-| `ui/js/bookmarks.js` | the star (UI page), the editor and list (overlay page); keeps no state |
+| `ui/js/bookmarks.js` | the star (UI page), the editor and list with its import/export result line (overlay page); keeps no state |
 | `ui/js/menu.js`, `ui/js/settings.js` | menu and settings pages in the overlay; draw and report only |
 | `ui/js/security.js` | draws the connection indicator Rust decides; its button opens the site panel |
 | `ui/js/site.js` | the site information panel (overlay); draws and reports only |

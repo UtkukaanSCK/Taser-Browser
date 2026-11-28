@@ -13,16 +13,18 @@
 //!   the editor and the list (`xbBm.editor`, `xbBm.list`). Both are drawn by
 //!   `ui/js/bookmarks.js`, which keeps no state of its own.
 
-use crate::app::{App, UI_HEIGHT};
-use crate::commands::Mods;
+use crate::app::{App, UI_HEIGHT, UserEvent};
+use crate::bookmarks_html::{self, Transfer};
+use crate::commands::{Mods, UiCommand};
 use crate::history::{self, Candidate, SuggestSource};
+use crate::native::{self, FileDialog};
 use crate::overlay::{self, Mode, win_size};
 use crate::page_tools;
 use crate::store::{Store, Stored};
 use crate::tabs::Placement;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tao::dpi::LogicalSize;
@@ -162,6 +164,14 @@ pub struct Bookmarks {
     /// The star was pressed while the editor was open (or just closed by
     /// that press): its click closes the editor instead of opening it.
     press_closes: Option<Instant>,
+    /// An import or export is under way (its dialog is open).
+    transferring: bool,
+    /// What the last import or export did, shown under the list.
+    note: Option<Note>,
+    /// The file the next import or export uses instead of asking (the
+    /// self-test cannot work a system dialog).
+    #[cfg(feature = "selftest")]
+    pub test_pick: Option<PathBuf>,
 }
 
 impl Bookmarks {
@@ -258,6 +268,12 @@ impl Bookmarks {
         self.store.as_ref().map(Store::path)
     }
 
+    /// Whether an import or export is under way.
+    #[cfg(feature = "selftest")]
+    pub fn transferring(&self) -> bool {
+        self.transferring
+    }
+
     /// Whether `url` (as `history::without_userinfo` leaves it) is bookmarked.
     pub fn contains(&self, url: &str) -> bool {
         self.urls.contains(url)
@@ -294,6 +310,36 @@ impl Bookmarks {
         self.file.items.push(b);
         self.save();
         true
+    }
+
+    /// Adds an import's bookmarks after those already there, in their order,
+    /// each made fit to keep first (one without a date gets today's) and
+    /// saved once. (added, skipped): skipped are those not fit to keep,
+    /// already bookmarked, repeated, or over the file's limits.
+    pub fn import(&mut self, items: Vec<Bookmark>) -> (usize, usize) {
+        self.ensure_loaded();
+        let now = history::now_secs();
+        let (mut added, mut skipped) = (0, 0);
+        for b in items {
+            let added_at = if b.added == 0 { now } else { b.added };
+            let Some(b) = clean(Bookmark { added: added_at, ..b }, now) else {
+                skipped += 1;
+                continue;
+            };
+            let n = encoded_len(&b);
+            if self.urls.contains(&b.url) || self.file.items.len() >= MAX_ITEMS || self.bytes + n > BUDGET {
+                skipped += 1;
+                continue;
+            }
+            self.bytes += n;
+            self.urls.insert(b.url.clone());
+            self.file.items.push(b);
+            added += 1;
+        }
+        if added > 0 {
+            self.save();
+        }
+        (added, skipped)
     }
 
     /// Removes `url`; whether it was there.
@@ -401,11 +447,27 @@ pub enum BookmarkCmd {
     /// Row `i` of the list drawn as `serial`; `tab`: in a new tab.
     Open { serial: u32, i: usize, tab: bool },
     Delete { serial: u32, i: usize },
+    /// The list's "İçe aktar…": pick a bookmark file and add its links.
+    Import,
+    /// The list's "Dışa aktar…": pick where to write them all.
+    Export,
+    /// Internal, never parsed: the import or export thread's result.
+    Transferred(Transfer),
 }
 
 impl BookmarkCmd {
-    pub const NAMES: &[&str] =
-        &["bm-star", "bm-star-press", "bm-anchor", "bm-save", "bm-remove", "bm-filter", "bm-open", "bm-delete"];
+    pub const NAMES: &[&str] = &[
+        "bm-star",
+        "bm-star-press",
+        "bm-anchor",
+        "bm-save",
+        "bm-remove",
+        "bm-filter",
+        "bm-open",
+        "bm-delete",
+        "bm-import",
+        "bm-export",
+    ];
 
     pub fn parse(name: &str, arg: Option<&str>) -> Option<Self> {
         let edge = |a: &str| {
@@ -445,6 +507,8 @@ impl BookmarkCmd {
                 let (serial, i) = row(a)?;
                 Self::Delete { serial, i }
             }
+            ("bm-import", None) => Self::Import,
+            ("bm-export", None) => Self::Export,
             _ => return None,
         })
     }
@@ -552,6 +616,9 @@ pub fn on_command(app: &mut App, cmd: BookmarkCmd) {
                 render_list(app, true);
             }
         }
+        BookmarkCmd::Import => start_transfer(app, false),
+        BookmarkCmd::Export => start_transfer(app, true),
+        BookmarkCmd::Transferred(done) => transferred(app, done),
     }
 }
 
@@ -686,11 +753,17 @@ struct ListView<'a> {
     items: &'a [Row<'a>],
     total: usize,
     filter: &'a str,
+    note: Option<&'a Note>,
 }
 
 /// Opens the bookmarks list (Ctrl+Shift+O; the menu). One already open is
 /// drawn afresh.
 pub fn open_list(app: &mut App) {
+    show_list(app, None);
+}
+
+/// The list, with `note` under it.
+fn show_list(app: &mut App, note: Option<Note>) {
     // The list belongs to the browser frame: fullscreen gives way first.
     if app.fullscreen.on() {
         page_tools::leave_fullscreen(app);
@@ -701,6 +774,7 @@ pub fn open_list(app: &mut App) {
     }
     app.bookmarks.ensure_loaded();
     app.bookmarks.filter.clear();
+    app.bookmarks.note = note;
     render_list(app, false);
 }
 
@@ -713,11 +787,83 @@ fn render_list(app: &mut App, keep: bool) {
     b.view = View::List;
     b.editing = None;
     let rows: Vec<Row> = items.iter().map(|i| Row { u: &i.url, t: &i.title }).collect();
-    let view = ListView { serial: b.serial, items: &rows, total, filter: &b.filter };
+    let view = ListView { serial: b.serial, items: &rows, total, filter: &b.filter, note: b.note.as_ref() };
     let Ok(json) = serde_json::to_string(&view) else { return };
     let js = format!("xbBm.list({json},{keep})");
     let bounds = overlay::panel_rect(win_size(app));
     overlay::show(app, Mode::Bookmarks, js, bounds);
+}
+
+// --------------------------------------------------------- import/export
+
+/// What the last import or export did, for the line under the list: `k` is
+/// a code the page has a sentence for, `a` and `s` the counts in it.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+struct Note {
+    k: &'static str,
+    a: usize,
+    s: usize,
+}
+
+/// The list's import or export button: asks for the file on a thread of its
+/// own (the dialog is modal to the window, the event loop keeps running),
+/// which also reads or writes it there. Its result comes back as
+/// `BookmarkCmd::Transferred`. One at a time; only from the open list. No
+/// path or file content ever reaches the overlay.
+///
+/// The list is left up: the dialog taking the focus closes it (its blur),
+/// and hiding it here instead would race the result when it comes back at
+/// once (a late blur of the hidden page closes the list shown again).
+fn start_transfer(app: &mut App, export: bool) {
+    if !showing(app, View::List) || app.bookmarks.transferring {
+        return;
+    }
+    app.bookmarks.ensure_loaded();
+    let items = if export { app.bookmarks.items().to_vec() } else { Vec::new() };
+    let kind = if export { FileDialog::SaveBookmarks } else { FileDialog::OpenBookmarks };
+    let owner = native::owner_handle(&app.window);
+    #[cfg(feature = "selftest")]
+    let preset = app.bookmarks.test_pick.take();
+    #[cfg(not(feature = "selftest"))]
+    let preset: Option<PathBuf> = None;
+    let proxy = app.proxy().clone();
+    let spawned = std::thread::Builder::new().name("xb-bm-transfer".into()).spawn(move || {
+        let done = match preset.or_else(|| native::pick_file(owner, kind)) {
+            None => Transfer::Cancelled,
+            Some(path) if export => bookmarks_html::write_export(&path, &items),
+            Some(path) => bookmarks_html::read_import(&path),
+        };
+        let _ = proxy.send_event(UserEvent::Ui(UiCommand::Bookmark(BookmarkCmd::Transferred(done))));
+    });
+    match spawned {
+        Ok(_) => app.bookmarks.transferring = true,
+        Err(e) => eprintln!("taser: no bookmark transfer thread: {e}"),
+    }
+}
+
+/// An import or export is over: an import's links are added, and the list
+/// is drawn again, or comes back, with a line saying what happened (unless
+/// something else took the overlay meanwhile; the import is kept either way).
+fn transferred(app: &mut App, done: Transfer) {
+    if !std::mem::take(&mut app.bookmarks.transferring) {
+        return;
+    }
+    let note = |k, a, s| Some(Note { k, a, s });
+    let note = match done {
+        Transfer::Cancelled => None,
+        Transfer::Read(found) if found.items.is_empty() => note("none-found", 0, found.dropped),
+        Transfer::Read(found) => {
+            let (added, skipped) = app.bookmarks.import(found.items);
+            note("imported", added, skipped + found.dropped)
+        }
+        Transfer::Written(n) => note("exported", n, 0),
+        Transfer::TooBig => note("too-big", 0, 0),
+        Transfer::ReadFailed => note("read-failed", 0, 0),
+        Transfer::WriteFailed => note("write-failed", 0, 0),
+    };
+    if app.overlay.mode == Mode::Hidden || showing(app, View::List) {
+        show_list(app, note);
+    }
 }
 
 #[cfg(test)]
@@ -841,6 +987,42 @@ mod tests {
         assert!(!b.add("https://new.example/", "x"));
         assert!(b.remove("https://a.example/5"));
         assert!(b.add("https://new.example/", "x"));
+    }
+
+    #[test]
+    fn imports_new_addresses_only_and_saves_once() {
+        let dir = temp_dir("bm-import");
+        let mut b = Bookmarks::new(Some(&dir));
+        assert!(b.add("https://have.example/", "Mine"));
+        let now = history::now_secs();
+        let (added, skipped) = b.import(vec![
+            bm("https://have.example/", "Theirs", 5),
+            bm("https://new.example/", "New", 1_600_000_000),
+            bm("https://new.example/", "Again", 1_600_000_001),
+            bm("javascript:alert(1)", "x", 1),
+            bm("https://user:pw@dated.example/", "No date", 0),
+        ]);
+        assert_eq!((added, skipped), (2, 3));
+        assert_eq!(b.title_of("https://have.example/"), "Mine", "an existing bookmark stays as it is");
+        assert_eq!(b.title_of("https://new.example/"), "New", "the first of a repeat wins");
+        let dated = &b.items()[2];
+        assert_eq!(dated.url, "https://dated.example/");
+        assert!(dated.added >= now, "no date: today's");
+        assert_eq!(b.import(Vec::new()), (0, 0));
+        assert!(crate::store::flush(Duration::from_secs(5)));
+        let mut again = Bookmarks::new(Some(&dir));
+        again.ensure_loaded();
+        assert_eq!(again.items(), b.items());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_import_stops_at_the_limits() {
+        let mut b = Bookmarks { loaded: true, ..Bookmarks::default() };
+        b.set((0..MAX_ITEMS - 1).map(|i| bm(&format!("https://a.example/{i}"), "", 1)).collect());
+        let (added, skipped) = b.import((0..3).map(|i| bm(&format!("https://b.example/{i}"), "", 1)).collect());
+        assert_eq!((added, skipped), (1, 2));
+        assert_eq!(b.items().len(), MAX_ITEMS);
     }
 
     #[test]
@@ -1019,7 +1201,10 @@ mod tests {
         assert_eq!(p("bm-open:3:7:s"), bm(BookmarkCmd::Open { serial: 3, i: 7, tab: false }));
         assert_eq!(p("bm-open:3:7:t"), bm(BookmarkCmd::Open { serial: 3, i: 7, tab: true }));
         assert_eq!(p("bm-delete:3:0"), bm(BookmarkCmd::Delete { serial: 3, i: 0 }));
+        assert_eq!(p("bm-import"), bm(BookmarkCmd::Import));
+        assert_eq!(p("bm-export"), bm(BookmarkCmd::Export));
         for bad in [
+            "bm-import:C:/x.html", "bm-export:C:/x.html", "bm-import:", "bm-export:1", "bm-transferred",
             "bm-star", "bm-star:1", "bm-star:-1:2", "bm-star:1:70000", "bm-star:x:y", "bm-anchor", "bm-anchor:1:",
             "bm-remove:1", "bm-open", "bm-open:1:2", "bm-open:1:2:x", "bm-open:1:2:", "bm-open:a:2:s", "bm-open:1:-2:s",
             "bm-delete", "bm-delete:1", "bm-delete:1:-1", "bm-delete:1:2:3", "bm-list", "bm-", "bm-add:https://a.example/",

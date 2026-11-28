@@ -44,7 +44,7 @@ static PASSES: AtomicU32 = AtomicU32::new(0);
 
 /// PASS lines of a complete, passing run. Fewer means a check was skipped
 /// (e.g. a script callback that never came). Update it with the checks.
-const EXPECTED_CHECKS: u32 = 698;
+const EXPECTED_CHECKS: u32 = 709;
 
 /// The self-test's folder, the same one `store::data_dir` puts the profile in.
 fn dir() -> PathBuf {
@@ -429,7 +429,10 @@ const DELAYS: &[u64] = &[
     2000, // 340 check it is gone; delete the site's data
     1500, // 341 check it was deleted; close the panel; reload the page
     900,  // 342 check the page's data is gone
-    900,  // 343 close the new tab page's tab; last tab close quits
+    1500, // 343 bookmark import: a known bookmark, the file, the list's button
+    1500, // 344 check the import; export
+    900,  // 345 check the export and its note
+    900,  // 346 stray results and closed-list clicks do nothing; close the new tab page's tab; last tab close quits
 ];
 
 /// What a new tab page shows: `main` (it is there), `ph` (the search box's
@@ -619,6 +622,151 @@ fn page_url(app: &App) -> String {
 /// bookmarks.json as parsed from disk.
 fn bm_file(app: &App) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(app.bookmarks.path()?).ok()?).ok()
+}
+
+// ------------------------------------------- bookmark import and export
+
+/// Already bookmarked before the import: the file's copy is skipped.
+const BM_HAVE: &str = "https://xb-import-have.example/";
+const BM_IMP_A: &str = "https://xb-import-a.example/";
+/// As the file has it, `&amp;` decoded.
+const BM_IMP_B: &str = "https://xb-import-b.example/p?q=1&r=2";
+/// The title of B, decoded: markup in it must stay text in an export.
+const BM_IMP_B_TITLE: &str = "Beta \"q\" 'a' </A><script>";
+
+/// A Chrome-style export: nested folders, a link already bookmarked, a
+/// repeat, three addresses that are not web pages.
+const BM_IMPORT_FILE: &str = "<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
+<DL><p>
+    <DT><H3 ADD_DATE=\"1700000000\" PERSONAL_TOOLBAR_FOLDER=\"true\">Yer imleri çubuğu</H3>
+    <DL><p>
+        <DT><A HREF=\"https://xb-import-a.example/\" ADD_DATE=\"1700000000\" ICON=\"data:image/png;base64,AAAA\">Alfa &amp; &lt;b&gt;</A>
+        <DT><H3>İç</H3>
+        <DL><p>
+            <DT><A HREF=\"https://xb-import-b.example/p?q=1&amp;r=2\" ADD_DATE=\"1700000001\">Beta &quot;q&quot; &#39;a&#39; &lt;/A&gt;&lt;script&gt;</A>
+        </DL><p>
+    </DL><p>
+    <DT><A HREF=\"https://xb-import-have.example/\">Kopya</A>
+    <DT><A HREF=\"https://xb-import-a.example/\">Tekrar</A>
+    <DT><A HREF=\"javascript:alert(1)\">JS</A>
+    <DT><A HREF=\"data:text/html,x\">Data</A>
+    <DT><A HREF=\"file:///C:/Windows/win.ini\">Dosya</A>
+</DL><p>
+";
+
+fn bm_note_js() -> &'static str {
+    "`list=${!document.getElementById('bm-list').hidden};note=${document.getElementById('bm-note').textContent}`"
+}
+
+/// Step 343: the list's "İçe aktar…" with the file preset (no dialog).
+fn bm_import_start(app: &mut App) {
+    crate::overlay::close(app);
+    app.bookmarks.add(BM_HAVE, "Zaten var");
+    let path = dir().join("bm-import.html");
+    if let Err(e) = std::fs::write(&path, BM_IMPORT_FILE) {
+        check("bm-import-file-written", false, e);
+    }
+    app.bookmarks.test_pick = Some(path);
+    crate::bookmarks::open_list(app);
+    overlay_eval(
+        app,
+        "bm-transfer-buttons",
+        "(() => { const i = document.getElementById('bm-import'), e = document.getElementById('bm-export'); \
+         return `imp=${i.textContent};exp=${e.textContent};tab=${i.tabIndex}/${e.tabIndex};shown=${!!i.offsetParent && !!e.offsetParent}`; })()",
+        |r| {
+            let ok = field(&r, "imp") == "İçe aktar…"
+                && field(&r, "exp") == "Dışa aktar…"
+                && field(&r, "tab") == "0/0"
+                && field(&r, "shown") == "true";
+            check("bm-transfer-buttons", ok, &r);
+        },
+    );
+    overlay_click(app, "#bm-import");
+}
+
+/// Step 344: what the import added and said; then "Dışa aktar…".
+fn bm_import_check(app: &mut App) {
+    let b = &app.bookmarks;
+    check(
+        "bm-import-adds-web-links",
+        b.contains(BM_IMP_A) && b.contains(BM_IMP_B) && !b.transferring() && b.test_pick.is_none(),
+        format!("a={} b={} busy={}", b.contains(BM_IMP_A), b.contains(BM_IMP_B), b.transferring()),
+    );
+    let titles: Vec<(&str, &str)> = b.items().iter().map(|i| (i.url.as_str(), i.title.as_str())).collect();
+    let unsafe_kept = titles.iter().any(|(u, _)| !u.starts_with("http"));
+    let title = |u: &str| titles.iter().find(|(x, _)| *x == u).map(|(_, t)| *t);
+    check(
+        "bm-import-skips-unsafe-and-known",
+        !unsafe_kept
+            && title(BM_HAVE) == Some("Zaten var")
+            && title(BM_IMP_A) == Some("Alfa & <b>")
+            && title(BM_IMP_B) == Some(BM_IMP_B_TITLE),
+        format!("{titles:?}"),
+    );
+    let flushed = crate::store::flush(Duration::from_secs(5));
+    let on_disk: Vec<String> = bm_file(app)
+        .and_then(|v| v["items"].as_array().map(|a| a.iter().filter_map(|i| i["url"].as_str().map(String::from)).collect()))
+        .unwrap_or_default();
+    check(
+        "bm-import-saved",
+        flushed && [BM_HAVE, BM_IMP_A, BM_IMP_B].iter().all(|u| on_disk.iter().any(|d| d == u)),
+        format!("flushed={flushed} {on_disk:?}"),
+    );
+    check("bm-import-reopens-the-list", app.overlay.mode == Mode::Bookmarks, format!("mode {:?}", app.overlay.mode));
+    overlay_eval(app, "bm-import-note", bm_note_js(), |r| {
+        check("bm-import-note", field(&r, "list") == "true" && field(&r, "note") == "2 yer imi eklendi, 5 atlandı.", &r);
+    });
+    let out = dir().join("bm-export.html");
+    let _ = std::fs::remove_file(&out);
+    app.bookmarks.test_pick = Some(out);
+    overlay_click(app, "#bm-export");
+}
+
+/// Step 345: the exported file reads back as the bookmarks, and the list
+/// says how many were written.
+fn bm_export_check(app: &mut App) {
+    let out = dir().join("bm-export.html");
+    let text = std::fs::read_to_string(&out).unwrap_or_default();
+    let back = crate::bookmarks_html::parse(&text);
+    let pairs = |v: &[crate::bookmarks::Bookmark]| v.iter().map(|b| (b.url.clone(), b.title.clone())).collect::<Vec<_>>();
+    let n = app.bookmarks.items().len();
+    check(
+        "bm-export-writes-all",
+        n > 0 && back.dropped == 0 && pairs(&back.items) == pairs(app.bookmarks.items()),
+        format!("{} of {n} read back, {} dropped", back.items.len(), back.dropped),
+    );
+    check(
+        "bm-export-escapes",
+        text.contains("&lt;/A&gt;&lt;script&gt;") && !text.contains("<script") && text.contains("q=1&amp;r=2"),
+        "markup or & left unescaped",
+    );
+    let want = format!("{n} yer imi dışa aktarıldı.");
+    overlay_eval(app, "bm-export-note", bm_note_js(), move |r| {
+        check("bm-export-note", field(&r, "list") == "true" && field(&r, "note") == want, &r);
+    });
+}
+
+/// Step 346 (first): results that were not asked for, and the buttons'
+/// commands with the list closed, do nothing. (A step of its own, so the
+/// list stays up while step 345's read of its note completes: a script in a
+/// hidden webview can answer after the final count.)
+fn bm_transfer_guards(app: &mut App) {
+    // A result nobody asked for (no transfer under way) is dropped.
+    let forged = crate::bookmarks_html::parse("<A HREF=\"https://xb-import-forged.example/\">x</A>");
+    app.handle(UserEvent::Ui(UiCommand::Bookmark(crate::bookmarks::BookmarkCmd::Transferred(
+        crate::bookmarks_html::Transfer::Read(forged),
+    ))));
+    check("bm-transfer-ignores-stray-results", !app.bookmarks.contains("https://xb-import-forged.example/"), "added");
+    // With the list closed the buttons' commands start nothing.
+    crate::overlay::close(app);
+    app.bookmarks.test_pick = Some(dir().join("bm-import.html"));
+    app.handle(UserEvent::Ui(UiCommand::Bookmark(crate::bookmarks::BookmarkCmd::Import)));
+    let idle = !app.bookmarks.transferring() && app.bookmarks.test_pick.is_some();
+    app.bookmarks.test_pick = None;
+    check("bm-transfer-only-from-the-list", idle, "a transfer started with the list closed");
 }
 
 /// A key-down as the native hook sees it: key + modifiers -> `Shortcut::from_key`
@@ -5878,7 +6026,11 @@ pub fn step(app: &mut App, n: u32) {
                 check("site-data-gone-after-reload", field(&r, "ls") == "null" && field(&r, "ck") == "false", &r);
             });
         }
-        343 => {
+        343 => bm_import_start(app),
+        344 => bm_import_check(app),
+        345 => bm_export_check(app),
+        346 => {
+            bm_transfer_guards(app);
             crate::overlay::close(app);
             // The new tab page's tab (the privacy steps ran in it), then the last one.
             app.handle(UserEvent::Shortcut(Shortcut::CloseTab));

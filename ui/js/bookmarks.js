@@ -86,6 +86,7 @@
     const more = $("bm-more");
     const remove = $("bm-remove");
     const done = $("bm-done");
+    const note = $("bm-note");
     /** The list's generation (Rust ignores picks naming another one). */
     let gen = 0;
 
@@ -158,6 +159,21 @@
       return li;
     }
 
+    /** What an import or export did: Rust sends a code and counts. */
+    const NOTES = {
+      imported: (a, s) => (s ? `${a} yer imi eklendi, ${s} atlandı.` : `${a} yer imi eklendi.`),
+      exported: (a) => `${a} yer imi dışa aktarıldı.`,
+      "none-found": () => "Dosyada yer imi bulunamadı.",
+      "too-big": () => "Dosya çok büyük (en çok 8 MB).",
+      "read-failed": () => "Dosya okunamadı.",
+      "write-failed": () => "Dosya yazılamadı.",
+    };
+
+    function noteText(n) {
+      const k = str(n && n.k);
+      return Object.hasOwn(NOTES, k) ? NOTES[k](num(n.a), num(n.s)) : "";
+    }
+
     /** The list; `keep`: an update of the open list (keep search, focus). */
     function list(data, keep) {
       hide();
@@ -174,10 +190,15 @@
       empty.textContent = filter ? "Eşleşen yer imi yok" : "Yer imi yok";
       more.hidden = total <= items.length;
       more.textContent = `${total} yer iminden en yeni ${items.length} tanesi gösteriliyor. Aramayı daraltın.`;
+      // Set only when it changes, so a filter redraw is not read out again.
+      const told = noteText(data && data.note);
+      if (note.textContent !== told) note.textContent = told;
       const a = document.activeElement;
       if (!keep || !a || a === document.body) search.focus();
     }
 
+    $("bm-import").addEventListener("click", () => send("bm-import"));
+    $("bm-export").addEventListener("click", () => send("bm-export"));
     search.addEventListener("input", () => send("bm-filter:" + search.value));
     search.addEventListener("keydown", (e) => {
       if (e.isComposing) return;
